@@ -1,17 +1,46 @@
 package com.vpnproxy.ui.home
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -23,15 +52,6 @@ import com.vpnproxy.ui.theme.WarningYellow
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
 
-/**
- * Главный экран.
- *
- * Показывает:
- * - Большой индикатор состояния
- * - Кнопки «Подключить/Отключить» и «Сменить»
- * - ★ Цветную строку состояния внизу (StatusBar)
- * - Диалог обновления приложения (если найдено)
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -43,9 +63,9 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
+    val googleRtt by viewModel.googleRtt.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
-    // Проверка обновлений при открытии главного экрана
     LaunchedEffect(Unit) {
         updateViewModel.check()
     }
@@ -78,87 +98,98 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             Box(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     ConnectionStatusCircle(state = uiState.connectionState)
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(28.dp))
 
-                    if (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                        uiState.connectionState == ConnectionUiState.UNSTABLE) {
-                        Text(
-                            text = "RTT: ${uiState.currentRtt} ms",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = uiState.currentServerName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                        )
-                    } else if (uiState.serverCount > 0) {
-                        Text(
-                            text = "Доступно серверов: ${uiState.serverCount}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                        )
-                    } else {
-                        Text(
-                            text = "Добавьте подписку для подключения",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                        )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 64.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            when {
+                                uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                    uiState.connectionState == ConnectionUiState.UNSTABLE -> {
+                                    Text(
+                                        text = "VPN RTT: ${uiState.currentRtt} ms",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = uiState.currentServerName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        maxLines = 1
+                                    )
+                                }
+                                else -> {
+                                    Text(
+                                        text = if (googleRtt != null) "Ping Google: $googleRtt ms"
+                                        else "Ping Google: —",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = when {
+                                            googleRtt == null ->
+                                                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                                            googleRtt!! < 100 -> Color(0xFF4CAF50)
+                                            googleRtt!! < 300 -> Color(0xFFFFC107)
+                                            else -> Color(0xFFF44336)
+                                        }
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = when {
+                                            uiState.serverCount > 0 -> "Серверов: ${uiState.serverCount}"
+                                            else -> "Добавьте подписку"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Spacer(Modifier.height(40.dp))
 
-                    Button(
-                        onClick = { viewModel.toggleConnection() },
-                        modifier = Modifier
-                            .fillMaxWidth(0.7f)
-                            .height(56.dp),
-                        shape = RoundedCornerShape(28.dp),
+                    NeonConnectButton(
+                        isConnected = uiState.connectionState == ConnectionUiState.CONNECTED ||
+                            uiState.connectionState == ConnectionUiState.UNSTABLE,
                         enabled = !uiState.isBusy,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                                 uiState.connectionState == ConnectionUiState.UNSTABLE)
-                                DisconnectedRed else ConnectedGreen
-                        )
-                    ) {
-                        Icon(
-                            if (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                uiState.connectionState == ConnectionUiState.UNSTABLE)
-                                Icons.Default.PowerSettingsNew
-                            else Icons.Default.PlayArrow,
-                            null
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                uiState.connectionState == ConnectionUiState.UNSTABLE)
-                                "ОТКЛЮЧИТЬ"
-                            else "ПОДКЛЮЧИТЬ",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                        onClick = { viewModel.toggleConnection() }
+                    )
 
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(20.dp))
 
                     OutlinedButton(
                         onClick = { viewModel.switchServer() },
                         modifier = Modifier
-                            .fillMaxWidth(0.7f)
+                            .width(200.dp)
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         enabled = !uiState.isBusy &&
-                                  (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                   uiState.connectionState == ConnectionUiState.UNSTABLE)
+                            (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                uiState.connectionState == ConnectionUiState.UNSTABLE)
                     ) {
-                        Icon(Icons.Default.SwapHoriz, null)
+                        Icon(
+                            Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(Modifier.width(8.dp))
-                        Text("СМЕНИТЬ")
+                        Text("СМЕНИТЬ", fontWeight = FontWeight.Medium)
                     }
                 }
             }
