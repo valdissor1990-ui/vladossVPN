@@ -20,17 +20,25 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.ui.theme.*
-import kotlinx.coroutines.delay
+import com.vpnproxy.ui.update.UpdateDialog
+import com.vpnproxy.ui.update.UpdateViewModel
 
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
+    updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+
+    // Проверка обновлений при старте (раз в сессию)
+    LaunchedEffect(Unit) {
+        updateViewModel.check()
+    }
 
     Scaffold(
         topBar = {
@@ -140,6 +148,14 @@ fun HomeScreen(
             )
         }
     }
+
+    // Диалог обновления
+    UpdateDialog(
+        state = updateState,
+        onDownload = { updateViewModel.download() },
+        onInstall = { updateViewModel.install() },
+        onDismiss = { updateViewModel.dismiss() }
+    )
 }
 
 @Composable
