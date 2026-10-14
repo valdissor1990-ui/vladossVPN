@@ -26,7 +26,33 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK (preinstalled on runner)
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' \
+            "24333f8a63b6825ea9c5514f83c2829b004d1fee" \
+            > "$SDK/licenses/android-sdk-license"
+          printf '%s\n' \
+            "84831b9409646a918e30573bab4c9c91346d8abd" \
+            > "$SDK/licenses/android-sdk-preview-license"
+          printf '%s\n' \
+            "d56f5187479451eabf01fb78af6dfcb131a6481e" \
+            "24333f8a63b6825ea9c5514f83c2829b004d1fee" \
+            > "$SDK/licenses/android-sdk-arm-dbt-license"
+          # Install required packages if missing
+          CMDLINE=$(find "$SDK/cmdline-tools" -name sdkmanager 2>/dev/null | head -1)
+          if [ -n "$CMDLINE" ]; then
+            yes | "$CMDLINE" --sdk_root="$SDK" \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              || true
+          fi
+          echo "SDK ready at $SDK"
+          ls "$SDK" || true
 
       - name: Bootstrap Gradle Wrapper JAR
         run: |
@@ -82,10 +108,11 @@ jobs:
       - name: Extract version info
         id: ver
         run: |
-          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 2>/dev/null | sort | tail -1)
           APK=app/build/outputs/apk/direct/release/app-direct-release.apk
           if [ ! -f "$APK" ]; then
-            echo "APK not found"
+            echo "APK not found at $APK"
+            find app/build/outputs -type f 2>/dev/null || true
             exit 1
           fi
           VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
