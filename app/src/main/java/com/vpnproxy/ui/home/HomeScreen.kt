@@ -1,6 +1,5 @@
 package com.vpnproxy.ui.home
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -13,17 +12,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vpnproxy.ui.theme.*
+import com.vpnproxy.ui.theme.ConnectedGreen
+import com.vpnproxy.ui.theme.ConnectingBlue
+import com.vpnproxy.ui.theme.DisconnectedRed
+import com.vpnproxy.ui.theme.WarningYellow
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
-import com.vpnproxy.update.UpdateManager
 
+/**
+ * Главный экран.
+ *
+ * Показывает:
+ * - Большой индикатор состояния
+ * - Кнопки «Подключить/Отключить» и «Сменить»
+ * - ★ Цветную строку состояния внизу (StatusBar)
+ * - Диалог обновления приложения (если найдено)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
@@ -36,7 +45,7 @@ fun HomeScreen(
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
-    // Автопроверка обновлений при каждом открытии главного экрана
+    // Проверка обновлений при открытии главного экрана
     LaunchedEffect(Unit) {
         updateViewModel.check()
     }
@@ -46,29 +55,14 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("VPNProxy") },
                 actions = {
-                    // Кнопка ручной проверки обновлений
-                    IconButton(
-                        onClick = { updateViewModel.check() },
-                        enabled = updateState !is UpdateManager.State.Checking &&
-                                  updateState !is UpdateManager.State.Downloading
-                    ) {
-                        if (updateState is UpdateManager.State.Checking) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(Icons.Default.SystemUpdate, contentDescription = "Проверить обновления")
-                        }
-                    }
                     IconButton(onClick = onNavigateToSubscriptions) {
-                        Icon(Icons.Default.Cloud, contentDescription = "Подписки")
+                        Icon(Icons.Default.Cloud, "Подписки")
                     }
                     IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, contentDescription = "Журнал")
+                        Icon(Icons.Default.BugReport, "Журнал")
                     }
                     IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Настройки")
+                        Icon(Icons.Default.Settings, "Настройки")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -83,19 +77,17 @@ fun HomeScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Основной контент
             Box(
                 modifier = Modifier.weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Круг состояния
                     ConnectionStatusCircle(state = uiState.connectionState)
 
                     Spacer(Modifier.height(24.dp))
 
-                    // RTT и сервер
-                    if (uiState.connectionState == ConnectionUiState.CONNECTED) {
+                    if (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                        uiState.connectionState == ConnectionUiState.UNSTABLE) {
                         Text(
                             text = "RTT: ${uiState.currentRtt} ms",
                             style = MaterialTheme.typography.bodyLarge,
@@ -106,31 +98,48 @@ fun HomeScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                         )
+                    } else if (uiState.serverCount > 0) {
+                        Text(
+                            text = "Доступно серверов: ${uiState.serverCount}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                        )
+                    } else {
+                        Text(
+                            text = "Добавьте подписку для подключения",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                        )
                     }
 
                     Spacer(Modifier.height(40.dp))
 
-                    // Кнопки
                     Button(
                         onClick = { viewModel.toggleConnection() },
                         modifier = Modifier
                             .fillMaxWidth(0.7f)
                             .height(56.dp),
                         shape = RoundedCornerShape(28.dp),
+                        enabled = !uiState.isBusy,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (uiState.connectionState == ConnectionUiState.CONNECTED)
-                                StatusDisconnected else ConnectedGreen
+                            containerColor = if (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                                 uiState.connectionState == ConnectionUiState.UNSTABLE)
+                                DisconnectedRed else ConnectedGreen
                         )
                     ) {
                         Icon(
-                            if (uiState.connectionState == ConnectionUiState.CONNECTED)
-                                Icons.Default.PowerSettingsNew else Icons.Default.PlayArrow,
-                            contentDescription = null
+                            if (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                uiState.connectionState == ConnectionUiState.UNSTABLE)
+                                Icons.Default.PowerSettingsNew
+                            else Icons.Default.PlayArrow,
+                            null
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (uiState.connectionState == ConnectionUiState.CONNECTED)
-                                "ОТКЛЮЧИТЬ" else "ПОДКЛЮЧИТЬ",
+                            if (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                uiState.connectionState == ConnectionUiState.UNSTABLE)
+                                "ОТКЛЮЧИТЬ"
+                            else "ПОДКЛЮЧИТЬ",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -143,40 +152,17 @@ fun HomeScreen(
                             .fillMaxWidth(0.7f)
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
-                        enabled = uiState.connectionState == ConnectionUiState.CONNECTED
+                        enabled = !uiState.isBusy &&
+                                  (uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                   uiState.connectionState == ConnectionUiState.UNSTABLE)
                     ) {
-                        Icon(Icons.Default.SwapHoriz, contentDescription = null)
+                        Icon(Icons.Default.SwapHoriz, null)
                         Spacer(Modifier.width(8.dp))
                         Text("СМЕНИТЬ")
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-
-                    // Кнопка проверки обновлений (текстовая, для удобства)
-                    TextButton(
-                        onClick = { updateViewModel.check() },
-                        enabled = updateState !is UpdateManager.State.Checking &&
-                                  updateState !is UpdateManager.State.Downloading
-                    ) {
-                        Icon(
-                            Icons.Default.SystemUpdate,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            when (updateState) {
-                                is UpdateManager.State.Checking -> "Проверка…"
-                                is UpdateManager.State.UpdateAvailable -> "Доступно обновление!"
-                                is UpdateManager.State.UpToDate -> "Обновлений нет"
-                                else -> "Проверить обновления"
-                            }
-                        )
                     }
                 }
             }
 
-            // ★ Цветная строка состояния внизу
             StatusBar(
                 state = uiState.connectionState,
                 downloadMbps = traffic.downloadMbps,
@@ -189,7 +175,6 @@ fun HomeScreen(
         }
     }
 
-    // Диалог обновления
     UpdateDialog(
         state = updateState,
         onDownload = { updateViewModel.download() },
@@ -219,11 +204,6 @@ private fun ConnectionStatusCircle(state: ConnectionUiState) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = color
-        )
+        Icon(icon, null, modifier = Modifier.size(64.dp), tint = color)
     }
 }
