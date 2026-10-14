@@ -58,7 +58,6 @@ class HomeViewModel @Inject constructor(
     private var vpnPermissionRequester: (() -> Unit)? = null
 
     init {
-        // Наблюдение за состоянием сервиса
         viewModelScope.launch {
             VpnProxyService.isRunning.collect { running ->
                 _uiState.value = _uiState.value.copy(
@@ -68,7 +67,6 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Наблюдение за текущим сервером от AutoSwitcher
         viewModelScope.launch {
             autoSwitcher.currentServer.collect { server ->
                 if (server != null) {
@@ -80,7 +78,6 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Наблюдение за событиями переключения
         viewModelScope.launch {
             autoSwitcher.switchEvents.collect { event ->
                 if (event != null) {
@@ -95,10 +92,6 @@ class HomeViewModel @Inject constructor(
         vpnPermissionRequester = requester
     }
 
-    /**
-     * Toggle подключения.
-     * Если сервис запущен — стопаем. Если нет — запрашиваем VPN-разрешение.
-     */
     fun toggleConnection() {
         val current = _uiState.value.connectionState
         when (current) {
@@ -108,23 +101,19 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** Запускает процесс подключения: запрос разрешения → автоселекция → старт сервиса. */
     private fun connect() {
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
-        // Сначала запрашиваем разрешение через Activity
         vpnPermissionRequester?.invoke()
     }
 
-    /** Вызывается MainActivity после получения VPN-разрешения. */
     fun onVpnPermissionGranted() {
         viewModelScope.launch {
             try {
                 _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING)
 
-                // 1. Обновляем подписки (если пусты)
                 val configs = subscriptionRepository.getAllConfigs().ifEmpty {
                     subscriptionRepository.refreshAll()
                     subscriptionRepository.getAllConfigs()
@@ -141,7 +130,6 @@ class HomeViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(serverCount = configs.size)
 
-                // 2. Выбираем лучший сервер
                 val best = autoSwitcher.selectBest(configs)
                 if (best == null) {
                     logCollector.warn(TAG, "No server passed health check")
@@ -152,10 +140,7 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // 3. Запускаем сервис
                 startVpnService()
-
-                // 4. Небольшая задержка, чтобы сервис успел запуститься
                 delay(500)
                 _uiState.value = _uiState.value.copy(isBusy = false)
             } catch (e: Exception) {
@@ -176,7 +161,6 @@ class HomeViewModel @Inject constructor(
         logCollector.warn(TAG, "VPN permission denied by user")
     }
 
-    /** Остановка VPN. */
     fun disconnect() {
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
@@ -189,7 +173,6 @@ class HomeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED)
     }
 
-    /** Принудительная смена сервера (кнопка «Сменить»). */
     fun switchServer() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
@@ -200,7 +183,6 @@ class HomeViewModel @Inject constructor(
             if (next == null) {
                 logCollector.warn(TAG, "No next server to switch")
             } else {
-                // Переподключаем сервис
                 val intent = Intent(context, VpnProxyService::class.java).apply {
                     action = VpnProxyService.ACTION_RECONNECT
                 }
@@ -211,7 +193,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** Запускает foreground-сервис. */
     private fun startVpnService() {
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_START
@@ -230,6 +211,8 @@ class HomeViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        autoSwitcher.stopMonitoring()
+        // НЕ останавливаем autoSwitcher — им управляет VpnProxyService.
+        // ViewModel умирает при повороте экрана, а сервис продолжает работать.
+        logCollector.debug(TAG, "HomeViewModel cleared")
     }
 }
