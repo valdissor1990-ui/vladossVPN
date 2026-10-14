@@ -1,28 +1,28 @@
 package com.vpnproxy.smartconnect
 
-import com.vpnproxy.core.xray.XrayCore
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Автосвитчер: следит за здоровьем текущего сервера и переключается при деградации.
- *
- * Логика:
- * - Фоновый health-check каждые 60 с
- * - При RTT × 3 или разрыве → ре-селекция
- * - При 3 ошибках подряд → переключение на следующий по скору
  */
 @Singleton
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
-    private val xrayCore: XrayCore,
     private val logCollector: LogCollector
 ) {
     companion object {
@@ -47,9 +47,6 @@ class AutoSwitcher @Inject constructor(
     private val _switchEvents = MutableStateFlow<String?>(null)
     val switchEvents: StateFlow<String?> = _switchEvents.asStateFlow()
 
-    /**
-     * Запускает фоновый health-check текущего сервера.
-     */
     fun startMonitoring() {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
@@ -73,17 +70,22 @@ class AutoSwitcher @Inject constructor(
 
             if (!result.success) {
                 consecutiveErrors++
-                logCollector.warn(TAG, "Health check failed for ${current.config.name}",
-                    mapOf("errors" to consecutiveErrors))
+                logCollector.warn(
+                    TAG,
+                    "Health check failed for ${current.config.name}",
+                    mapOf("errors" to consecutiveErrors)
+                )
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                     logCollector.warn(TAG, "Max errors reached, re-selecting")
-                    selectBest()
+                    reSelect()
                 }
             } else {
                 consecutiveErrors = 0
-                // Проверка деградации RTT
                 if (baselineRtt > 0 && result.latencyMs > baselineRtt * RTT_DEGRADATION_FACTOR) {
-                    logCollector.warn(TAG, "RTT degraded: ${result.latencyMs}ms vs baseline ${baselineRtt}ms")
+                    logCollector.warn(
+                        TAG,
+                        "RTT degraded: ${result.latencyMs}ms vs baseline ${baselineRtt}ms"
+                    )
                     reSelect()
                 }
             }
@@ -93,9 +95,6 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
-    /**
-     * Выбирает лучший сервер из пула кандидатов.
-     */
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
         val ranked = scoringEngine.rankAll(configs, healthChecker)
         _rankedServers.value = ranked
@@ -105,22 +104,24 @@ class AutoSwitcher @Inject constructor(
             _currentServer.value = best
             baselineRtt = best.latencyMs
             consecutiveErrors = 0
-            logCollector.info(TAG, "Selected best server: ${best.config.name}",
-                mapOf("rtt" to best.latencyMs, "score" to best.score))
+            logCollector.info(
+                TAG,
+                "Selected best server: ${best.config.name}",
+                mapOf("rtt" to best.latencyMs, "score" to best.score)
+            )
         }
         return best
     }
 
-    /**
-     * Принудительная смена на следующий лучший сервер (кнопка «Сменить»).
-     */
     suspend fun switchToNext(): ScoredServer? {
         val ranked = _rankedServers.value
         val current = _currentServer.value
         if (ranked.isEmpty()) return null
 
-        val currentIndex = ranked.indexOfFirst { it.config.address == current?.config?.address }
-        val nextIndex = (currentIndex + 1) % ranked.size
+        val currentIndex = ranked.indexOfFirst {
+            it.config.address == current?.config?.address
+        }
+        val nextIndex = (currentIndex + 1).coerceAtLeast(0) % ranked.size
         val next = ranked[nextIndex]
 
         _currentServer.value = next
@@ -131,7 +132,7 @@ class AutoSwitcher @Inject constructor(
         return next
     }
 
-    private suspend fun reSelect() {
+    private fun reSelect() {
         val ranked = _rankedServers.value
         val best = ranked.firstOrNull() ?: return
         _currentServer.value = best
@@ -141,5 +142,7 @@ class AutoSwitcher @Inject constructor(
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
     }
 
-    fun clearSwitchEvent() { _switchEvents.value = null }
+    fun clearSwitchEvent() {
+        _switchEvents.value = null
+    }
 }
