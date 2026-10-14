@@ -46,13 +46,16 @@
                 android:value="true" />
         </service>
 
-        <!-- Boot Receiver -->
+        <!-- Boot Receiver — автозапуск VPN -->
         <receiver
             android:name=".service.BootReceiver"
             android:enabled="true"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 
