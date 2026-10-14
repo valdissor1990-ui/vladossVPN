@@ -28,6 +28,17 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
+      - name: Bootstrap Gradle Wrapper JAR
+        run: |
+          mkdir -p gradle/wrapper
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Downloading gradle-wrapper.jar..."
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+          fi
+          chmod +x gradlew || true
+          ls -la gradle/wrapper/
+
       - uses: actions/cache@v4
         with:
           path: |
