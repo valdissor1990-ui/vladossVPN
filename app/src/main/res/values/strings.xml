@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VPNProxy</string>
+
+    <!-- Home -->
+    <string name="connect">ПОДКЛЮЧИТЬ</string>
+    <string name="disconnect">ОТКЛЮЧИТЬ</string>
+    <string name="switch_server">СМЕНИТЬ</string>
+    <string name="state_disconnected">Отключено</string>
+    <string name="state_connecting">Подключение…</string>
+    <string name="state_connected">Подключено</string>
+    <string name="state_unstable">Нестабильно</string>
+    <string name="state_error">Ошибка</string>
+    <string name="rtt_format">RTT: %d мс</string>
+
+    <!-- Nav / Titles -->
+    <string name="title_subscriptions">Подписки</string>
+    <string name="title_servers">Серверы</string>
+    <string name="title_settings">Настройки</string>
+    <string name="title_debug">Журнал отладки</string>
+    <string name="action_back">Назад</string>
+
+    <!-- Subscriptions -->
+    <string name="add_subscription">Добавить подписку</string>
+    <string name="subscription_url">URL подписки</string>
+    <string name="subscription_name">Название (опционально)</string>
+    <string name="refresh_all">Обновить все</string>
+    <string name="remove">Удалить</string>
+    <string name="all_servers">Все серверы</string>
+    <string name="traffic_format">Трафик: %1$s / %2$s</string>
+
+    <!-- Settings -->
+    <string name="settings_auto_start">Автозапуск после перезагрузки</string>
+    <string name="settings_auto_start_desc">Запускать VPN при загрузке устройства</string>
+    <string name="settings_update_interval">Интервал обновления подписок</string>
+    <string name="settings_kill_switch">Kill Switch</string>
+    <string name="settings_kill_switch_desc">Блокировать трафик при разрыве туннеля</string>
+    <string name="settings_check_updates">Проверять обновления</string>
+    <string name="settings_check_updates_desc">Уведомлять о новых версиях приложения</string>
+    <string name="settings_check_now">Проверить обновления сейчас</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_version_format">Версия: %1$s (%2$d)</string>
+
+    <!-- Debug -->
+    <string name="debug_copy_all">Копировать всё</string>
+    <string name="debug_export">Экспорт</string>
+    <string name="debug_clear">Очистить</string>
+    <string name="debug_search">Поиск…</string>
+
+    <!-- Update -->
+    <string name="update_available">Доступно обновление %1$s</string>
+    <string name="update_download">Скачать и установить</string>
+    <string name="update_later">Позже</string>
+    <string name="update_install">Установить</string>
+    <string name="update_cancel">Отмена</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_vpn">VPN Proxy</string>
+    <string name="notification_channel_vpn_desc">Состояние VPN-подключения</string>
+    <string name="notification_channel_updates">Обновления VPNProxy</string>
+    <string name="notification_stop">Стоп</string>
+    <string name="notification_reconnect">Переподключить</string>
+</resources>
