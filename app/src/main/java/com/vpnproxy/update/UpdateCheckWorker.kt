@@ -6,25 +6,35 @@ import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.hilt.work.HiltWorker
-import androidx.work.*
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.vpnproxy.R
 import com.vpnproxy.logging.LogCollector
-import dagger.assisted.Assisted
-import dagger.assisted.AssistedInject
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import java.util.concurrent.TimeUnit
 
 /**
  * WorkManager worker: периодически проверяет обновление в фоне.
- * При наличии — показывает уведомление с deep-link на экран обновления.
  */
-@HiltWorker
-class UpdateCheckWorker @AssistedInject constructor(
-    @Assisted context: Context,
-    @Assisted params: WorkerParameters,
-    private val updateManager: UpdateManager,
-    private val logCollector: LogCollector
+class UpdateCheckWorker(
+    context: Context,
+    params: WorkerParameters
 ) : CoroutineWorker(context, params) {
+
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface Deps {
+        fun updateManager(): UpdateManager
+        fun logCollector(): LogCollector
+    }
 
     companion object {
         const val WORK_NAME = "update_check"
@@ -50,6 +60,11 @@ class UpdateCheckWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         return try {
+            val deps = EntryPointAccessors.fromApplication(
+                applicationContext,
+                Deps::class.java
+            )
+            val updateManager = deps.updateManager()
             updateManager.checkForUpdate()
             val state = updateManager.state.value
             if (state is UpdateManager.State.UpdateAvailable) {
@@ -57,7 +72,13 @@ class UpdateCheckWorker @AssistedInject constructor(
             }
             Result.success()
         } catch (e: Exception) {
-            logCollector.error("UpdateCheckWorker", "Failed", e)
+            try {
+                val deps = EntryPointAccessors.fromApplication(
+                    applicationContext,
+                    Deps::class.java
+                )
+                deps.logCollector().error("UpdateCheckWorker", "Failed", e)
+            } catch (_: Exception) { /* ignore */ }
             Result.retry()
         }
     }
