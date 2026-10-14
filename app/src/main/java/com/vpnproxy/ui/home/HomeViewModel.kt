@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
@@ -12,21 +13,17 @@ import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
  * ViewModel главного экрана.
- *
- * Логика:
- * - Подключение/отключение через VpnProxyService
- * - Автовыбор лучшего сервера при подключении (Smart Connect)
- * - Ручная смена сервера (кнопка «Сменить»)
- * - Реактивное обновление состояния из сервиса и статистики
  */
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -35,6 +32,7 @@ class HomeViewModel @Inject constructor(
     private val autoSwitcher: AutoSwitcher,
     private val scoringEngine: ScoringEngine,
     private val trafficCollector: TrafficStatsCollector,
+    private val pingService: PingService,
     private val logCollector: LogCollector
 ) : ViewModel() {
 
@@ -51,10 +49,14 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    /** Состояние трафика (для StatusBar). */
     val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
 
-    /** Callback, который MainActivity регистрирует для запроса VPN-разрешения. */
+    /** Реальный RTT до Google (независимо от VPN). */
+    private val _googleRtt = MutableStateFlow<Long?>(null)
+    val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
+
+    private var pingJob: Job? = null
+
     private var vpnPermissionRequester: (() -> Unit)? = null
 
     init {
@@ -62,7 +64,7 @@ class HomeViewModel @Inject constructor(
             VpnProxyService.isRunning.collect { running ->
                 _uiState.value = _uiState.value.copy(
                     connectionState = if (running) ConnectionUiState.CONNECTED
-                                    else ConnectionUiState.DISCONNECTED
+                    else ConnectionUiState.DISCONNECTED
                 )
             }
         }
@@ -84,6 +86,25 @@ class HomeViewModel @Inject constructor(
                     logCollector.info(TAG, "Switch event: $event")
                     autoSwitcher.clearSwitchEvent()
                 }
+            }
+        }
+
+        startPinging()
+    }
+
+    private fun startPinging() {
+        if (pingJob?.isActive == true) return
+        pingJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val result = pingService.httpPing()
+                    _googleRtt.value = if (result.success) result.rttMs else null
+                    logCollector.debug(TAG, "Google RTT: ${result.rttMs}ms (${result.method})")
+                } catch (t: Throwable) {
+                    logCollector.warn(TAG, "Ping failed: ${t.message}")
+                    _googleRtt.value = null
+                }
+                delay(30_000)
             }
         }
     }
@@ -211,8 +232,7 @@ class HomeViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // НЕ останавливаем autoSwitcher — им управляет VpnProxyService.
-        // ViewModel умирает при повороте экрана, а сервис продолжает работать.
+        pingJob?.cancel()
         logCollector.debug(TAG, "HomeViewModel cleared")
     }
 }
