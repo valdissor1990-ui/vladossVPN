@@ -24,15 +24,25 @@ fun DebugScreen(
     viewModel: DebugViewModel = hiltViewModel()
 ) {
     val logs by viewModel.filteredLogs.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
     val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
 
+    LaunchedEffect(message) {
+        message?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearMessage()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Журнал отладки") },
