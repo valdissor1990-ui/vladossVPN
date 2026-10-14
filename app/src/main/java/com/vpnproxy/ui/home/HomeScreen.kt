@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.ui.theme.*
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
+import com.vpnproxy.update.UpdateManager
 
 @Composable
 fun HomeScreen(
@@ -35,7 +36,7 @@ fun HomeScreen(
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
-    // Проверка обновлений при старте (раз в сессию)
+    // Автопроверка обновлений при каждом открытии главного экрана
     LaunchedEffect(Unit) {
         updateViewModel.check()
     }
@@ -45,14 +46,29 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("VPNProxy") },
                 actions = {
+                    // Кнопка ручной проверки обновлений
+                    IconButton(
+                        onClick = { updateViewModel.check() },
+                        enabled = updateState !is UpdateManager.State.Checking &&
+                                  updateState !is UpdateManager.State.Downloading
+                    ) {
+                        if (updateState is UpdateManager.State.Checking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.SystemUpdate, contentDescription = "Проверить обновления")
+                        }
+                    }
                     IconButton(onClick = onNavigateToSubscriptions) {
-                        Icon(Icons.Default.Cloud, "Подписки")
+                        Icon(Icons.Default.Cloud, contentDescription = "Подписки")
                     }
                     IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, "Журнал")
+                        Icon(Icons.Default.BugReport, contentDescription = "Журнал")
                     }
                     IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, "Настройки")
+                        Icon(Icons.Default.Settings, contentDescription = "Настройки")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -109,7 +125,7 @@ fun HomeScreen(
                         Icon(
                             if (uiState.connectionState == ConnectionUiState.CONNECTED)
                                 Icons.Default.PowerSettingsNew else Icons.Default.PlayArrow,
-                            null
+                            contentDescription = null
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -129,9 +145,33 @@ fun HomeScreen(
                         shape = RoundedCornerShape(24.dp),
                         enabled = uiState.connectionState == ConnectionUiState.CONNECTED
                     ) {
-                        Icon(Icons.Default.SwapHoriz, null)
+                        Icon(Icons.Default.SwapHoriz, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("СМЕНИТЬ")
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Кнопка проверки обновлений (текстовая, для удобства)
+                    TextButton(
+                        onClick = { updateViewModel.check() },
+                        enabled = updateState !is UpdateManager.State.Checking &&
+                                  updateState !is UpdateManager.State.Downloading
+                    ) {
+                        Icon(
+                            Icons.Default.SystemUpdate,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            when (updateState) {
+                                is UpdateManager.State.Checking -> "Проверка…"
+                                is UpdateManager.State.UpdateAvailable -> "Доступно обновление!"
+                                is UpdateManager.State.UpToDate -> "Обновлений нет"
+                                else -> "Проверить обновления"
+                            }
+                        )
                     }
                 }
             }
@@ -180,7 +220,8 @@ private fun ConnectionStatusCircle(state: ConnectionUiState) {
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            icon, null,
+            icon,
+            contentDescription = null,
             modifier = Modifier.size(64.dp),
             tint = color
         )
