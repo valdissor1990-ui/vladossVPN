@@ -52,12 +52,16 @@ jobs:
           ./scripts/download_xray.sh || echo "Native libs skipped"
 
       - name: Decode keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > $RUNNER_TEMP/release.keystore
-          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> $GITHUB_ENV
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "KEYSTORE_BASE64 secret is empty — release build may be unsigned"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "Keystore decoded OK"
 
       - name: Build Direct Release APK
         env:
@@ -78,12 +82,16 @@ jobs:
       - name: Extract version info
         id: ver
         run: |
-          AAPT=$(find $ANDROID_HOME/build-tools -name aapt2 | sort | tail -1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
           APK=app/build/outputs/apk/direct/release/app-direct-release.apk
-          VN=$($AAPT dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
-          VC=$($AAPT dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\1/")
-          echo "name=$VN" >> $GITHUB_OUTPUT
-          echo "code=$VC" >> $GITHUB_OUTPUT
+          if [ ! -f "$APK" ]; then
+            echo "APK not found"
+            exit 1
+          fi
+          VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
+          VC=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\1/")
+          echo "name=$VN" >> "$GITHUB_OUTPUT"
+          echo "code=$VC" >> "$GITHUB_OUTPUT"
           echo "Detected $VN ($VC)"
 
       - name: Generate changelog
@@ -96,7 +104,7 @@ jobs:
             echo ""
             echo "**Full SHA:** \`${{ github.sha }}\`"
             echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
