@@ -8,5 +8,13 @@ enum class ConnectionUiState {
     CONNECTING,
     CONNECTED,
     UNSTABLE,
-    ERROR
+    ERROR;
+
+    fun label(): String = when (this) {
+        DISCONNECTED -> "Отключено"
+        CONNECTING -> "Подключение…"
+        CONNECTED -> "Подключено"
+        UNSTABLE -> "Нестабильно"
+        ERROR -> "Ошибка"
+    }
 }
