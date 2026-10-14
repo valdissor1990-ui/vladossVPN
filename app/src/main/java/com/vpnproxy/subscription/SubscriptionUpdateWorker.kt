@@ -1,7 +1,6 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
-import androidx.hilt.work.HiltWorker
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -10,20 +9,27 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.vpnproxy.logging.LogCollector
-import dagger.assisted.Assisted
-import dagger.assisted.AssistedInject
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import java.util.concurrent.TimeUnit
 
 /**
  * Периодическое обновление подписок в фоне через WorkManager.
+ * Зависимости через EntryPoint — обходит баг KSP/HiltWorker на некоторых версиях.
  */
-@HiltWorker
-class SubscriptionUpdateWorker @AssistedInject constructor(
-    @Assisted context: Context,
-    @Assisted params: WorkerParameters,
-    private val repository: SubscriptionRepository,
-    private val logCollector: LogCollector
+class SubscriptionUpdateWorker(
+    context: Context,
+    params: WorkerParameters
 ) : CoroutineWorker(context, params) {
+
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface Deps {
+        fun subscriptionRepository(): SubscriptionRepository
+        fun logCollector(): LogCollector
+    }
 
     companion object {
         const val WORK_NAME = "subscription_update"
@@ -54,11 +60,21 @@ class SubscriptionUpdateWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         return try {
-            val count = repository.refreshAll()
-            logCollector.info("SubUpdateWorker", "Refreshed subscriptions, configs=$count")
+            val deps = EntryPointAccessors.fromApplication(
+                applicationContext,
+                Deps::class.java
+            )
+            val count = deps.subscriptionRepository().refreshAll()
+            deps.logCollector().info("SubUpdateWorker", "Refreshed subscriptions, configs=$count")
             Result.success()
         } catch (e: Exception) {
-            logCollector.error("SubUpdateWorker", "Refresh failed", e)
+            try {
+                val deps = EntryPointAccessors.fromApplication(
+                    applicationContext,
+                    Deps::class.java
+                )
+                deps.logCollector().error("SubUpdateWorker", "Refresh failed", e)
+            } catch (_: Exception) { /* ignore */ }
             Result.retry()
         }
     }
