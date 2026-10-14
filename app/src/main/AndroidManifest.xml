@@ -70,7 +70,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- WorkManager -->
+        <!-- WorkManager: отключаем дефолтный initializer — конфигурация из VpnProxyApp -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -81,9 +81,5 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
-
-        <service
-            android:name=".subscription.SubscriptionUpdateWorker"
-            android:exported="false" />
     </application>
 </manifest>
