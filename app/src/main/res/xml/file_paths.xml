@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <files-path name="logs" path="logs/" />
-    <cache-path name="cache" path="." />
-    <cache-path name="updates" path="updates/" />
+    <!-- Логи (внутренняя область) — FileProvider root для API 26-28 -->
     <external-files-path name="external_logs" path="logs/" />
+    <!-- Обновления APK -->
+    <cache-path name="updates" path="updates/" />
+    <!-- Логи (кэш) — на всякий случай -->
+    <cache-path name="cache" path="." />
 </paths>
