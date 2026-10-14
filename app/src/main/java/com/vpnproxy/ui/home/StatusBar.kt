@@ -31,6 +31,7 @@ import com.vpnproxy.ui.theme.StatusConnected
 import com.vpnproxy.ui.theme.StatusConnecting
 import com.vpnproxy.ui.theme.StatusDisconnected
 import com.vpnproxy.ui.theme.StatusWarning
+import java.util.Locale
 
 @Composable
 fun StatusBar(
@@ -114,7 +115,7 @@ fun StatusBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
                 )
-                Spacer(Modifier.weight(1f))
+                Spacer(modifier.weight(1f))
                 Text(
                     text = "Сессия: ${formatBytes(sessionRx)} / ${formatBytes(sessionTx)}",
                     color = Color.White.copy(alpha = 0.7f),
@@ -126,19 +127,22 @@ fun StatusBar(
     }
 }
 
+/** Форматирование скорости: Кбит/с или Мбит/с. */
 private fun formatSpeed(mbps: Float): String {
     return when {
         mbps < 0.001f -> "0 Кбит/с"
-        mbps < 1f -> "${"%.0f".format(mbps * 1000)} Кбит/с"
-        else -> "${"%.1f".format(mbps)} Мбит/с"
+        mbps < 1f -> "${String.format(Locale.US, "%.0f", mbps * 1000)} Кбит/с"
+        else -> "${String.format(Locale.US, "%.1f", mbps)} Мбит/с"
     }
 }
 
+/** Форматирование байтов. */
 private fun formatBytes(bytes: Long): String {
+    val loc = Locale.US
     return when {
         bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)} KB"
-        bytes < 1024L * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024))} MB"
-        else -> "${"%.2f".format(bytes / (1024.0 * 1024 * 1024))} GB"
+        bytes < 1024 * 1024 -> "${String.format(loc, "%.1f", bytes / 1024.0)} KB"
+        bytes < 1024L * 1024 * 1024 -> "${String.format(loc, "%.1f", bytes / (1024.0 * 1024))} MB"
+        else -> "${String.format(loc, "%.2f", bytes / (1024.0 * 1024 * 1024))} GB"
     }
 }
