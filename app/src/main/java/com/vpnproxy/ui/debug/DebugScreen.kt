@@ -17,14 +17,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.logging.LogLevel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DebugScreen(viewModel: DebugViewModel = hiltViewModel()) {
+fun DebugScreen(
+    onBack: () -> Unit = {},
+    viewModel: DebugViewModel = hiltViewModel()
+) {
     val logs by viewModel.filteredLogs.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
     val listState = rememberLazyListState()
 
-    // Автоскролл при новых записях
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
@@ -33,6 +36,11 @@ fun DebugScreen(viewModel: DebugViewModel = hiltViewModel()) {
         topBar = {
             TopAppBar(
                 title = { Text("Журнал отладки") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, "Назад")
+                    }
+                },
                 actions = {
                     IconButton(onClick = { viewModel.copyAll() }) {
                         Icon(Icons.Default.ContentCopy, "Копировать всё")
@@ -52,7 +60,6 @@ fun DebugScreen(viewModel: DebugViewModel = hiltViewModel()) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Фильтры
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -81,7 +88,6 @@ fun DebugScreen(viewModel: DebugViewModel = hiltViewModel()) {
                 )
             }
 
-            // Список логов
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
