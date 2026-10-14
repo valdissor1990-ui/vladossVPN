@@ -2,7 +2,6 @@ package com.vpnproxy
 
 import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -14,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -21,7 +22,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.vpnproxy.logging.LogCollector
-import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
@@ -43,7 +43,6 @@ class MainActivity : ComponentActivity() {
 
     private val homeViewModel: HomeViewModel by viewModels()
 
-    /** Запрос VPN-разрешения (VpnService.prepare). */
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -56,7 +55,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Запрос POST_NOTIFICATIONS (Android 13+). */
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -68,7 +66,6 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         logCollector.info(TAG, "MainActivity created")
 
-        // Запрашиваем разрешение на уведомления при первом запуске (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -87,10 +84,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Запускает системный запрос разрешения на VPN.
-     * Если prepare() вернул null — разрешение уже дано, можно стартовать сервис.
-     */
     private fun requestVpnPermission() {
         val intent = VpnService.prepare(this)
         if (intent != null) {
@@ -105,19 +98,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Корневой NavHost приложения. */
 @androidx.compose.runtime.Composable
 private fun VPNProxyNavHost(
     onRequestVpnPermission: () -> Unit
 ) {
     val navController = rememberNavController()
+    val currentRequester by rememberUpdatedState(onRequestVpnPermission)
 
     NavHost(navController = navController, startDestination = Route.Home.path) {
         composable(Route.Home.path) {
             val vm: HomeViewModel = hiltViewModel()
-            // Регистрируем callback для запроса VPN-разрешения
             LaunchedEffect(Unit) {
-                vm.setVpnPermissionRequester(onRequestVpnPermission)
+                vm.setVpnPermissionRequester { currentRequester() }
             }
             HomeScreen(
                 viewModel = vm,
@@ -148,7 +140,6 @@ private fun VPNProxyNavHost(
     }
 }
 
-/** Типизированные маршруты навигации. */
 sealed class Route(val path: String) {
     data object Home : Route("home")
     data object Subscriptions : Route("subscriptions")
