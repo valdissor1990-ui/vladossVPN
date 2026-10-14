@@ -42,7 +42,6 @@ jobs:
             "d56f5187479451eabf01fb78af6dfcb131a6481e" \
             "24333f8a63b6825ea9c5514f83c2829b004d1fee" \
             > "$SDK/licenses/android-sdk-arm-dbt-license"
-          # Install required packages if missing
           CMDLINE=$(find "$SDK/cmdline-tools" -name sdkmanager 2>/dev/null | head -1)
           if [ -n "$CMDLINE" ]; then
             yes | "$CMDLINE" --sdk_root="$SDK" \
@@ -52,18 +51,15 @@ jobs:
               || true
           fi
           echo "SDK ready at $SDK"
-          ls "$SDK" || true
 
       - name: Bootstrap Gradle Wrapper JAR
         run: |
           mkdir -p gradle/wrapper
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Downloading gradle-wrapper.jar..."
             curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
               https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
           fi
           chmod +x gradlew || true
-          ls -la gradle/wrapper/
 
       - uses: actions/cache@v4
         with:
@@ -85,9 +81,16 @@ jobs:
             echo "KEYSTORE_BASE64 secret is empty — release build may be unsigned"
             exit 0
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          # Strip whitespace/newlines/CR that often break paste into GitHub Secrets
+          CLEAN=$(printf '%s' "$KEYSTORE_BASE64" | tr -d '\n\r \t')
+          printf '%s' "$CLEAN" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          SIZE=$(wc -c < "$RUNNER_TEMP/release.keystore")
+          if [ "$SIZE" -lt 100 ]; then
+            echo "Decoded keystore too small ($SIZE bytes) — check KEYSTORE_BASE64 secret"
+            exit 1
+          fi
           echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-          echo "Keystore decoded OK"
+          echo "Keystore decoded OK ($SIZE bytes)"
 
       - name: Build Direct Release APK
         env:
