@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,6 +10,33 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// --- Чтение keystore.properties (локально) или env (CI) ---
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile))
+}
+
+fun secret(key: String, fallback: String? = null): String? =
+    System.getenv(key) ?: keystoreProps.getProperty(key) ?: fallback
+
+// --- Автоверсия ---
+// versionCode: берём из github.run_number (инкремент на каждый CI-запуск),
+//              локально — Unix-время / 60 (уникально в пределах минуты).
+// versionName: MAJOR.MINOR из файла version.properties + .run_number как PATCH.
+val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+val versionProps = Properties().apply {
+    val f = rootProject.file("version.properties")
+    if (f.exists()) load(FileInputStream(f))
+}
+val baseMajor = versionProps.getProperty("major", "1").toInt()
+val baseMinor = versionProps.getProperty("minor", "0").toInt()
+val autoVersionCode = if (runNumber > 0) {
+    10000 + runNumber  // 10001, 10002, ...
+} else {
+    (System.currentTimeMillis() / 60_000L).toInt()
+}
+val autoVersionName = "$baseMajor.$baseMinor.$runNumber"
+
 android {
     namespace = "com.vpnproxy"
     compileSdk = 35
@@ -15,12 +45,15 @@ android {
         applicationId = "com.vpnproxy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = autoVersionCode
+        versionName = autoVersionName
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
+
+        buildConfigField("String", "GITHUB_OWNER", "\"${System.getenv("GITHUB_REPOSITORY_OWNER") ?: "valdissor1990-ui"}\"")
+        buildConfigField("String", "GITHUB_REPO", "\"${System.getenv("GITHUB_REPOSITORY")?.substringAfter("/") ?: "vladossVPN"}\"")
     }
 
     flavorDimensions += "distribution"
@@ -35,6 +68,30 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val ksPath = secret("KEYSTORE_PATH")
+            val ksBase64 = secret("KEYSTORE_BASE64")
+            val storeFileResolved = when {
+                ksPath != null && file(ksPath).exists() -> file(ksPath)
+                ksBase64 != null -> {
+                    // Декодируем base64 keystore во временный файл (для CI)
+                    val tmp = File(rootProject.buildDir, "release.keystore")
+                    tmp.parentFile.mkdirs()
+                    tmp.writeBytes(java.util.Base64.getDecoder().decode(ksBase64))
+                    tmp
+                }
+                else -> null
+            }
+            if (storeFileResolved != null) {
+                storeFile = storeFileResolved
+                storePassword = secret("KEYSTORE_PASSWORD")
+                keyAlias = secret("KEY_ALIAS")
+                keyPassword = secret("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -44,6 +101,10 @@ android {
                 "proguard-rules.pro"
             )
             buildConfigField("boolean", "LOG_DEBUG", "false")
+            // Если keystore настроен — подписываем; иначе — debug (для локальной сборки)
+            signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
+                signingConfigs.getByName("release")
+            else signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false
