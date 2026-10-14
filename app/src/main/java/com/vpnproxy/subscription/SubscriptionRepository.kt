@@ -1,7 +1,6 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
-import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.logging.LogCollector
@@ -13,6 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,14 +22,6 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Репозиторий подписок.
- *
- * - Хранит URL подписок и токены в EncryptedSharedPreferences
- * - Загружает подписки через OkHttp
- * - Парсит через SubscriptionParser
- * - Предоставляет StateFlow<List<ProviderSubscription>> для UI
- */
 @Singleton
 class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -53,6 +47,7 @@ class SubscriptionRepository @Inject constructor(
     )
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+    private val listSerializer = ListSerializer(ProviderSubscription.serializer())
 
     private val masterKey = MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -75,13 +70,14 @@ class SubscriptionRepository @Inject constructor(
     private val _allConfigs = MutableStateFlow<List<ParsedConfig>>(emptyList())
     val allConfigs: StateFlow<List<ParsedConfig>> = _allConfigs.asStateFlow()
 
-    init { loadFromPrefs() }
+    init {
+        loadFromPrefs()
+    }
 
-    /** Загружает список подписок из EncryptedSharedPreferences. */
     private fun loadFromPrefs() {
         try {
             val stored = encryptedPrefs.getString(KEY_SUBS, null) ?: return
-            val list = json.decodeFromString<List<ProviderSubscription>>(stored)
+            val list = json.decodeFromString(listSerializer, stored)
             _subscriptions.value = list
             logCollector.info(TAG, "Loaded ${list.size} subscriptions from prefs")
         } catch (e: Exception) {
@@ -91,14 +87,13 @@ class SubscriptionRepository @Inject constructor(
 
     private fun saveToPrefs() {
         try {
-            val jsonStr = json.encodeToString(_subscriptions.value)
+            val jsonStr = json.encodeToString(listSerializer, _subscriptions.value)
             encryptedPrefs.edit().putString(KEY_SUBS, jsonStr).apply()
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to save subscriptions", e)
         }
     }
 
-    /** Добавляет новую подписку. */
     suspend fun addSubscription(url: String, name: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val id = java.util.UUID.randomUUID().toString()
@@ -113,13 +108,11 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    /** Удаляет подписку по id. */
     fun removeSubscription(id: String) {
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
         saveToPrefs()
     }
 
-    /** Обновляет все включённые подписки. */
     suspend fun refreshAll(): Int = withContext(Dispatchers.IO) {
         val subs = _subscriptions.value.filter { it.enabled }
         var totalConfigs = 0
@@ -131,7 +124,6 @@ class SubscriptionRepository @Inject constructor(
                 allConfigsList.addAll(configs)
                 totalConfigs += configs.size
 
-                // Обновляем метаданные
                 val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                 _subscriptions.value = _subscriptions.value.map {
                     if (it.id == sub.id) updated else it
@@ -148,7 +140,6 @@ class SubscriptionRepository @Inject constructor(
         totalConfigs
     }
 
-    /** Загружает и парсит одну подписку. */
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
@@ -161,7 +152,6 @@ class SubscriptionRepository @Inject constructor(
                     throw Exception("HTTP ${response.code}")
                 }
 
-                // Проверяем subscription-userinfo
                 response.header("subscription-userinfo")?.let { info ->
                     parseUserInfo(info, sub.id)
                 }
@@ -173,10 +163,10 @@ class SubscriptionRepository @Inject constructor(
 
     private fun parseUserInfo(info: String, subId: String) {
         try {
-            val parts = info.split(";").associate {
-                val kv = it.trim().split("=")
-                if (kv.size == 2) kv[0] to kv[1].toLongOrNull() ?: 0L else "" to 0L
-            }
+            val parts = info.split(";").mapNotNull { part ->
+                val kv = part.trim().split("=", limit = 2)
+                if (kv.size == 2) kv[0] to (kv[1].toLongOrNull() ?: 0L) else null
+            }.toMap()
             val upload = parts["upload"] ?: 0L
             val download = parts["download"] ?: 0L
             val total = parts["total"] ?: 0L
@@ -192,6 +182,5 @@ class SubscriptionRepository @Inject constructor(
         } catch (_: Exception) { /* ignore */ }
     }
 
-    /** Возвращает все конфиги (для Smart Connect). */
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 }
