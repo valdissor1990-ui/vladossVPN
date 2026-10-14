@@ -1,14 +1,24 @@
 package com.vpnproxy.ui.home
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.animation.core.EaseInOut
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,21 +27,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vpnproxy.ui.theme.*
+import com.vpnproxy.ui.theme.StatusConnected
+import com.vpnproxy.ui.theme.StatusConnecting
+import com.vpnproxy.ui.theme.StatusDisconnected
+import com.vpnproxy.ui.theme.StatusWarning
 
-/**
- * Цветная строка состояния внизу экрана.
- *
- * Отображает:
- * - Скорость ↓/↑ в реальном времени (авто-формат Кбит/Мбит)
- * - Получено/Отправлено за сессию и всего
- *
- * Цвет:
- * 🟢 Зелёный — подключено, стабильно (RTT < 150мс)
- * 🟡 Жёлтый — нестабильно (RTT > 150мс или переключения)
- * 🔵 Синий — подключение/health-check
- * 🔴 Красный — отключено/ошибка
- */
 @Composable
 fun StatusBar(
     state: ConnectionUiState,
@@ -56,7 +56,6 @@ fun StatusBar(
         label = "status_color"
     )
 
-    // Пульсация при активности
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 0.85f,
@@ -80,7 +79,6 @@ fun StatusBar(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
-            // Строка 1: скорости
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -109,7 +107,6 @@ fun StatusBar(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            // Строка 2: итоги
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "RX ${formatBytes(totalRx)}  TX ${formatBytes(totalTx)}",
@@ -129,7 +126,6 @@ fun StatusBar(
     }
 }
 
-/** Форматирование скорости: Кбит/с или Мбит/с. */
 private fun formatSpeed(mbps: Float): String {
     return when {
         mbps < 0.001f -> "0 Кбит/с"
@@ -138,24 +134,11 @@ private fun formatSpeed(mbps: Float): String {
     }
 }
 
-/** Форматирование байтов. */
 private fun formatBytes(bytes: Long): String {
     return when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)} KB"
         bytes < 1024L * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024))} MB"
         else -> "${"%.2f".format(bytes / (1024.0 * 1024 * 1024))} GB"
-    }
-}
-
-enum class ConnectionUiState {
-    DISCONNECTED, CONNECTING, CONNECTED, UNSTABLE, ERROR;
-
-    fun label(): String = when (this) {
-        DISCONNECTED -> "Отключено"
-        CONNECTING -> "Подключение…"
-        CONNECTED -> "Подключено"
-        UNSTABLE -> "Нестабильно"
-        ERROR -> "Ошибка"
     }
 }
