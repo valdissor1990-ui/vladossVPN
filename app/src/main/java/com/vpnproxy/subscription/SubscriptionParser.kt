@@ -183,8 +183,26 @@ class SubscriptionParser @Inject constructor(
             )
 
             if (!config.isValid()) {
+                val reasons = buildList {
+                    if (config.uuid.isBlank()) add("uuid empty")
+                    if (config.address.isBlank()) add("address empty")
+                    if (config.port !in 1..65535) add("port invalid=${config.port}")
+                    if (config.transport == "xhttp" && config.mode == null) add("xhttp mode null")
+                    if (config.transport == "xhttp" && config.flow == "xtls-rprx-vision")
+                        add("xhttp with vision flow")
+                    if (config.security == "reality" &&
+                        (config.publicKey.isNullOrBlank() || config.shortId.isNullOrBlank()))
+                        add("reality missing pbk/sid")
+                }
                 logCollector.warn(TAG, "Invalid config skipped", mapOf(
-                    "name" to name, "reason" to "validation failed"
+                    "name" to name,
+                    "reasons" to reasons.joinToString(","),
+                    "transport" to config.transport,
+                    "security" to config.security,
+                    "flow" to (config.flow ?: "null"),
+                    "mode" to (config.mode ?: "null"),
+                    "has_pbk" to (!config.publicKey.isNullOrBlank()),
+                    "has_sid" to (!config.shortId.isNullOrBlank())
                 ))
                 return null
             }
