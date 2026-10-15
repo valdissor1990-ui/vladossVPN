@@ -122,15 +122,31 @@ jobs:
       - name: Extract version info
         id: ver
         run: |
-          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 2>/dev/null | sort | tail -1)
-          APK=app/build/outputs/apk/direct/release/app-direct-release.apk
-          if [ ! -f "$APK" ]; then
-            echo "APK not found at $APK"
-            find app/build/outputs -type f 2>/dev/null || true
+          set -euo pipefail
+
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
+          if [ -z "$AAPT" ]; then
+            echo "❌ aapt2 not found in \\$ANDROID_HOME/build-tools"
             exit 1
           fi
-          VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
-          VC=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\1/")
+
+          # ABI splits enabled → use universal APK, not the base name
+          APK=app/build/outputs/apk/direct/release/app-direct-release-universal.apk
+
+          # Fallback: pick any release APK if universal missing
+          if [ ! -f "$APK" ]; then
+            APK=$(find app/build/outputs/apk/direct/release -name '*-release*.apk' | head -1)
+          fi
+
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+            echo "❌ No release APK found. Directory listing:"
+            ls -la app/build/outputs/apk/direct/release/ || true
+            exit 1
+          fi
+
+          echo "Using APK: $APK"
+          VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\\1/")
+          VC=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\\1/")
           echo "name=$VN" >> "$GITHUB_OUTPUT"
           echo "code=$VC" >> "$GITHUB_OUTPUT"
           echo "Detected $VN ($VC)"
@@ -158,10 +174,12 @@ jobs:
           EOF
           cat release-meta/version.json
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: apk-direct-${{ steps.ver.outputs.name }}
           path: app/build/outputs/apk/direct/release/*.apk
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
@@ -176,9 +194,13 @@ jobs:
           name: VPNProxy v${{ steps.ver.outputs.name }}
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
-            app/build/outputs/apk/direct/release/*.apk
+            app/build/outputs/apk/direct/release/app-direct-release-universal.apk
+            app/build/outputs/apk/direct/release/app-direct-release-arm64-v8a.apk
+            app/build/outputs/apk/direct/release/app-direct-release-armeabi-v7a.apk
+            app/build/outputs/apk/direct/release/app-direct-release-x86.apk
+            app/build/outputs/apk/direct/release/app-direct-release-x86_64.apk
             app/build/outputs/bundle/playRelease/*.aab
-            release-meta/version.json
+          fail_on_unmatched_files: false
           draft: false
           prerelease: false
         env:
