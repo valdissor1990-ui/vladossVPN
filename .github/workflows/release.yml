@@ -81,7 +81,6 @@ jobs:
             echo "KEYSTORE_BASE64 secret is empty — release build may be unsigned"
             exit 0
           fi
-          # Strip whitespace/newlines/CR that often break paste into GitHub Secrets
           CLEAN=$(printf '%s' "$KEYSTORE_BASE64" | tr -d '\n\r \t')
           printf '%s' "$CLEAN" | base64 -d > "$RUNNER_TEMP/release.keystore"
           SIZE=$(wc -c < "$RUNNER_TEMP/release.keystore")
@@ -136,6 +135,17 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Generate version.json
+        run: |
+          mkdir -p release-meta
+          cat > release-meta/version.json <<EOF
+          {
+            "versionCode": ${{ steps.ver.outputs.code }},
+            "versionName": "${{ steps.ver.outputs.name }}"
+          }
+          EOF
+          cat release-meta/version.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: apk-direct-${{ steps.ver.outputs.name }}
@@ -156,6 +166,7 @@ jobs:
           files: |
             app/build/outputs/apk/direct/release/*.apk
             app/build/outputs/bundle/playRelease/*.aab
+            release-meta/version.json
           draft: false
           prerelease: false
         env:
