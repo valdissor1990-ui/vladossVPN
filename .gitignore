@@ -28,8 +28,10 @@ release.keystore.b64
 # Логи
 *.log
 
-# Native
+# Native (downloaded by scripts/download_xray.sh in CI)
 /app/src/main/jniLibs/**/*.so
+/app/libs/*.aar
+/app/libs/*.jar
 /app/build/intermediates/
 
 # Секреты
