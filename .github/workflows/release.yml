@@ -85,6 +85,18 @@ jobs:
           echo "go.* in hev (should be 0):"
           unzip -l /tmp/aar-check/hev.jar | grep -c "go/" || true
 
+      - name: Inspect hev AAR structure (diagnostic)
+        run: |
+          echo "=== AAR files ==="
+          unzip -l app/libs/hev-socks5-tunnel.aar
+          echo "=== classes.jar contents (filtered) ==="
+          mkdir -p /tmp/hev-inspect
+          if unzip -p app/libs/hev-socks5-tunnel.aar classes.jar > /tmp/hev-inspect/c.jar 2>/dev/null; then
+            unzip -l /tmp/hev-inspect/c.jar | grep -iE 'tproxy|hev|zaneschepke|Tunnel' || echo "(no matching class names)"
+          else
+            echo "NO classes.jar in AAR — pure JNI .so bundle"
+          fi
+
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
