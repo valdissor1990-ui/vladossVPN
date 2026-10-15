@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
@@ -14,6 +13,7 @@ import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.xray.XrayCore
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,9 +24,9 @@ import javax.inject.Inject
  * Foreground VpnService — ядро приложения.
  *
  * Жизненный цикл:
- * 1. startVpn() → создание TUN → запуск Xray → запуск tun2socks
+ * 1. startVpn() → TUN → Xray (SOCKS) → hev-socks5-tunnel (TUN→SOCKS)
  * 2. Мониторинг через AutoSwitcher
- * 3. stopVpn() → остановка tun2socks → Xray → закрытие TUN
+ * 3. stopVpn() → hev stop → Xray stop → TUN close
  */
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
@@ -49,6 +49,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
     @Inject lateinit var logCollector: LogCollector
+    @Inject lateinit var subscriptionRepository: SubscriptionRepository
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
@@ -56,7 +57,9 @@ class VpnProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        logCollector.info(TAG, "Service created")
+        // Outbound sockets Xray must bypass the VPN interface
+        xrayCore.setProtector { fd -> protect(fd) }
+        logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,29 +84,48 @@ class VpnProxyService : VpnService() {
             try {
                 logCollector.info(TAG, "Starting VPN...")
 
-                // 1. Создание TUN
+                // 1. TUN
                 val builder = Builder()
                     .setSession("VPNProxy")
                     .setMtu(TunnelManager.TUN_MTU)
 
-                val tunFd = tunnelManager.establishTun(builder)
-                if (tunFd == null) {
+                val pfd = tunnelManager.establishTun(builder)
+                if (pfd == null) {
                     logCollector.error(TAG, "TUN establishment failed")
                     stopSelf()
                     return@launch
                 }
 
-                // 2. Запуск Xray с конфигом (упрощённо — в реальном приложении конфиг из AutoSwitcher)
-                // xrayCore.start(configJson, tunFd.fd)
+                // 2. Config from AutoSwitcher / subscription
+                val configJson = resolveXrayConfig()
+                if (configJson == null) {
+                    logCollector.error(TAG, "No Xray config available")
+                    tunnelManager.tearDown()
+                    stopSelf()
+                    return@launch
+                }
 
-                // 3. Запуск tun2socks
-                // tunnelManager.startTun2Socks(tunFd.fd)
+                // 3. Xray SOCKS-in (tunFd=0 — TUN у hev)
+                val xrayOk = xrayCore.start(configJson, tunFd = 0)
+                if (!xrayOk) {
+                    logCollector.error(TAG, "Xray start failed")
+                    tunnelManager.tearDown()
+                    stopSelf()
+                    return@launch
+                }
 
-                // 4. Старт сбора статистики
+                // 4. hev-socks5-tunnel: TUN → 127.0.0.1:2081
+                val hevOk = tunnelManager.startTun2Socks(pfd.fd)
+                if (!hevOk) {
+                    logCollector.error(TAG, "hev-socks5-tunnel start failed")
+                    xrayCore.stop()
+                    tunnelManager.tearDown()
+                    stopSelf()
+                    return@launch
+                }
+
                 trafficCollector.start()
                 trafficCollector.resetSession()
-
-                // 5. Мониторинг
                 autoSwitcher.startMonitoring()
 
                 _isRunning.value = true
@@ -111,9 +133,52 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "VPN started successfully")
             } catch (e: Exception) {
                 logCollector.error(TAG, "Failed to start VPN", e)
+                try { tunnelManager.tearDown() } catch (_: Exception) {}
                 stopSelf()
             }
         }
+    }
+
+    /**
+     * Берёт JSON конфиг лучшего сервера.
+     * Ожидается, что outbound уже в формате Xray; inbound SOCKS добавляем локально.
+     */
+    private suspend fun resolveXrayConfig(): String? {
+        val current = autoSwitcher.currentServer.value
+        val raw = current?.config?.rawJson
+            ?: subscriptionRepository.getAllConfigs().firstOrNull()?.rawJson
+
+        if (raw.isNullOrBlank()) return null
+
+        // Оборачиваем outbound-конфиг в полный Xray JSON с локальным SOCKS inbound
+        return buildFullConfig(raw)
+    }
+
+    private fun buildFullConfig(outboundOrFull: String): String {
+        val trimmed = outboundOrFull.trim()
+        // Если уже полный конфиг с inbounds — используем как есть (но форсим socks порт)
+        if (trimmed.contains("\"inbounds\"") || trimmed.contains("\"outbound\"")) {
+            return trimmed
+        }
+        // Иначе считаем, что это один outbound object
+        return """
+        {
+          "log": { "loglevel": "warning" },
+          "inbounds": [{
+            "tag": "socks-in",
+            "port": ${TunnelManager.SOCKS_PORT},
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "settings": { "udp": true, "auth": "noauth" }
+          }],
+          "outbounds": [$trimmed],
+          "policy": {
+            "levels": { "0": { "connIdle": 300 } },
+            "system": { "statsOutboundUplink": true, "statsOutboundDownlink": true }
+          },
+          "stats": {}
+        }
+        """.trimIndent()
     }
 
     private fun stopVpn() {
@@ -142,8 +207,6 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
-
-    // --- Notification ---
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
