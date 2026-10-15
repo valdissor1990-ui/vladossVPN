@@ -6,7 +6,6 @@ import androidx.work.Configuration
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
-import com.vpnproxy.update.UpdateCheckWorker
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
@@ -17,7 +16,7 @@ import javax.inject.Inject
  * Обязанности:
  * - Инициализация Timber → LogCollector
  * - Настройка WorkManager через HiltWorkerFactory
- * - Планирование периодических задач (subscriptions + updates)
+ * - Планирование периодических задач (subscriptions)
  */
 @HiltAndroidApp
 class VpnProxyApp : Application(), Configuration.Provider {
@@ -34,7 +33,6 @@ class VpnProxyApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // Логирование: debug → TRACE, release → INFO
         if (BuildConfig.LOG_DEBUG) {
             Timber.plant(Timber.DebugTree())
         }
@@ -43,6 +41,12 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
         // Периодические задачи
         SubscriptionUpdateWorker.schedule(this, intervalHours = 6)
-        UpdateCheckWorker.schedule(this, intervalHours = 6)
+
+        // UpdateCheckWorker НЕ планируем здесь — он запускается:
+        //   1) Вручную из Settings (force = true)
+        //   2) Автоматически при открытии HomeScreen (LaunchedEffect)
+        // Планирование из двух мест даёт дубли и race condition.
+        // Если нужен фоновый периодический чек — раскомментируйте:
+        // UpdateCheckWorker.schedule(this, intervalHours = 6)
     }
 }
