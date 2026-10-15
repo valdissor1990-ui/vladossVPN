@@ -71,7 +71,10 @@ jobs:
       - name: Download native libs
         run: |
           chmod +x scripts/download_xray.sh
-          ./scripts/download_xray.sh || echo "Native libs skipped"
+          ./scripts/download_xray.sh
+          test -f app/libs/libv2ray.aar
+          test -f app/libs/hev-socks5-tunnel.aar
+          ls -lh app/libs/
 
       - name: Decode keystore
         env:
