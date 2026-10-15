@@ -13,10 +13,11 @@ import javax.inject.Singleton
 /**
  * TUN + hev-socks5-tunnel.
  *
- * Реальный AAR org.amnezia.awg.hevtunnel.TProxyService — НЕ Android Service, а JNI:
- *   TProxyStartService(configPath, tunFd)
- *   TProxyStopService()
- *   TProxyIsRunning()
+ * Реальный AAR org.amnezia.awg.hevtunnel.TProxyService — JNI API:
+ *   TProxyStartService(configPath, tunFd): void
+ *   TProxyStopService(): void
+ *   TProxyGetStats(): long[]
+ * Состояние запуска отслеживается на стороне Kotlin.
  *
  * TUN fd создаёт наш VpnProxyService через Builder.establish(), затем
  * передаётся в hev. Один VpnService в процессе — без конфликта.
@@ -37,6 +38,9 @@ class TunnelManager @Inject constructor(
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
+
+    @Volatile
+    private var tproxyRunning: Boolean = false
 
     fun establishTun(builder: VpnService.Builder): ParcelFileDescriptor? {
         return try {
@@ -67,31 +71,44 @@ class TunnelManager @Inject constructor(
 
     fun startHev(tunFd: Int): Boolean {
         return try {
-            val yaml = buildHevConfig()
-            val file = File(context.filesDir, "hev.yaml").apply { writeText(yaml) }
-            val ok = TProxyService.TProxyStartService(file.absolutePath, tunFd)
-            Log.i(TAG, "TProxyStartService result=$ok fd=$tunFd config=${file.absolutePath}")
+            val configYaml = buildHevConfig()
+            val configFile = File(context.filesDir, "hev_config.yaml").apply {
+                writeText(configYaml)
+            }
+            // AAR signature: static native void TProxyStartService(String, int).
+            TProxyService.TProxyStartService(configFile.absolutePath, tunFd)
+            tproxyRunning = true
+
+            // The verified API has no return value; probe the documented AAR method.
+            val stats = try { TProxyService.TProxyGetStats() } catch (_: Throwable) { null }
+            val ok = stats != null
+            if (!ok) {
+                Log.w(TAG, "TProxyStartService returned void; TProxyGetStats() probe returned null")
+                tproxyRunning = false
+            } else {
+                Log.i(TAG, "tun2socks started, stats=${stats!!.contentToString()}")
+            }
             ok
         } catch (t: Throwable) {
             Log.e(TAG, "TProxyStartService failed", t)
+            tproxyRunning = false
             false
         }
     }
 
     fun stopHev() {
         try {
-            val ok = TProxyService.TProxyStopService()
-            Log.i(TAG, "TProxyStopService result=$ok")
+            // AAR signature: static native void TProxyStopService().
+            TProxyService.TProxyStopService()
+            Log.i(TAG, "TProxyStopService OK")
         } catch (t: Throwable) {
-            Log.w(TAG, "TProxyStopService: ${t.message}")
+            Log.e(TAG, "TProxyStopService failed", t)
+        } finally {
+            tproxyRunning = false
         }
     }
 
-    fun isHevRunning(): Boolean = try {
-        TProxyService.TProxyIsRunning()
-    } catch (_: Throwable) {
-        false
-    }
+    fun isHevRunning(): Boolean = tproxyRunning
 
     fun closeTun() {
         try {

@@ -3,12 +3,10 @@ package com.vpnproxy.core.tunnel
 import android.net.TrafficStats
 import android.os.Process
 import android.util.Log
-import com.vpnproxy.core.xray.XrayCore
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,12 +14,10 @@ import javax.inject.Singleton
  * Сборщик статистики трафика.
  *
  * Использует TrafficStats.getUidRxBytes(Process.myUid()) — трафик конкретно
- * нашего приложения, а не всего устройства. Плюс опрос Xray Stats API.
+ * нашего приложения, а не всего устройства. Xray/HEV native stats не опрашиваются.
  */
 @Singleton
-class TrafficStatsCollector @Inject constructor(
-    private val xrayCore: XrayCore
-) {
+class TrafficStatsCollector @Inject constructor() {
     companion object {
         private const val TAG = "TrafficStats"
         private const val UPDATE_INTERVAL_MS = 1000L
@@ -71,22 +67,18 @@ class TrafficStatsCollector @Inject constructor(
         sessionRx += dRx; sessionTx += dTx
         totalRx += dRx; totalTx += dTx
 
-        val (xUp, xDown) = parseXrayStats(xrayCore.getStats())
-
+        // Xray/HEV stats are not used: libv2ray exposes no Java stats API,
+        // and the HEV TProxyGetStats() format is undocumented and AAR-version-dependent.
+        // Per-app TrafficStats counters are the source of truth.
         _traffic.value = TrafficSnapshot(
             downloadMbps = (dRx * 8.0 / 1_000_000.0 / elapsed).toFloat(),
             uploadMbps = (dTx * 8.0 / 1_000_000.0 / elapsed).toFloat(),
             sessionRx = sessionRx, sessionTx = sessionTx,
             totalRx = totalRx, totalTx = totalTx,
-            xrayUplink = xUp, xrayDownlink = xDown,
+            xrayUplink = 0L, xrayDownlink = 0L,
             timestamp = now
         )
     }
-
-    private fun parseXrayStats(json: String): Pair<Long, Long> = try {
-        val o = JSONObject(json)
-        o.optLong("uplink", 0) to o.optLong("downlink", 0)
-    } catch (_: Exception) { 0L to 0L }
 
     fun stop() { collectJob?.cancel(); collectJob = null }
 
@@ -103,7 +95,9 @@ class TrafficStatsCollector @Inject constructor(
         val sessionTx: Long = 0L,
         val totalRx: Long = 0L,
         val totalTx: Long = 0L,
+        @Deprecated("Not populated — libv2ray has no stats API")
         val xrayUplink: Long = 0L,
+        @Deprecated("Not populated — libv2ray has no stats API")
         val xrayDownlink: Long = 0L,
         val timestamp: Long = 0L
     )
