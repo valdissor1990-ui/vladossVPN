@@ -1,9 +1,7 @@
 package com.vpnproxy.core.ping
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -13,20 +11,10 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Пинг-сервис.
- *
- * Три метода измерения RTT:
- * 1. pingHost() — ICMP через системный /system/bin/ping (если доступен)
- * 2. httpPing() — HTTP HEAD к google.com/generate_204 (работает всегда, даже за NAT)
- * 3. tcpPing() — TCP connect к host:port
- */
 @Singleton
 class PingService @Inject constructor() {
 
     companion object {
-        private const val TAG = "PingService"
-
         val HTTP_TARGETS = listOf(
             "https://www.google.com/generate_204",
             "https://cloudflare.com/cdn-cgi/trace",
@@ -54,10 +42,22 @@ class PingService @Inject constructor() {
     enum class Method { ICMP, HTTP, TCP }
 
     /**
-     * HTTP-пинг Google: HEAD/GET к generate_204.
-     * Работает поверх VPN и без VPN.
+     * HTTP-пинг с retry: если первая попытка упала,
+     * повторяем с backoff (300ms, 600ms).
      */
-    suspend fun httpPing(target: String = HTTP_TARGETS[0]): PingResult =
+    suspend fun httpPing(target: String = HTTP_TARGETS[0], retries: Int = 2): PingResult =
+        withContext(Dispatchers.IO) {
+            var lastResult: PingResult? = null
+            repeat(retries + 1) { attempt ->
+                val result = singleHttpPing(target)
+                if (result.success) return@withContext result
+                lastResult = result
+                if (attempt < retries) delay(300L * (attempt + 1))
+            }
+            lastResult ?: PingResult(target, -1, false, Method.HTTP, "no attempts")
+        }
+
+    private suspend fun singleHttpPing(target: String): PingResult =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
             try {
@@ -77,34 +77,50 @@ class PingService @Inject constructor() {
                     )
                 }
             } catch (e: Exception) {
-                PingResult(target, -1, false, Method.HTTP, e.message)
+                PingResult(target, -1, false, Method.HTTP, e.message ?: e::class.simpleName)
             }
         }
 
-    suspend fun icmpPing(host: String, count: Int = 3): PingResult =
+    /**
+     * Комбинированный пинг:
+     * HTTP Google → HTTP Cloudflare → ICMP 8.8.8.8 → TCP 8.8.8.8:53 → TCP 1.1.1.1:53
+     */
+    suspend fun pingDefault(): PingResult {
+        val http = httpPing()
+        if (http.success) return http
+
+        val cf = httpPing(HTTP_TARGETS[1], retries = 0)
+        if (cf.success) return cf
+
+        val icmp = icmpPing("8.8.8.8")
+        if (icmp.success) return icmp
+
+        val tcp1 = tcpPing("8.8.8.8", 53)
+        if (tcp1.success) return tcp1
+
+        return tcpPing("1.1.1.1", 53)
+    }
+
+    suspend fun icmpPing(host: String, count: Int = 2): PingResult =
         withContext(Dispatchers.IO) {
             try {
                 val process = ProcessBuilder(
-                    "/system/bin/ping", "-c", count.toString(),
-                    "-W", "2", host
+                    "/system/bin/ping", "-c", count.toString(), "-W", "2", host
                 ).redirectErrorStream(true).start()
 
                 val output = process.inputStream.bufferedReader().readText()
-                val finished = process.waitFor(5, TimeUnit.SECONDS)
+                val finished = process.waitFor(4, TimeUnit.SECONDS)
                 if (!finished) {
                     process.destroy()
                     return@withContext PingResult(host, -1, false, Method.ICMP, "timeout")
                 }
 
-                val rttRegex = Regex("""=\\s*[\\d.]+/([\\d.]+)/""")
+                val rttRegex = Regex("""=\s*[\d.]+/([\d.]+)/""")
                 val match = rttRegex.find(output)
                 val avgMs = match?.groupValues?.get(1)?.toFloatOrNull()?.toLong()
 
-                if (avgMs != null) {
-                    PingResult(host, avgMs, true, Method.ICMP)
-                } else {
-                    PingResult(host, -1, false, Method.ICMP, "parse failed")
-                }
+                if (avgMs != null) PingResult(host, avgMs, true, Method.ICMP)
+                else PingResult(host, -1, false, Method.ICMP, "no rtt line")
             } catch (e: Exception) {
                 PingResult(host, -1, false, Method.ICMP, e.message)
             }
@@ -119,27 +135,13 @@ class PingService @Inject constructor() {
         try {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress(host, port), timeoutMs)
-                val rtt = System.currentTimeMillis() - start
-                PingResult("$host:$port", rtt, true, Method.TCP)
+                PingResult("$host:$port", System.currentTimeMillis() - start, true, Method.TCP)
             }
         } catch (e: Exception) {
             PingResult("$host:$port", -1, false, Method.TCP, e.message)
         }
     }
 
-    suspend fun pingDefault(): PingResult {
-        val http = httpPing()
-        if (http.success) return http
-
-        val icmp = icmpPing("8.8.8.8")
-        if (icmp.success) return icmp
-
-        return tcpPing("8.8.8.8", 53)
-    }
-
-    suspend fun pingAllTargets(): List<PingResult> = coroutineScope {
-        HTTP_TARGETS.map { target ->
-            async(Dispatchers.IO) { httpPing(target) }
-        }.awaitAll()
-    }
+    suspend fun pingAllTargets(): List<PingResult> =
+        HTTP_TARGETS.map { httpPing(it, retries = 0) }
 }
