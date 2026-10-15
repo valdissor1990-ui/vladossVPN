@@ -26,13 +26,25 @@ data class GitHubRelease(
         assets.firstOrNull { it.name.contains(flavor, ignoreCase = true) && it.name.endsWith(".apk") }
             ?: assets.firstOrNull { it.name.endsWith(".apk") }
 
+    /** Находит version.json ассет, если CI его приложил. */
+    fun findVersionJsonAsset(): Asset? =
+        assets.firstOrNull { it.name == "version.json" }
+
     /**
-     * Извлекает versionCode из tag_name формата v1.0.10001
-     * или возвращает 0, если распарсить не удалось.
+     * Извлекает versionCode из tag_name.
+     *
+     * Формат тега: v<major>.<minor>.<run_number>   (например, v1.0.73)
+     * Формула versionCode в build.gradle.kts:      10000 + run_number
+     * Поэтому:                                     versionCode = 10000 + patch
+     *
+     * Возвращает 0, если распарсить не удалось — тогда UpdateChecker
+     * просто не покажет ложное обновление.
      */
     fun extractVersionCode(): Int {
-        val parts = tagName.removePrefix("v").split(".")
-        return parts.lastOrNull()?.toIntOrNull() ?: 0
+        val cleaned = tagName.removePrefix("v").trim()
+        val parts = cleaned.split(".")
+        val patch = parts.lastOrNull()?.toIntOrNull() ?: return 0
+        return if (patch > 0) 10000 + patch else 0
     }
 
     fun extractVersionName(): String = tagName.removePrefix("v")
