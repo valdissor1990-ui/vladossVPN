@@ -70,7 +70,7 @@ fun HomeScreen(
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
-        updateViewModel.check()
+        updateViewModel.check(force = false)
     }
 
     Scaffold(
