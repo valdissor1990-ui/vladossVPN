@@ -18,7 +18,6 @@ val keystoreProps = Properties().apply {
 fun secret(key: String, fallback: String? = null): String? =
     System.getenv(key) ?: keystoreProps.getProperty(key) ?: fallback
 
-// --- Автоверсия ---
 val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
 val versionProps = Properties().apply {
     val f = rootProject.file("version.properties")
@@ -103,7 +102,6 @@ android {
             useLegacyPackaging = false
             pickFirsts += listOf(
                 "**/libgojni.so",
-                "**/libxray.so",
                 "**/libhev-socks5-tunnel.so",
                 "**/libc++_shared.so"
             )
@@ -112,8 +110,9 @@ android {
 }
 
 dependencies {
-    // Native cores (downloaded by scripts/download_xray.sh into app/libs/)
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    // Downloaded by scripts/download_xray.sh in CI
+    implementation(files("libs/libv2ray.aar"))
+    implementation(files("libs/hev-socks5-tunnel.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
     implementation("androidx.compose.ui:ui")
