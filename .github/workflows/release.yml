@@ -97,6 +97,14 @@ jobs:
             echo "NO classes.jar in AAR — pure JNI .so bundle"
           fi
 
+      - name: Inspect TProxyService methods
+        run: |
+          mkdir -p /tmp/hev-m
+          unzip -p app/libs/hev-socks5-tunnel.aar classes.jar > /tmp/hev-m/c.jar
+          unzip -q /tmp/hev-m/c.jar -d /tmp/hev-m/extracted
+          find /tmp/hev-m/extracted -name 'TProxyService.class'
+          javap -classpath /tmp/hev-m/c.jar 'org.amnezia.awg.hevtunnel.TProxyService' || echo "javap failed for detected package"
+
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

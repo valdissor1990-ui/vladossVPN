@@ -5,7 +5,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
-import hev.htproxy.TProxyService
+import org.amnezia.awg.hevtunnel.TProxyService
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,7 +13,7 @@ import javax.inject.Singleton
 /**
  * TUN + hev-socks5-tunnel.
  *
- * Реальный AAR hev.htproxy.TProxyService — НЕ Android Service, а JNI:
+ * Реальный AAR org.amnezia.awg.hevtunnel.TProxyService — НЕ Android Service, а JNI:
  *   TProxyStartService(configPath, tunFd)
  *   TProxyStopService()
  *   TProxyIsRunning()

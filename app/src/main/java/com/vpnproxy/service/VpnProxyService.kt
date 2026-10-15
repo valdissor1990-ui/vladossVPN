@@ -37,7 +37,7 @@ import javax.inject.Inject
  *  2. Xray startLoop (SOCKS 127.0.0.1:10808, tunFd=0)
  *  3. hev TProxyStartService(yaml, tunFd)
  *
- * hev.htproxy.TProxyService в AAR — JNI-класс, не Android Service.
+ * org.amnezia.awg.hevtunnel.TProxyService в AAR — JNI-класс, не Android Service.
  */
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
