@@ -24,7 +24,7 @@
 -keep @dagger.hilt.android.AndroidEntryPoint class * { *; }
 -keep @dagger.hilt.android.lifecycle.HiltViewModel class * { *; }
 
-# --- Room (если используется) ---
+# --- Room ---
 -keep class * extends androidx.room.RoomDatabase
 -keep @androidx.room.Entity class *
 -dontwarn androidx.room.paging.**
@@ -34,7 +34,6 @@
 -dontwarn okio.**
 -dontwarn org.conscrypt.**
 -keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
--keepclassmembers class * extends java.net.Proxy { *; }
 
 # --- SnakeYAML ---
 -keep class org.yaml.snakeyaml.** { *; }
@@ -48,17 +47,24 @@
 # --- AndroidX Security Crypto ---
 -keep class androidx.security.crypto.** { *; }
 
-# --- JNI / Xray-core ---
-# Нативная библиотека использует JNI — сохраняем методы с native
+# --- JNI ---
 -keepclasseswithmembernames class * {
     native <methods>;
 }
--keep class com.vpnproxy.core.xray.XrayCore { *; }
--keep class com.vpnproxy.core.tunnel.HevTunnelBridge { *; }
 
-# --- TUN2SOCKS / JNI wrapper ---
--keep class com.vpnproxy.core.tunnel.** { *; }
+# --- AndroidLibXrayLite (libv2ray) ---
+-keep class libv2ray.** { *; }
+-keep class go.** { *; }
+-dontwarn libv2ray.**
+-dontwarn go.**
+
+# --- hev-socks5-tunnel AAR ---
+-keep class hev.htproxy.** { *; }
+-dontwarn hev.htproxy.**
+
+# --- App tunnel / xray wrappers ---
 -keep class com.vpnproxy.core.xray.** { *; }
+-keep class com.vpnproxy.core.tunnel.** { *; }
 
 # --- Update ---
 -keep class com.vpnproxy.update.** { *; }
@@ -66,7 +72,6 @@
 # --- Compose ---
 -dontwarn androidx.compose.**
 -keep class androidx.compose.runtime.** { *; }
--keepclassmembers class androidx.compose.runtime.** { *; }
 
 # --- WorkManager ---
 -keep class * extends androidx.work.Worker
@@ -75,15 +80,14 @@
 }
 -keep class * extends androidx.work.CoroutineWorker { *; }
 
-# --- EncryptedSharedPreferences / Tink ---
+# --- Tink ---
 -keep class com.google.crypto.tink.** { *; }
 -dontwarn com.google.crypto.tink.**
 
-# --- Отладочная информация ---
+# --- Debug info ---
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Удалить логи в release
 -assumenosideeffects class android.util.Log {
     public static *** v(...);
     public static *** d(...);
