@@ -61,8 +61,6 @@ android {
 
     signingConfigs {
         create("release") {
-            // НЕ декодируем base64 здесь — Android SDK недоступен в build-скрипте.
-            // CI обязан положить keystore в файл и передать путь через KEYSTORE_PATH.
             val ksPath = secret("KEYSTORE_PATH")
             val ksFile = ksPath?.let { file(it) }
             if (ksFile != null && ksFile.exists()) {
@@ -103,12 +101,20 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = false
-            pickFirsts += listOf("**/libxray.so", "**/libhev-socks5-tunnel.so")
+            pickFirsts += listOf(
+                "**/libgojni.so",
+                "**/libxray.so",
+                "**/libhev-socks5-tunnel.so",
+                "**/libc++_shared.so"
+            )
         }
     }
 }
 
 dependencies {
+    // Native cores (downloaded by scripts/download_xray.sh into app/libs/)
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
