@@ -1,6 +1,9 @@
 package com.vpnproxy.service
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -15,18 +18,26 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Foreground VpnService — ядро приложения.
+ * Единственный VpnService в приложении.
  *
- * Жизненный цикл:
- * 1. startVpn() → TUN → Xray (SOCKS) → hev-socks5-tunnel (TUN→SOCKS)
- * 2. Мониторинг через AutoSwitcher
- * 3. stopVpn() → hev stop → Xray stop → TUN close
+ * Порядок старта:
+ *  1. TUN via Builder.establish()
+ *  2. Xray startLoop (SOCKS 127.0.0.1:10808, tunFd=0)
+ *  3. hev TProxyStartService(yaml, tunFd)
+ *
+ * hev.htproxy.TProxyService в AAR — JNI-класс, не Android Service.
  */
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
@@ -57,111 +68,95 @@ class VpnProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        xrayCore.setProtector { fd -> protect(fd) }
         logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startVpn()
             ACTION_STOP -> stopVpn()
-            ACTION_RECONNECT -> {
-                scope.launch {
-                    stopVpnInternal()
-                    delay(500)
-                    startVpn()
-                }
+            ACTION_RECONNECT -> scope.launch {
+                stopVpnInternal()
+                delay(400)
+                startVpn()
             }
-            else -> startVpn()
+            ACTION_START, null -> startVpn()
         }
         return START_STICKY
     }
 
+    override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
+
     private fun startVpn() {
         if (_isRunning.value) return
+
         vpnJob = scope.launch {
             try {
-                logCollector.info(TAG, "Starting VPN...")
+                logCollector.info(TAG, "Starting VPN orchestrator…")
+                startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
 
-                val builder = Builder()
-                    .setSession("VPNProxy")
-                    .setMtu(TunnelManager.TUN_MTU)
-
-                val pfd = tunnelManager.establishTun(builder)
+                // 1. TUN
+                val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {
                     logCollector.error(TAG, "TUN establishment failed")
                     stopSelf()
                     return@launch
                 }
 
-                val configJson = resolveXrayConfig()
-                if (configJson == null) {
-                    logCollector.error(TAG, "No Xray config available")
+                // 2. Server config
+                val parsed = autoSwitcher.currentServer.value?.config
+                    ?: subscriptionRepository.getAllConfigs().firstOrNull()
+                if (parsed == null) {
+                    logCollector.warn(TAG, "No server selected — open Subscriptions first")
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
                 }
 
-                val xrayOk = xrayCore.start(configJson, tunFd = 0)
+                // 3. Xray env + SOCKS
+                if (!xrayCore.initEnv()) {
+                    logCollector.error(TAG, "initCoreEnv failed")
+                    tunnelManager.tearDown()
+                    stopSelf()
+                    return@launch
+                }
+                logCollector.info(TAG, "libv2ray env initialized")
+
+                val xrayJson = xrayCore.buildClientConfig(parsed, TunnelManager.SOCKS_PORT)
+                val xrayOk = xrayCore.start(xrayJson, tunFd = 0)
                 if (!xrayOk) {
-                    logCollector.error(TAG, "Xray start failed")
+                    logCollector.error(TAG, "Xray startLoop failed")
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
                 }
+                logCollector.info(TAG, "Xray startLoop OK, SOCKS 127.0.0.1:${TunnelManager.SOCKS_PORT}")
 
-                val hevOk = tunnelManager.startTun2Socks(pfd.fd)
+                // 4. hev: TUN → SOCKS
+                val hevOk = tunnelManager.startHev(pfd.fd)
                 if (!hevOk) {
-                    logCollector.error(TAG, "hev-socks5-tunnel start failed")
+                    logCollector.error(TAG, "TProxyStartService failed")
                     xrayCore.stop()
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
                 }
+                logCollector.info(TAG, "TProxyStartService requested/ok")
 
                 trafficCollector.start()
                 trafficCollector.resetSession()
                 autoSwitcher.startMonitoring()
 
                 _isRunning.value = true
-                startForeground(NOTIFICATION_ID, buildNotification())
+                updateNotification(getString(R.string.state_connected))
                 logCollector.info(TAG, "VPN started successfully")
-            } catch (e: Exception) {
-                logCollector.error(TAG, "Failed to start VPN", e)
-                try { tunnelManager.tearDown() } catch (_: Exception) {}
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                logCollector.error(TAG, "Failed to start VPN", t)
+                stopVpnInternal()
                 stopSelf()
             }
         }
-    }
-
-    private suspend fun resolveXrayConfig(): String? {
-        val parsed = autoSwitcher.currentServer.value?.config
-            ?: subscriptionRepository.getAllConfigs().firstOrNull()
-            ?: return null
-
-        val outbound = parsed.toXrayOutbound().toString()
-        return buildFullConfig(outbound)
-    }
-
-    private fun buildFullConfig(outboundJson: String): String {
-        return """
-        {
-          "log": { "loglevel": "warning" },
-          "inbounds": [{
-            "tag": "socks-in",
-            "port": ${TunnelManager.SOCKS_PORT},
-            "listen": "127.0.0.1",
-            "protocol": "socks",
-            "settings": { "udp": true, "auth": "noauth" }
-          }],
-          "outbounds": [$outboundJson],
-          "policy": {
-            "levels": { "0": { "connIdle": 300 } },
-            "system": { "statsOutboundUplink": true, "statsOutboundDownlink": true }
-          },
-          "stats": {}
-        }
-        """.trimIndent()
     }
 
     private fun stopVpn() {
@@ -175,11 +170,15 @@ class VpnProxyService : VpnService() {
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
-            tunnelManager.tearDown()
+            tunnelManager.stopHev()
+            xrayCore.stop()
+            tunnelManager.closeTun()
             _isRunning.value = false
             logCollector.info(TAG, "VPN stopped")
-        } catch (e: Exception) {
-            logCollector.error(TAG, "Error stopping VPN", e)
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            logCollector.error(TAG, "Error stopping VPN", t)
         }
     }
 
@@ -189,48 +188,51 @@ class VpnProxyService : VpnService() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "VPN Proxy",
+            val ch = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.notification_channel_vpn),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Состояние VPN-подключения"
+                description = getString(R.string.notification_channel_vpn_desc)
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 
-    private fun buildNotification(): Notification {
-        val stopIntent = PendingIntent.getService(
+    private fun buildNotification(state: String): Notification {
+        val stopPi = PendingIntent.getService(
             this, 0,
             Intent(this, VpnProxyService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val reconnectIntent = PendingIntent.getService(
+        val recPi = PendingIntent.getService(
             this, 1,
             Intent(this, VpnProxyService::class.java).setAction(ACTION_RECONNECT),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val contentIntent = PendingIntent.getActivity(
+        val contentPi = PendingIntent.getActivity(
             this, 2,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VPNProxy")
-            .setContentText("Подключено")
+            .setContentText(state)
             .setSmallIcon(R.drawable.ic_vpn)
-            .setContentIntent(contentIntent)
+            .setContentIntent(contentPi)
             .setOngoing(true)
-            .addAction(0, "Стоп", stopIntent)
-            .addAction(0, "Переподключить", reconnectIntent)
+            .addAction(0, getString(R.string.notification_stop), stopPi)
+            .addAction(0, getString(R.string.notification_reconnect), recPi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    private fun updateNotification(state: String) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(state))
     }
 }
