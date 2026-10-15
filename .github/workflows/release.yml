@@ -72,9 +72,18 @@ jobs:
         run: |
           chmod +x scripts/download_xray.sh
           ./scripts/download_xray.sh
-          test -f app/libs/libv2ray.aar
-          test -f app/libs/hev-socks5-tunnel.aar
-          ls -lh app/libs/
+          echo "=== AAR contents (first 20 lines each) ==="
+          unzip -l app/libs/libv2ray.aar | head -20
+          echo "---"
+          unzip -l app/libs/hev-socks5-tunnel.aar | head -20
+          echo "=== Checking for duplicate go.* classes ==="
+          mkdir -p /tmp/aar-check
+          unzip -p app/libs/libv2ray.aar classes.jar > /tmp/aar-check/libv2ray.jar
+          unzip -p app/libs/hev-socks5-tunnel.aar classes.jar > /tmp/aar-check/hev.jar
+          echo "go.* in libv2ray:"
+          unzip -l /tmp/aar-check/libv2ray.jar | grep -c "go/" || true
+          echo "go.* in hev (should be 0):"
+          unzip -l /tmp/aar-check/hev.jar | grep -c "go/" || true
 
       - name: Decode keystore
         env:

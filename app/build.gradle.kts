@@ -97,14 +97,44 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
 
+    // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true   // плюс универсальный APK для GitHub Releases
+        }
+    }
+
+    // ★ Упаковка: pickFirsts решает конфликты нативных .so
     packaging {
-        jniLibs {
-            useLegacyPackaging = false
-            pickFirsts += listOf(
-                "**/libgojni.so",
-                "**/libhev-socks5-tunnel.so",
-                "**/libc++_shared.so"
+        resources {
+            excludes += setOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/LICENSE.md",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/NOTICE.md",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/INDEX.LIST",
+                "META-INF/*.SF",
+                "META-INF/*.RSA",
+                "META-INF/*.DSA"
             )
+        }
+        jniLibs {
+            // Критично для libv2ray + hev: оба содержат libgojni.so
+            pickFirsts += setOf(
+                "**/libgojni.so",
+                "**/libv2ray.so",
+                "**/libhev-socks5-tunnel.so"
+            )
+            useLegacyPackaging = false
         }
     }
 }
