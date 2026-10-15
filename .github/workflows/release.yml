@@ -130,12 +130,12 @@ jobs:
             exit 1
           fi
 
-          # ABI splits enabled → use universal APK, not the base name
-          APK=app/build/outputs/apk/direct/release/app-direct-release-universal.apk
+          # Gradle flavor+splits naming: app-<flavor>-<abi>-<buildType>.apk
+          APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
 
-          # Fallback: pick any release APK if universal missing
+          # Fallback: any APK if universal missing (defensive)
           if [ ! -f "$APK" ]; then
-            APK=$(find app/build/outputs/apk/direct/release -name '*-release*.apk' | head -1)
+            APK=$(find app/build/outputs/apk/direct/release -name 'app-direct-*-release.apk' | head -1)
           fi
 
           if [ -z "$APK" ] || [ ! -f "$APK" ]; then
@@ -186,6 +186,24 @@ jobs:
           name: aab-play-${{ steps.ver.outputs.name }}
           path: app/build/outputs/bundle/playRelease/*.aab
 
+      - name: Verify release APK files exist
+        run: |
+          set -euo pipefail
+          DIR=app/build/outputs/apk/direct/release
+          for f in \
+            "$DIR/app-direct-universal-release.apk" \
+            "$DIR/app-direct-arm64-v8a-release.apk" \
+            "$DIR/app-direct-armeabi-v7a-release.apk" \
+            "$DIR/app-direct-x86_64-release.apk"; do
+            if [ ! -f "$f" ]; then
+              echo "❌ Missing expected APK: $f"
+              echo "Directory contents:"
+              ls -la "$DIR"
+              exit 1
+            fi
+            echo "✅ $f ($(du -h "$f" | cut -f1))"
+          done
+
       - name: Create GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -194,13 +212,9 @@ jobs:
           name: VPNProxy v${{ steps.ver.outputs.name }}
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
-            app/build/outputs/apk/direct/release/app-direct-release-universal.apk
-            app/build/outputs/apk/direct/release/app-direct-release-arm64-v8a.apk
-            app/build/outputs/apk/direct/release/app-direct-release-armeabi-v7a.apk
-            app/build/outputs/apk/direct/release/app-direct-release-x86.apk
-            app/build/outputs/apk/direct/release/app-direct-release-x86_64.apk
+            app/build/outputs/apk/direct/release/app-direct-*-release.apk
             app/build/outputs/bundle/playRelease/*.aab
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
         env:
