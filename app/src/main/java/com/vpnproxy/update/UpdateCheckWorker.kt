@@ -19,6 +19,7 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -65,19 +66,29 @@ class UpdateCheckWorker(
                 Deps::class.java
             )
             val updateManager = deps.updateManager()
-            updateManager.checkForUpdate()
+            updateManager.checkForUpdate(force = true)
             val state = updateManager.state.value
             if (state is UpdateManager.State.UpdateAvailable) {
                 showNotification(state.release.extractVersionName(), state.release.body)
             }
             Result.success()
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            // Штатная отмена — WorkManager прервал воркер. НЕ считаем ошибкой.
             try {
                 val deps = EntryPointAccessors.fromApplication(
                     applicationContext,
                     Deps::class.java
                 )
-                deps.logCollector().error("UpdateCheckWorker", "Failed", e)
+                deps.logCollector().debug("UpdateCheckWorker", "Cancelled by WorkManager")
+            } catch (_: Exception) { /* ignore */ }
+            Result.success()
+        } catch (t: Throwable) {
+            try {
+                val deps = EntryPointAccessors.fromApplication(
+                    applicationContext,
+                    Deps::class.java
+                )
+                deps.logCollector().warn("UpdateCheckWorker", "Failed: ${t.message}")
             } catch (_: Exception) { /* ignore */ }
             Result.retry()
         }
