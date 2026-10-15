@@ -57,7 +57,6 @@ class VpnProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        // Outbound sockets Xray must bypass the VPN interface
         xrayCore.setProtector { fd -> protect(fd) }
         logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
     }
@@ -84,7 +83,6 @@ class VpnProxyService : VpnService() {
             try {
                 logCollector.info(TAG, "Starting VPN...")
 
-                // 1. TUN
                 val builder = Builder()
                     .setSession("VPNProxy")
                     .setMtu(TunnelManager.TUN_MTU)
@@ -96,7 +94,6 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
-                // 2. Config from AutoSwitcher / subscription
                 val configJson = resolveXrayConfig()
                 if (configJson == null) {
                     logCollector.error(TAG, "No Xray config available")
@@ -105,7 +102,6 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
-                // 3. Xray SOCKS-in (tunFd=0 — TUN у hev)
                 val xrayOk = xrayCore.start(configJson, tunFd = 0)
                 if (!xrayOk) {
                     logCollector.error(TAG, "Xray start failed")
@@ -114,7 +110,6 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
-                // 4. hev-socks5-tunnel: TUN → 127.0.0.1:2081
                 val hevOk = tunnelManager.startTun2Socks(pfd.fd)
                 if (!hevOk) {
                     logCollector.error(TAG, "hev-socks5-tunnel start failed")
@@ -139,28 +134,16 @@ class VpnProxyService : VpnService() {
         }
     }
 
-    /**
-     * Берёт JSON конфиг лучшего сервера.
-     * Ожидается, что outbound уже в формате Xray; inbound SOCKS добавляем локально.
-     */
     private suspend fun resolveXrayConfig(): String? {
-        val current = autoSwitcher.currentServer.value
-        val raw = current?.config?.rawJson
-            ?: subscriptionRepository.getAllConfigs().firstOrNull()?.rawJson
+        val parsed = autoSwitcher.currentServer.value?.config
+            ?: subscriptionRepository.getAllConfigs().firstOrNull()
+            ?: return null
 
-        if (raw.isNullOrBlank()) return null
-
-        // Оборачиваем outbound-конфиг в полный Xray JSON с локальным SOCKS inbound
-        return buildFullConfig(raw)
+        val outbound = parsed.toXrayOutbound().toString()
+        return buildFullConfig(outbound)
     }
 
-    private fun buildFullConfig(outboundOrFull: String): String {
-        val trimmed = outboundOrFull.trim()
-        // Если уже полный конфиг с inbounds — используем как есть (но форсим socks порт)
-        if (trimmed.contains("\"inbounds\"") || trimmed.contains("\"outbound\"")) {
-            return trimmed
-        }
-        // Иначе считаем, что это один outbound object
+    private fun buildFullConfig(outboundJson: String): String {
         return """
         {
           "log": { "loglevel": "warning" },
@@ -171,7 +154,7 @@ class VpnProxyService : VpnService() {
             "protocol": "socks",
             "settings": { "udp": true, "auth": "noauth" }
           }],
-          "outbounds": [$trimmed],
+          "outbounds": [$outboundJson],
           "policy": {
             "levels": { "0": { "connIdle": 300 } },
             "system": { "statsOutboundUplink": true, "statsOutboundDownlink": true }
