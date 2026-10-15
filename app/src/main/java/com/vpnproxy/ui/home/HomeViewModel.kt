@@ -13,6 +13,7 @@ import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,7 +52,6 @@ class HomeViewModel @Inject constructor(
 
     val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
 
-    /** Реальный RTT до Google (независимо от VPN). */
     private val _googleRtt = MutableStateFlow<Long?>(null)
     val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
 
@@ -97,12 +97,25 @@ class HomeViewModel @Inject constructor(
         pingJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    val result = pingService.httpPing()
-                    _googleRtt.value = if (result.success) result.rttMs else null
-                    logCollector.debug(TAG, "Google RTT: ${result.rttMs}ms (${result.method})")
+                    val result = pingService.pingDefault()
+                    if (result.success) {
+                        _googleRtt.value = result.rttMs
+                        logCollector.debug(
+                            TAG,
+                            "Ping OK: ${result.rttMs}ms via ${result.method} (${result.target})"
+                        )
+                    } else {
+                        _googleRtt.value = null
+                        logCollector.warn(
+                            TAG,
+                            "Ping failed: ${result.error ?: "unknown"} (${result.method} ${result.target})"
+                        )
+                    }
+                } catch (c: CancellationException) {
+                    throw c
                 } catch (t: Throwable) {
-                    logCollector.warn(TAG, "Ping failed: ${t.message}")
                     _googleRtt.value = null
+                    logCollector.warn(TAG, "Ping exception: ${t.message}")
                 }
                 delay(30_000)
             }
