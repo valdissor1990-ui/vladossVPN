@@ -15,7 +15,9 @@ class UpdateViewModel @Inject constructor(
 
     val state: StateFlow<UpdateManager.State> = updateManager.state
 
-    fun check() = viewModelScope.launch { updateManager.checkForUpdate() }
+    fun check(force: Boolean = false) = viewModelScope.launch {
+        updateManager.checkForUpdate(force = force)
+    }
 
     fun download() {
         val current = updateManager.state.value
