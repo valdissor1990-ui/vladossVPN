@@ -1,64 +1,63 @@
 #!/usr/bin/env bash
-# Скачивает prebuilt libxray.so и libhev-socks5-tunnel.so из официальных релизов.
-# Запуск: ./scripts/download_xray.sh
+# Downloads production native AARs used by VPNProxy:
+#   - AndroidLibXrayLite (libv2ray.aar) — Xray-core via gomobile
+#   - hev-socks5-tunnel.aar — tun2socks JNI bridge
+# Run from CI or locally: ./scripts/download_xray.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+LIBS_DIR="$PROJECT_DIR/app/libs"
 JNI_DIR="$PROJECT_DIR/app/src/main/jniLibs"
 
-XRAY_VERSION="${XRAY_VERSION:-v25.4.30}"
-HEV_VERSION="${HEV_VERSION:-7.0}"
+XRAY_VERSION="${XRAY_VERSION:-v26.10.10}"
+HEV_VERSION="${HEV_VERSION:-2.19.0}"
 
-XRAY_BASE_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}"
-HEV_BASE_URL="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}"
+XRAY_AAR_URL="https://github.com/2dust/AndroidLibXrayLite/releases/download/${XRAY_VERSION}/libv2ray.aar"
+HEV_AAR_URL="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}/hev-socks5-tunnel.aar"
 
 echo "=== VPNProxy: Downloading native libraries ==="
-echo "Xray-core: $XRAY_VERSION"
-echo "hev-socks5-tunnel: $HEV_VERSION"
+echo "AndroidLibXrayLite: $XRAY_VERSION"
+echo "hev-socks5-tunnel:  $HEV_VERSION"
 
-# Создаём директории
-mkdir -p "$JNI_DIR/arm64-v8a" "$JNI_DIR/armeabi-v7a" "$JNI_DIR/x86_64"
+mkdir -p "$LIBS_DIR"
+mkdir -p "$JNI_DIR/arm64-v8a" "$JNI_DIR/armeabi-v7a" "$JNI_DIR/x86_64" "$JNI_DIR/x86"
 
-# --- Xray-core ---
-# Xray-core предоставляет бинарники для Android в релизах
-# Для JNI-интеграции требуется AndroidLibXrayLite (AAR) или сборка из исходников.
-# Здесь скачиваем бинарники как reference; в production используйте AndroidLibXrayLite.
-echo "Downloading Xray-core binaries..."
-for abi in arm64-v8a armeabi-v7a x86_64; do
-    case $abi in
-        arm64-v8a)  ARCH="arm64-v8a" ;;
-        armeabi-v7a) ARCH="armeabi-v7a" ;;
-        x86_64)     ARCH="x86_64" ;;
-    esac
-    # Проверяем наличие AndroidLibXrayLite AAR
-    echo "  ABI: $abi — используйте AndroidLibXrayLite из https://github.com/2dust/AndroidLibXrayLite"
-done
-
-# --- hev-socks5-tunnel ---
-echo "Downloading hev-socks5-tunnel..."
-for abi in arm64-v8a armeabi-v7a x86_64; do
-    case $abi in
-        arm64-v8a)  HEV_ARCH="arm64-v8a" ;;
-        armeabi-v7a) HEV_ARCH="armeabi-v7a" ;;
-        x86_64)     HEV_ARCH="x86_64" ;;
-    esac
-    URL="${HEV_BASE_URL}/hev-socks5-tunnel-android-${HEV_ARCH}.so"
-    OUTPUT="$JNI_DIR/$abi/libhev-socks5-tunnel.so"
-    echo "  Downloading $HEV_ARCH..."
-    if curl -fSL "$URL" -o "$OUTPUT" 2>/dev/null; then
-        echo "  ✓ Saved: $OUTPUT"
-    else
-        echo "  ✗ Failed to download hev-socks5-tunnel for $HEV_ARCH"
+download() {
+  local url="$1"
+  local out="$2"
+  echo "  → $out"
+  if curl -fSL --retry 3 --retry-delay 2 "$url" -o "$out"; then
+    local size
+    size=$(wc -c < "$out" | tr -d ' ')
+    if [ "$size" -lt 1000 ]; then
+      echo "  ✗ File too small ($size bytes) — bad download"
+      rm -f "$out"
+      return 1
     fi
-done
+    echo "  ✓ $(basename "$out") ($size bytes)"
+    return 0
+  fi
+  echo "  ✗ Failed: $url"
+  return 1
+}
+
+# --- Xray (AAR contains jni/<abi>/libgojni.so + Java bindings) ---
+echo "Downloading libv2ray.aar..."
+download "$XRAY_AAR_URL" "$LIBS_DIR/libv2ray.aar"
+
+# --- hev-socks5-tunnel AAR (preferred: includes TProxyService + .so for all ABIs) ---
+echo "Downloading hev-socks5-tunnel.aar..."
+if ! download "$HEV_AAR_URL" "$LIBS_DIR/hev-socks5-tunnel.aar"; then
+  echo "AAR unavailable — falling back to per-ABI shared libraries"
+  for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+    url="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}/hev-socks5-tunnel-android-${abi}"
+    out="$JNI_DIR/$abi/libhev-socks5-tunnel.so"
+    download "$url" "$out" || true
+  done
+fi
 
 echo ""
-echo "=== IMPORTANT ==="
-echo "Для Xray-core в production используйте AndroidLibXrayLite:"
-echo "  https://github.com/2dust/AndroidLibXrayLite"
-echo "Добавьте AAR в app/libs/ и подключите в build.gradle.kts:"
-echo "  implementation(files(\"libs/AndroidLibXrayLite.aar\"))"
-echo ""
-echo "Done."
+echo "=== Done ==="
+ls -lh "$LIBS_DIR" || true
