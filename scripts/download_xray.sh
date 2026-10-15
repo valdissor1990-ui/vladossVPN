@@ -10,7 +10,8 @@ LIBS_DIR="$PROJECT_DIR/app/libs"
 ASSETS_DIR="$PROJECT_DIR/app/src/main/assets"
 
 LIBV2RAY_URL="https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.10.10/libv2ray.aar"
-HEV_URL="https://github.com/heiher/hev-socks5-tunnel/releases/download/2.19.0/hev-socks5-tunnel-android.aar"
+# Maven Central (verified 200 OK). GitHub release URL returned 404.
+HEV_URL="https://repo1.maven.org/maven2/com/zaneschepke/hevtunnel/1.0.1/hevtunnel-1.0.1.aar"
 
 mkdir -p "$LIBS_DIR" "$ASSETS_DIR"
 
@@ -21,7 +22,15 @@ fi
 
 echo "=== [2/4] Downloading hev-socks5-tunnel.aar ==="
 if [ ! -s "$LIBS_DIR/hev-socks5-tunnel.aar" ]; then
-  curl -fSL --retry 3 "$HEV_URL" -o "$LIBS_DIR/hev-socks5-tunnel.aar"
+  echo "   URL: $HEV_URL"
+  HTTP_CODE=$(curl -sL -w "%{http_code}" -o "$LIBS_DIR/hev-socks5-tunnel.aar" "$HEV_URL")
+  if [ "$HTTP_CODE" != "200" ]; then
+    echo "❌ Download failed with HTTP $HTTP_CODE"
+    echo "   Verify manually: curl -I $HEV_URL"
+    rm -f "$LIBS_DIR/hev-socks5-tunnel.aar"
+    exit 1
+  fi
+  echo "   ✅ Downloaded ($(du -h "$LIBS_DIR/hev-socks5-tunnel.aar" | cut -f1))"
 fi
 
 echo "=== [3/4] Stripping duplicate Go runtime from hev-socks5-tunnel.aar ==="
@@ -53,7 +62,7 @@ if [ -f "$TMP_DIR/classes.jar" ]; then
 
   echo "   ✅ go.* stripped from hev-socks5-tunnel.aar"
 else
-  echo "   ⚠️  classes.jar not found in hev AAR — skip"
+  echo "   ⚠️  classes.jar not found in hev AAR — skip (expected for Maven Central AAR)"
 fi
 
 echo "=== [4/4] Sanity checks ==="
