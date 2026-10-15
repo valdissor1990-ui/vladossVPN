@@ -2,13 +2,14 @@ package com.vpnproxy.core.xray
 
 import android.content.Context
 import android.util.Log
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
-import libv2ray.Protector
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
@@ -17,14 +18,13 @@ import javax.inject.Singleton
 /**
  * Обёртка над AndroidLibXrayLite (libv2ray.aar).
  *
- * API:
- *  - Libv2ray.initCoreEnv(assetPath, "")
- *  - Libv2ray.newCoreController(callback)
- *  - CoreController.startLoop(configJson, tunFd)  // tunFd=0 — без встроенного TUN
- *  - CoreController.stopLoop()
+ * Проверено javap v26.10.10:
+ *   Libv2ray.initCoreEnv(String assetPath, String certPath)
+ *   Libv2ray.newCoreController(CoreCallbackHandler)
+ *   CoreController.startLoop(String configJson, int tunFd)  // 0 = без встроенного TUN
+ *   CoreController.stopLoop()
  *
- * В архитектуре VPNProxy Xray слушает SOCKS на 127.0.0.1:2081,
- * а TUN → SOCKS мост делает hev-socks5-tunnel. Поэтому tunFd всегда 0.
+ * TUN обслуживает hev-socks5-tunnel; Xray только SOCKS-in на 127.0.0.1.
  */
 @Singleton
 class XrayCore @Inject constructor(
@@ -34,8 +34,7 @@ class XrayCore @Inject constructor(
     companion object {
         private const val TAG = "XrayCore"
 
-        @Volatile
-        private var envInitialized = false
+        @Volatile private var envReady = false
     }
 
     private var controller: CoreController? = null
@@ -43,71 +42,52 @@ class XrayCore @Inject constructor(
     @Volatile
     private var running = false
 
-    /** Опциональный VpnService.protect(fd) — регистрируется из VpnProxyService. */
-    @Volatile
-    private var protector: ((Int) -> Boolean)? = null
-
-    fun setProtector(fn: ((Int) -> Boolean)?) {
-        protector = fn
+    private val callback = object : CoreCallbackHandler {
+        override fun startup(): Long = 0L
+        override fun shutdown(): Long = 0L
+        override fun onEmitStatus(code: Long, message: String?): Long {
+            Log.d(TAG, "status code=$code msg=$message")
+            return 0L
+        }
     }
 
-    private fun ensureEnv() {
-        if (envInitialized) return
-        synchronized(XrayCore::class.java) {
-            if (envInitialized) return
-            val assetDir = File(context.filesDir, "xray").apply { mkdirs() }
-            // geodata / conf assets path; empty cert path is fine for SOCKS mode
-            Libv2ray.initCoreEnv(assetDir.absolutePath, "")
-            envInitialized = true
-            Log.i(TAG, "libv2ray env initialized at ${assetDir.absolutePath}")
+    /** Инициализация env (geoip/geosite из AAR assets + filesDir). */
+    fun initEnv(): Boolean {
+        if (envReady) return true
+        return try {
+            val dir = File(context.filesDir, "xray").apply { mkdirs() }
+            // (assetPath, certFile) — geoip/geosite подхватываются из AAR assets
+            Libv2ray.initCoreEnv(dir.absolutePath, "")
+            envReady = true
+            Log.i(TAG, "initCoreEnv OK path=${dir.absolutePath}")
+            true
+        } catch (t: Throwable) {
+            Log.e(TAG, "initCoreEnv failed", t)
+            false
         }
     }
 
     /**
      * @param configJson полный JSON Xray
-     * @param tunFd игнорируется (архитектура через hev); передаём 0 в startLoop
+     * @param tunFd 0 — TUN у hev; иначе fd встроенного TUN
      */
     suspend fun start(configJson: String, tunFd: Int = 0): Boolean = withContext(Dispatchers.IO) {
         try {
-            ensureEnv()
-            // Валидация JSON
-            JSONObject(configJson)
+            if (!initEnv()) return@withContext false
+            JSONObject(configJson) // validate
 
             controller?.let {
-                try { it.stopLoop() } catch (_: Throwable) { /* ignore */ }
+                try { it.stopLoop() } catch (_: Throwable) {}
             }
 
-            val cb = object : CoreCallbackHandler {
-                override fun startup(): Long = 0L
-                override fun shutdown(): Long = 0L
-                override fun onEmitStatus(l: Long, s: String?): Long {
-                    Log.d(TAG, "status[$l]: $s")
-                    return 0L
-                }
-            }
-
-            val ctrl = Libv2ray.newCoreController(cb)
-
-            // Protect outbound sockets from VPN loop
-            try {
-                Libv2ray.registerProtector(object : Protector {
-                    override fun protectFd(fd: Int): Boolean {
-                        val p = protector
-                        return if (p != null) p.invoke(fd) else true
-                    }
-                })
-            } catch (t: Throwable) {
-                Log.w(TAG, "registerProtector skipped: ${t.message}")
-            }
-
-            // tunFd = 0: TUN обслуживает hev-socks5-tunnel, Xray только SOCKS-in
-            ctrl.startLoop(configJson, 0)
+            val ctrl = Libv2ray.newCoreController(callback)
+            ctrl.startLoop(configJson, tunFd)
             controller = ctrl
             running = true
-            Log.i(TAG, "Xray startLoop OK (socks mode)")
+            Log.i(TAG, "startLoop OK tunFd=$tunFd")
             true
-        } catch (e: Exception) {
-            Log.e(TAG, "Xray start failed", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "startLoop failed", t)
             running = false
             false
         }
@@ -118,34 +98,39 @@ class XrayCore @Inject constructor(
             controller?.stopLoop()
             controller = null
             running = false
-            Log.i(TAG, "Xray stopLoop OK")
+            Log.i(TAG, "stopLoop OK")
             true
-        } catch (e: Exception) {
-            Log.e(TAG, "Xray stop failed", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "stopLoop failed", t)
             running = false
             false
         }
     }
 
-    suspend fun getStats(): String = withContext(Dispatchers.IO) {
-        // libv2ray QueryStats is per-tag; return empty object if unavailable
-        if (!running) return@withContext "{}"
-        try {
-            val ctrl = controller ?: return@withContext "{}"
-            val uplink = ctrl.queryStats("proxy", "uplink")
-            val downlink = ctrl.queryStats("proxy", "downlink")
-            """{"uplink":$uplink,"downlink":$downlink}"""
-        } catch (e: Exception) {
-            Log.e(TAG, "Stats error", e)
-            "{}"
-        }
-    }
-
-    fun getVersion(): String = try {
-        // Best-effort: package may expose version via Libv2ray if present
-        "libv2ray"
-    } catch (_: Throwable) {
-        "N/A"
+    fun buildClientConfig(serverConfig: ParsedConfig, socksPort: Int): String {
+        val outbound = JSONObject(serverConfig.toXrayOutbound().toString())
+        return JSONObject().apply {
+            put("log", JSONObject().put("loglevel", "warning"))
+            put("inbounds", JSONArray().put(JSONObject().apply {
+                put("tag", "socks-in")
+                put("port", socksPort)
+                put("listen", "127.0.0.1")
+                put("protocol", "socks")
+                put("settings", JSONObject().apply {
+                    put("auth", "noauth")
+                    put("udp", true)
+                })
+                put("sniffing", JSONObject().apply {
+                    put("enabled", true)
+                    put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                })
+            }))
+            put("outbounds", JSONArray().put(outbound))
+            put("routing", JSONObject().apply {
+                put("domainStrategy", "IPIfNonMatch")
+                put("rules", JSONArray())
+            })
+        }.toString()
     }
 
     fun isRunning(): Boolean = running
@@ -155,5 +140,11 @@ class XrayCore @Inject constructor(
         true
     } catch (_: ClassNotFoundException) {
         false
+    }
+
+    fun getVersion(): String = try {
+        Libv2ray.checkVersionX() ?: "libv2ray"
+    } catch (_: Throwable) {
+        "libv2ray"
     }
 }
