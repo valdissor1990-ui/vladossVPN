@@ -42,7 +42,7 @@ class SubscriptionRepository @Inject constructor(
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
         const val MIRROR_URL_GITHUB =
-            "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN-mirror/main/list_universal.txt"
+            "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN/mirror-data/list_universal.txt"
         val FALLBACK_CHAIN = listOf(PRIMARY_URL, MIRROR_URL_GITHUB)
         const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
         const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
