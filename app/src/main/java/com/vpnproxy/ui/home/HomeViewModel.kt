@@ -285,11 +285,7 @@ class HomeViewModel @Inject constructor(
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
         }
-        try {
-            context.startService(intent)
-        } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to send STOP", e)
-        }
+        safeStartService(intent)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             sessionStartedAt = null
@@ -305,10 +301,7 @@ class HomeViewModel @Inject constructor(
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
         }
-        try {
-            context.startService(intent)
-        } catch (_: Exception) {
-        }
+        safeStartService(intent)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false,
@@ -360,10 +353,9 @@ class HomeViewModel @Inject constructor(
                 val intent = Intent(context, VpnProxyService::class.java).apply {
                     this.action = action
                 }
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+                if (!safeStartService(intent)) {
+                    _uiState.value = _uiState.value.copy(isBusy = false)
+                    return@launch
                 }
 
                 delay(300)
@@ -391,7 +383,7 @@ class HomeViewModel @Inject constructor(
                     val stopIntent = Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
                     }
-                    try { context.startService(stopIntent) } catch (_: Exception) {}
+                    safeStartService(stopIntent)
                     return@launch
                 }
 
@@ -423,7 +415,7 @@ class HomeViewModel @Inject constructor(
                     val stopIntent = Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
                     }
-                    try { context.startService(stopIntent) } catch (_: Exception) {}
+                    safeStartService(stopIntent)
                     return@launch
                 }
 
@@ -461,15 +453,81 @@ class HomeViewModel @Inject constructor(
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_START
         }
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+        if (safeStartService(intent)) {
             logCollector.info(TAG, "VPN service start requested")
-        } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to start VPN service", e)
+        } else {
+            _uiState.value = _uiState.value.copy(isBusy = false)
+        }
+    }
+
+    private fun safeStartService(intent: Intent): Boolean {
+        return try {
+            if (intent.action == VpnProxyService.ACTION_STOP ||
+                android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O
+            ) {
+                context.startService(intent)
+            } else {
+                context.startForegroundService(intent)
+            }
+            true
+        } catch (t: Throwable) {
+            logCollector.error(
+                TAG,
+                "Failed to start service: ${t.javaClass.simpleName}",
+                t
+            )
+            false
+        }
+    }
+
+    fun connectTo(server: ScoringEngine.ScoredServer) {
+        viewModelScope.launch {
+            try {
+                logCollector.info(TAG, "Connect to: ${server.config.name}")
+                autoSwitcher.forceSelect(server)
+                fallbackAttempts = 0
+                attemptedServerKeys.clear()
+                attemptedServerKeys.add(serverKey(server.config.address, server.config.port))
+                VpnProxyService.clearError()
+                connectTimeoutJob?.cancel()
+                _uiState.value = _uiState.value.copy(
+                    connectionState = ConnectionUiState.CONNECTING,
+                    currentServerName = server.config.name,
+                    currentRtt = server.latencyMs,
+                    isBusy = true
+                )
+                connectTimeoutJob = viewModelScope.launch {
+                    delay(connectTimeoutMs)
+                    if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
+                        logCollector.warn(TAG, "Connect-to timeout ${connectTimeoutMs}ms — forcing reset")
+                        forceDisconnect()
+                    }
+                }
+                val action = if (VpnProxyService.isRunning.value) {
+                    VpnProxyService.ACTION_RECONNECT
+                } else {
+                    VpnProxyService.ACTION_START
+                }
+                val intent = Intent(context, VpnProxyService::class.java).apply {
+                    this.action = action
+                }
+                if (!safeStartService(intent)) {
+                    connectTimeoutJob?.cancel()
+                    connectTimeoutJob = null
+                    _uiState.value = _uiState.value.copy(
+                        connectionState = ConnectionUiState.ERROR,
+                        isBusy = false
+                    )
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                logCollector.error(TAG, "connectTo failed", t)
+                _uiState.value = _uiState.value.copy(
+                    connectionState = ConnectionUiState.ERROR,
+                    isBusy = false
+                )
+            }
         }
     }
 

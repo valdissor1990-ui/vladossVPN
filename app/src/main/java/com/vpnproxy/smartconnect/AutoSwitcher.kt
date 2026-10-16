@@ -113,6 +113,15 @@ class AutoSwitcher @Inject constructor(
         return best
     }
 
+    /** Force-select a specific server from the server picker. */
+    fun forceSelect(server: ScoredServer) {
+        _currentServer.value = server
+        baselineRtt = server.latencyMs
+        consecutiveErrors = 0
+        _switchEvents.value = "Переключено на ${server.config.name}"
+        logCollector.info(TAG, "Force select: ${server.config.name}")
+    }
+
     suspend fun switchToNext(): ScoredServer? {
         val ranked = _rankedServers.value
         val current = _currentServer.value
