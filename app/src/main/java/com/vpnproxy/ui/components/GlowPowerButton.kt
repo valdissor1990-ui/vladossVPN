@@ -24,15 +24,6 @@ import androidx.compose.ui.unit.dp
 import com.vpnproxy.ui.home.ConnectionUiState
 import com.vpnproxy.ui.theme.*
 
-/**
- * Светящееся кольцо-кнопка.
- *
- * Состояния:
- *   DISCONNECTED — разорванное кольцо (30°..330°), серое, слабый glow
- *   CONNECTING   — цельное кольцо, пульсация, синее
- *   CONNECTED    — цельное кольцо, яркий glow, зелёное, щит внутри
- *   ERROR        — кольцо красное, разорванное
- */
 @Composable
 fun GlowPowerButton(
     state: ConnectionUiState,
@@ -73,7 +64,13 @@ fun GlowPowerButton(
     Box(
         modifier = modifier
             .size(buttonSize)
-            .scale(pressedScale),
+            .scale(pressedScale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -116,15 +113,8 @@ fun GlowPowerButton(
         Surface(
             shape = CircleShape,
             color = CosmosSurface,
-            modifier = Modifier
-                .size(180.dp)
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    enabled = enabled,
-                    onClick = onClick
-                ),
-            shadowElevation = if (state == ConnectionUiState.CONNECTED) 24.dp else 8.dp,
+            modifier = Modifier.size(180.dp),
+            shadowElevation = if (state == ConnectionUiState.CONNECTED || state == ConnectionUiState.UNSTABLE) 24.dp else 8.dp,
             tonalElevation = 0.dp
         ) {
             Box(contentAlignment = Alignment.Center) {
