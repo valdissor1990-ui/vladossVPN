@@ -23,9 +23,18 @@ val OnDark = Color(0xFFE6EEFA)
 val OnDarkSecondary = Color(0xFF94A7C9)
 val OnDarkMuted = Color(0xFF5E7191)
 
-// Legacy aliases (StatusBar / HomeScreen до полной замены)
+// Legacy aliases (старые экраны / StatusBar)
 @Deprecated("Use DisconnectRed")
 val DisconnectedRed = DisconnectRed
+
+@Deprecated("Use GlowBlue")
+val Primary = GlowBlue
+val OnPrimary = Color.White
+
+@Deprecated("Use CosmosSurface")
+val SurfaceDark = CosmosSurface
+@Deprecated("Use OnDark")
+val SurfaceLight = Color(0xFFF5F5F5)
 
 // Status bar variants (legacy)
 val StatusConnected = Color(0xFF1B5E20)
