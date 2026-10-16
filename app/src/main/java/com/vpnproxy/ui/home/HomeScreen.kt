@@ -29,6 +29,7 @@ import com.vpnproxy.ui.theme.*
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
 import kotlin.random.Random
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +45,7 @@ fun HomeScreen(
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
     var showServers by remember { mutableStateOf(false) }
+    var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
@@ -165,6 +167,14 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(pendingSelection) {
+        pendingSelection?.let { server ->
+            delay(250)
+            viewModel.connectTo(server)
+            pendingSelection = null
+        }
+    }
+
     if (showServers) {
         ModalBottomSheet(
             onDismissRequest = { showServers = false },
@@ -173,9 +183,9 @@ fun HomeScreen(
             contentColor = OnDark
         ) {
             ServerListContent(
-                onServerSelected = {
+                onServerSelected = { server ->
+                    pendingSelection = server
                     showServers = false
-                    viewModel.switchServer()
                 }
             )
         }
