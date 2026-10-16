@@ -20,10 +20,6 @@ import com.vpnproxy.ui.theme.*
 import kotlinx.coroutines.delay
 import java.util.Locale
 
-/**
- * Статистика подключения: таймер, IP, пилюли RX/TX.
- * Заменяет старый StatusBar.kt.
- */
 @Composable
 fun ConnectionStatsCard(
     state: ConnectionUiState,
@@ -65,7 +61,9 @@ fun ConnectionStatsCard(
                 style = MaterialTheme.typography.titleMedium,
                 color = OnDark
             )
-            if (serverRtt in 1..9999 && state == ConnectionUiState.CONNECTED) {
+            if (serverRtt in 1..9999 &&
+                (state == ConnectionUiState.CONNECTED || state == ConnectionUiState.UNSTABLE)
+            ) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = "${serverRtt}ms",
@@ -110,6 +108,6 @@ private fun StatPill(arrow: String, value: String, color: Color) {
 
 private fun formatSpeed(mbps: Float): String = when {
     mbps < 0.001f -> "0 Kb/s"
-    mbps < 1f -> "${"%.0f".format(Locale.US, mbps * 1000)} Kb/s"
-    else -> "${"%.1f".format(Locale.US, mbps)} Mb/s"
+    mbps < 1f -> String.format(Locale.US, "%.0f Kb/s", mbps * 1000)
+    else -> String.format(Locale.US, "%.1f Mb/s", mbps)
 }
