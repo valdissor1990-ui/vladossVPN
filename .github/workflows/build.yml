@@ -45,6 +45,11 @@ jobs:
           chmod +x scripts/download_xray.sh
           ./scripts/download_xray.sh
 
+      - name: Verify pinned libv2ray API surface
+        run: |
+          unzip -p app/libs/libv2ray.aar classes.jar > /tmp/lv.jar
+          javap -classpath /tmp/lv.jar libv2ray.Libv2ray libv2ray.CoreController libv2ray.CoreCallbackHandler
+
       - name: Bootstrap Gradle Wrapper JAR
         run: |
           mkdir -p gradle/wrapper
