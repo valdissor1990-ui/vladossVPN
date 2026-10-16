@@ -415,7 +415,7 @@ class HomeViewModel @Inject constructor(
                     val stopIntent = Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
                     }
-                    try { context.startService(stopIntent) } catch (_: Exception) {}
+                    safeStartService(stopIntent)
                     return@launch
                 }
 
