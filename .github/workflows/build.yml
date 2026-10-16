@@ -45,6 +45,9 @@ jobs:
           chmod +x scripts/download_xray.sh
           ./scripts/download_xray.sh
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Build Direct Release APK
         run: ./gradlew assembleDirectRelease --stacktrace
 
