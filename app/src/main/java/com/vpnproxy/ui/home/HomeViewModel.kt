@@ -48,7 +48,8 @@ class HomeViewModel @Inject constructor(
         val currentRtt: Long = 0L,
         val currentServerName: String = "—",
         val serverCount: Int = 0,
-        val isBusy: Boolean = false
+        val isBusy: Boolean = false,
+        val sessionStartedAt: Long? = null
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -72,20 +73,28 @@ class HomeViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             VpnProxyService.isRunning.collect { running ->
+                val prev = _uiState.value.connectionState
                 if (running) {
                     fallbackAttempts = 0
                     attemptedServerKeys.clear()
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     VpnProxyService.clearError()
+                    val sessionStart = if (prev != ConnectionUiState.CONNECTED) {
+                        System.currentTimeMillis()
+                    } else {
+                        _uiState.value.sessionStartedAt
+                    }
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.CONNECTED,
-                        isBusy = false
+                        isBusy = false,
+                        sessionStartedAt = sessionStart
                     )
                 } else if (_uiState.value.connectionState != ConnectionUiState.CONNECTING) {
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.DISCONNECTED,
-                        isBusy = false
+                        isBusy = false,
+                        sessionStartedAt = null
                     )
                 }
             }
@@ -96,7 +105,6 @@ class HomeViewModel @Inject constructor(
             VpnProxyService.lastError.collect { err ->
                 if (err == null) return@collect
                 logCollector.warn(TAG, "Service error: $err")
-                // Сбрасываем событие до следующего старта, чтобы StateFlow не повторил его.
                 VpnProxyService.clearError()
                 connectTimeoutJob?.cancel()
                 connectTimeoutJob = null
@@ -184,7 +192,6 @@ class HomeViewModel @Inject constructor(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
-        // Запускаем таймер: если через 20с не CONNECTED — принудительный сброс
         connectTimeoutJob?.cancel()
         connectTimeoutJob = viewModelScope.launch {
             delay(connectTimeoutMs)
@@ -247,8 +254,6 @@ class HomeViewModel @Inject constructor(
 
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
                 startVpnService()
-                // Таймер отменит только подтверждённый isRunning=true или ошибка/fallback.
-                // Не считаем запуск Intent успешным подключением.
             } catch (e: Exception) {
                 logCollector.error(TAG, "Connect failed", e)
                 connectTimeoutJob?.cancel()
@@ -285,10 +290,12 @@ class HomeViewModel @Inject constructor(
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to send STOP", e)
         }
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED)
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            sessionStartedAt = null
+        )
     }
 
-    /** Принудительный сброс: остановка сервиса + сброс UI-состояния. */
     fun forceDisconnect() {
         fallbackAttempts = 0
         attemptedServerKeys.clear()
@@ -306,7 +313,8 @@ class HomeViewModel @Inject constructor(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false,
             currentServerName = "—",
-            currentRtt = 0L
+            currentRtt = 0L,
+            sessionStartedAt = null
         )
         logCollector.info(TAG, "Force disconnect")
     }
@@ -316,7 +324,6 @@ class HomeViewModel @Inject constructor(
             try {
                 logCollector.info(TAG, "Switch server requested")
 
-                // 1. Проверяем, что есть из чего выбирать
                 val ranked = autoSwitcher.rankedServers.value
                 val configs = subscriptionRepository.getAllConfigs()
                 if (ranked.isEmpty() && configs.isEmpty()) {
@@ -328,7 +335,6 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // 2. Если рейтинг пуст — прогоняем селекцию, чтобы он заполнился
                 if (ranked.isEmpty()) {
                     logCollector.info(TAG, "Switch: ranking not ready, running selectBest")
                     autoSwitcher.selectBest(configs)
@@ -336,7 +342,6 @@ class HomeViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(isBusy = true)
 
-                // 3. Берём следующий сервер
                 val next = autoSwitcher.switchToNext()
                 if (next == null) {
                     logCollector.warn(TAG, "Switch: switchToNext returned null")
@@ -344,13 +349,11 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // 4. Обновляем UI немедленно
                 _uiState.value = _uiState.value.copy(
                     currentServerName = next.config.name,
                     currentRtt = next.latencyMs
                 )
 
-                // 5. Если сервис запущен — перезапускаем; иначе просто стартуем
                 val running = VpnProxyService.isRunning.value
                 val action = if (running) VpnProxyService.ACTION_RECONNECT
                              else VpnProxyService.ACTION_START
@@ -363,7 +366,6 @@ class HomeViewModel @Inject constructor(
                     context.startService(intent)
                 }
 
-                // 6. Небольшая пауза, чтобы UI успел отобразить состояние
                 delay(300)
                 _uiState.value = _uiState.value.copy(isBusy = false)
             } catch (c: CancellationException) {
@@ -375,10 +377,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Немедленно пробует следующий ещё не проверенный сервер после отказа startLoop.
-     * Таймаут остаётся на каждую новую попытку, но не задерживает известную ошибку.
-     */
     private fun tryNextServer() {
         viewModelScope.launch {
             try {
@@ -402,7 +400,7 @@ class HomeViewModel @Inject constructor(
                     if (configs.isNotEmpty()) autoSwitcher.selectBest(configs)
                 }
 
-                var next: com.vpnproxy.smartconnect.ScoringEngine.ScoredServer? = null
+                var next: ScoringEngine.ScoredServer? = null
                 val rankedCount = autoSwitcher.rankedServers.value.size
                 for (i in 0 until rankedCount) {
                     val candidate = autoSwitcher.switchToNext() ?: break
