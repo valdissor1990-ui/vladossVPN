@@ -94,6 +94,16 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "Starting VPN orchestrator…")
                 startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
 
+                // Watchdog: если через 15с после старта — не running, принудительно stop
+                scope.launch {
+                    delay(15_000)
+                    if (!_isRunning.value) {
+                        logCollector.warn(TAG, "Watchdog: VPN not running after 15s — stopping")
+                        stopVpnInternal()
+                        stopSelf()
+                    }
+                }
+
                 // 1. TUN
                 val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {

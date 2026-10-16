@@ -2,6 +2,7 @@ package com.vpnproxy.ui.home
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.ping.PingService
@@ -56,6 +57,8 @@ class HomeViewModel @Inject constructor(
     val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
 
     private var pingJob: Job? = null
+    private var connectTimeoutJob: Job? = null
+    private val connectTimeoutMs = 20_000L
 
     private var vpnPermissionRequester: (() -> Unit)? = null
 
@@ -140,6 +143,15 @@ class HomeViewModel @Inject constructor(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
+        // Запускаем таймер: если через 20с не CONNECTED — принудительный сброс
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = viewModelScope.launch {
+            delay(connectTimeoutMs)
+            if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
+                logCollector.warn(TAG, "Connect timeout ${connectTimeoutMs}ms — forcing reset")
+                forceDisconnect()
+            }
+        }
         vpnPermissionRequester?.invoke()
     }
 
@@ -148,13 +160,29 @@ class HomeViewModel @Inject constructor(
             try {
                 _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING)
 
-                val configs = subscriptionRepository.getAllConfigs().ifEmpty {
-                    subscriptionRepository.refreshAll()
-                    subscriptionRepository.getAllConfigs()
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val hasNetwork = cm.activeNetwork != null
+
+                var configs = subscriptionRepository.getAllConfigs()
+                if (configs.isEmpty() && hasNetwork) {
+                    configs = try {
+                        subscriptionRepository.refreshAll()
+                        subscriptionRepository.getAllConfigs()
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                }
+                if (configs.isEmpty() && !hasNetwork) {
+                    logCollector.warn(TAG, "No network — attempting cached configs")
+                    configs = subscriptionRepository.getCachedConfigs()
                 }
 
                 if (configs.isEmpty()) {
                     logCollector.warn(TAG, "No servers available for connection")
+                    connectTimeoutJob?.cancel()
+                    connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
                         isBusy = false
@@ -167,6 +195,8 @@ class HomeViewModel @Inject constructor(
                 val best = autoSwitcher.selectBest(configs)
                 if (best == null) {
                     logCollector.warn(TAG, "No server passed health check")
+                    connectTimeoutJob?.cancel()
+                    connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
                         isBusy = false
@@ -176,9 +206,14 @@ class HomeViewModel @Inject constructor(
 
                 startVpnService()
                 delay(500)
+                // Успех — отменяем таймер
+                connectTimeoutJob?.cancel()
+                connectTimeoutJob = null
                 _uiState.value = _uiState.value.copy(isBusy = false)
             } catch (e: Exception) {
                 logCollector.error(TAG, "Connect failed", e)
+                connectTimeoutJob?.cancel()
+                connectTimeoutJob = null
                 _uiState.value = _uiState.value.copy(
                     connectionState = ConnectionUiState.ERROR,
                     isBusy = false
@@ -188,6 +223,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionDenied() {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false
@@ -196,6 +233,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
         }
@@ -205,6 +244,26 @@ class HomeViewModel @Inject constructor(
             logCollector.error(TAG, "Failed to send STOP", e)
         }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED)
+    }
+
+    /** Принудительный сброс: остановка сервиса + сброс UI-состояния. */
+    fun forceDisconnect() {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
+        val intent = Intent(context, VpnProxyService::class.java).apply {
+            action = VpnProxyService.ACTION_STOP
+        }
+        try {
+            context.startService(intent)
+        } catch (_: Exception) {
+        }
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
+            currentServerName = "—",
+            currentRtt = 0L
+        )
+        logCollector.info(TAG, "Force disconnect")
     }
 
     fun switchServer() {
@@ -246,6 +305,7 @@ class HomeViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         pingJob?.cancel()
+        connectTimeoutJob?.cancel()
         logCollector.debug(TAG, "HomeViewModel cleared")
     }
 }
