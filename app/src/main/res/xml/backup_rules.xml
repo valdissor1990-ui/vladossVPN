@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 и ниже: правила автобэкапа -->
-<full-backup-content>
-    <!-- Исключаем чувствительные данные из бэкапа -->
-    <exclude domain="sharedpref" path="vpnproxy_subscriptions.xml" />
-    <exclude domain="file" path="logs/" />
-    <exclude domain="file" path="hev_config.yaml" />
-</full-backup-content>
