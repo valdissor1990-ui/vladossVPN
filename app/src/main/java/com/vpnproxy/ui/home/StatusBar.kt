@@ -33,6 +33,7 @@ import com.vpnproxy.ui.theme.StatusDisconnected
 import com.vpnproxy.ui.theme.StatusWarning
 import java.util.Locale
 
+@Deprecated("Replaced by ConnectionStatsCard. Do not use in new code.")
 @Composable
 fun StatusBar(
     state: ConnectionUiState,
@@ -127,7 +128,6 @@ fun StatusBar(
     }
 }
 
-/** Форматирование скорости: Кбит/с или Мбит/с. */
 private fun formatSpeed(mbps: Float): String {
     return when {
         mbps < 0.001f -> "0 Кбит/с"
@@ -136,7 +136,6 @@ private fun formatSpeed(mbps: Float): String {
     }
 }
 
-/** Форматирование байтов. */
 private fun formatBytes(bytes: Long): String {
     val loc = Locale.US
     return when {
