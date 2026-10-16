@@ -44,6 +44,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.ServerMetrics
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -99,6 +100,13 @@ fun ServerListContent(
         }
     }
 
+    // Duplicate subscription entries must not produce duplicate LazyColumn keys.
+    val uniqueItems = remember(filtered) {
+        filtered.distinctBy {
+            "${it.config.address}|${it.config.port}|${it.config.uuid}"
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -144,8 +152,10 @@ fun ServerListContent(
                 modifier = Modifier.heightIn(max = 420.dp)
             ) {
                 items(
-                    items = filtered,
-                    key = { it.config.address + it.config.port + it.config.uuid }
+                    items = uniqueItems,
+                    key = {
+                        ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
+                    }
                 ) { scoredServer ->
                     val s = scoredServer.config
                     Card(

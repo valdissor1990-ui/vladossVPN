@@ -179,7 +179,9 @@ class SubscriptionRepository @Inject constructor(
             if (allConfigsList.isNotEmpty()) {
                 saveConfigsToCache(allConfigsList)
             }
-            _allConfigs.value = allConfigsList
+            _allConfigs.value = allConfigsList.distinctBy {
+                "${it.address}|${it.port}|${it.uuid}"
+            }
             saveToPrefs()
             logCollector.info(TAG, "Total configs loaded: $totalConfigs (cached fallback applied)")
             totalConfigs
@@ -228,7 +230,9 @@ class SubscriptionRepository @Inject constructor(
         } catch (_: Exception) { /* ignore */ }
     }
 
-    fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
+    fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value.distinctBy {
+        "${it.address}|${it.port}|${it.uuid}"
+    }
 
     fun getCachedConfigs(): List<ParsedConfig> =
         loadConfigsFromCache().map { it.toParsedConfig() }
