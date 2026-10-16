@@ -41,10 +41,11 @@ class SubscriptionParser @Inject constructor(
     ) {
         /** Валидация обязательных полей. */
         fun isValid(): Boolean {
-            if (uuid.isBlank() || address.isBlank() || port !in 1..65535) return false
-            if (transport == "xhttp" && mode == null) return false
-            if (transport == "xhttp" && flow == "xtls-rprx-vision") return false // критическая ошибка!
-            if (security == "reality" && (publicKey.isNullOrBlank() || shortId.isNullOrBlank())) return false
+            if (uuid.isBlank() || address.isBlank()) return false
+            if (port !in 1..65535) return false
+            // Reality: pbk обязателен, shortId может быть пустым "" (валидный кейс).
+            if (security == "reality" && publicKey.isNullOrBlank()) return false
+            // Остальные проверки выполняются на этапе парсинга (mode, flow, дефолты).
             return true
         }
 
@@ -161,16 +162,33 @@ class SubscriptionParser @Inject constructor(
                 parsed.getQueryParameter(it) ?: ""
             }
 
-            val transport = params["type"] ?: params["transport"] ?: "tcp"
-            val security = params["security"] ?: "none"
+            // Порядок критичен: transport → lowercase → mode/flow с учётом transport.
+            val transport = (params["type"] ?: params["transport"] ?: "tcp").lowercase()
+            val security = (params["security"] ?: "none").lowercase()
             val sni = params["sni"] ?: params["serverName"]
             val path = params["path"]
             val host = params["host"]
-            val mode = params["mode"]
             val fingerprint = params["fp"] ?: params["fingerprint"]
             val publicKey = params["pbk"] ?: params["publicKey"]
-            val shortId = params["sid"] ?: params["shortId"]
-            val flow = params["flow"]
+            val rawShortId = params["sid"] ?: params["shortId"]
+            val shortId = rawShortId ?: "" // Reality: пустой sid допустим.
+            val rawFlow = params["flow"]
+            val rawMode = params["mode"]
+
+            // XHTTP: дефолт stream-one; auto принудительно заменяем.
+            val mode: String? = when (transport) {
+                "xhttp" -> when (rawMode?.lowercase()) {
+                    null, "" , "auto" -> "stream-one"
+                    else -> rawMode
+                }
+                else -> rawMode
+            }
+
+            // Vision несовместим с XHTTP; flow на этом транспорте всегда пустой.
+            val flow: String? = when (transport) {
+                "xhttp" -> ""
+                else -> rawFlow
+            }
             val name = Uri.decode(parsed.fragment ?: "$address:$port")
 
             val config = ParsedConfig(
@@ -187,22 +205,18 @@ class SubscriptionParser @Inject constructor(
                     if (config.uuid.isBlank()) add("uuid empty")
                     if (config.address.isBlank()) add("address empty")
                     if (config.port !in 1..65535) add("port invalid=${config.port}")
-                    if (config.transport == "xhttp" && config.mode == null) add("xhttp mode null")
-                    if (config.transport == "xhttp" && config.flow == "xtls-rprx-vision")
-                        add("xhttp with vision flow")
-                    if (config.security == "reality" &&
-                        (config.publicKey.isNullOrBlank() || config.shortId.isNullOrBlank()))
-                        add("reality missing pbk/sid")
+                    if (config.security == "reality" && config.publicKey.isNullOrBlank())
+                        add("reality missing pbk")
                 }
                 logCollector.warn(TAG, "Invalid config skipped", mapOf(
                     "name" to name,
                     "reasons" to reasons.joinToString(","),
                     "transport" to config.transport,
                     "security" to config.security,
-                    "flow" to (config.flow ?: "null"),
-                    "mode" to (config.mode ?: "null"),
-                    "has_pbk" to (!config.publicKey.isNullOrBlank()),
-                    "has_sid" to (!config.shortId.isNullOrBlank())
+                    "flow" to (config.flow ?: "-"),
+                    "mode" to (config.mode ?: "-"),
+                    "pbk_len" to (config.publicKey?.length ?: 0),
+                    "sid_len" to (config.shortId?.length ?: 0)
                 ))
                 return null
             }
