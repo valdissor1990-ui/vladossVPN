@@ -26,13 +26,9 @@ import androidx.compose.ui.unit.dp
 /**
  * ★ Круглая кнопка питания с вращающимся градиентным кольцом.
  *
- * Дизайн (по референсу):
- *   - Белый круг с мягкой тенью
- *   - Иконка PowerSettingsNew в центре (без текста)
- *   - Тонкое вращающееся градиентное кольцо
- *   - Красное свечение когда VPN выключен
- *   - Зелёное свечение когда VPN включён
+ * @deprecated Replaced by GlowPowerButton. Do not use in new code.
  */
+@Deprecated("Replaced by GlowPowerButton. Do not use in new code.")
 @Composable
 fun NeonConnectButton(
     isConnected: Boolean,
