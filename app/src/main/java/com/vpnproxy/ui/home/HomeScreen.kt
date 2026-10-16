@@ -48,7 +48,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -236,29 +235,20 @@ fun HomeScreen(
                     OutlinedButton(
                         onClick = { viewModel.switchServer() },
                         modifier = Modifier
-                            .width(160.dp)
-                            .height(40.dp),
-                        shape = RoundedCornerShape(4.dp),
-                        enabled = !uiState.isBusy &&
-                            (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                uiState.connectionState == ConnectionUiState.UNSTABLE),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(
-                            brush = SolidColor(
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                            )
-                        )
+                            .width(180.dp)
+                            .height(44.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        enabled = !uiState.isBusy && uiState.serverCount > 1
                     ) {
                         Icon(
                             Icons.Default.SwapHoriz,
                             contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            "ДРУГОЙ СЕРВЕР",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            letterSpacing = 1.sp
+                            "Сменить сервер",
+                            fontSize = 13.sp
                         )
                     }
                 }

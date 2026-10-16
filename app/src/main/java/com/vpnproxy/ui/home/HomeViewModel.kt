@@ -268,21 +268,65 @@ class HomeViewModel @Inject constructor(
 
     fun switchServer() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                connectionState = ConnectionUiState.CONNECTING,
-                isBusy = true
-            )
-            val next = autoSwitcher.switchToNext()
-            if (next == null) {
-                logCollector.warn(TAG, "No next server to switch")
-            } else {
-                val intent = Intent(context, VpnProxyService::class.java).apply {
-                    action = VpnProxyService.ACTION_RECONNECT
+            try {
+                logCollector.info(TAG, "Switch server requested")
+
+                // 1. Проверяем, что есть из чего выбирать
+                val ranked = autoSwitcher.rankedServers.value
+                val configs = subscriptionRepository.getAllConfigs()
+                if (ranked.isEmpty() && configs.isEmpty()) {
+                    logCollector.warn(TAG, "Switch: no servers available")
+                    _uiState.value = _uiState.value.copy(
+                        connectionState = ConnectionUiState.ERROR,
+                        isBusy = false
+                    )
+                    return@launch
                 }
-                context.startService(intent)
+
+                // 2. Если рейтинг пуст — прогоняем селекцию, чтобы он заполнился
+                if (ranked.isEmpty()) {
+                    logCollector.info(TAG, "Switch: ranking not ready, running selectBest")
+                    autoSwitcher.selectBest(configs)
+                }
+
+                _uiState.value = _uiState.value.copy(isBusy = true)
+
+                // 3. Берём следующий сервер
+                val next = autoSwitcher.switchToNext()
+                if (next == null) {
+                    logCollector.warn(TAG, "Switch: switchToNext returned null")
+                    _uiState.value = _uiState.value.copy(isBusy = false)
+                    return@launch
+                }
+
+                // 4. Обновляем UI немедленно
+                _uiState.value = _uiState.value.copy(
+                    currentServerName = next.config.name,
+                    currentRtt = next.latencyMs
+                )
+
+                // 5. Если сервис запущен — перезапускаем; иначе просто стартуем
+                val running = VpnProxyService.isRunning.value
+                val action = if (running) VpnProxyService.ACTION_RECONNECT
+                             else VpnProxyService.ACTION_START
+                val intent = Intent(context, VpnProxyService::class.java).apply {
+                    this.action = action
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+
+                // 6. Небольшая пауза, чтобы UI успел отобразить состояние
+                delay(300)
+                _uiState.value = _uiState.value.copy(isBusy = false)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Switch failed", e)
+                _uiState.value = _uiState.value.copy(isBusy = false)
             }
-            delay(500)
-            _uiState.value = _uiState.value.copy(isBusy = false)
         }
     }
 
