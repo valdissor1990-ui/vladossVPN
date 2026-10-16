@@ -116,12 +116,12 @@ class XrayCore @Inject constructor(
     private fun maskConfigForLog(json: String): String {
         var masked = json
         val replacements = listOf(
-            Regex("\\\"id\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"id\\\":\\\"***UUID***\\\"",
-            Regex("\\\"publicKey\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"publicKey\\\":\\\"***PBK***\\\"",
-            Regex("\\\"shortId\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"shortId\\\":\\\"***SID***\\\"",
-            Regex("\\\"address\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"address\\\":\\\"***HOST***\\\"",
-            Regex("\\\"password\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"password\\\":\\\"***MASKED***\\\"",
-            Regex("\\\"token\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"token\\\":\\\"***MASKED***\\\""
+            Regex("\"id\"\\s*:\\s*\"[^\"]+\"") to "\"id\":\"***UUID***\"",
+            Regex("\"publicKey\"\\s*:\\s*\"[^\"]+\"") to "\"publicKey\":\"***PBK***\"",
+            Regex("\"shortId\"\\s*:\\s*\"[^\"]*\"") to "\"shortId\":\"***SID***\"",
+            Regex("\"address\"\\s*:\\s*\"[^\"]+\"") to "\"address\":\"***HOST***\"",
+            Regex("\"password\"\\s*:\\s*\"[^\"]*\"") to "\"password\":\"***MASKED***\"",
+            Regex("\"token\"\\s*:\\s*\"[^\"]*\"") to "\"token\":\"***MASKED***\""
         )
         for ((pattern, replacement) in replacements) {
             masked = pattern.replace(masked, replacement)
