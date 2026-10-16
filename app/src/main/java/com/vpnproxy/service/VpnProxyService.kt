@@ -53,6 +53,14 @@ class VpnProxyService : VpnService() {
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
+
+        /** Причина последней ошибки старта; очищается после обработки UI. */
+        private val _lastError = MutableStateFlow<String?>(null)
+        val lastError: StateFlow<String?> = _lastError
+
+        fun clearError() {
+            _lastError.value = null
+        }
     }
 
     @Inject lateinit var tunnelManager: TunnelManager
@@ -119,6 +127,8 @@ class VpnProxyService : VpnService() {
                 "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
             return
         }
+        // Ошибка предыдущей попытки должна быть обработана HomeViewModel до нового старта.
+        _lastError.value = null
         startInProgress = true
 
         // Defensive: если старая Job почему-то ещё жива — отменяем
@@ -168,9 +178,15 @@ class VpnProxyService : VpnService() {
                 val xrayJson = xrayCore.buildClientConfig(parsed, TunnelManager.SOCKS_PORT)
                 val xrayOk = xrayCore.start(xrayJson, tunFd = 0)
                 if (!xrayOk) {
-                    logCollector.error(TAG, "Xray startLoop failed")
+                    val reason = "startLoop failed for ${parsed.name} (${parsed.transport}/${parsed.security})"
+                    logCollector.error(TAG, reason)
+                    // Открываем возможность следующей ACTION_START до уведомления UI.
+                    startInProgress = false
+                    xrayCore.stop()
                     tunnelManager.tearDown()
-                    stopSelf()
+                    updateNotification("Connection failed; trying next server…")
+                    _lastError.value = reason
+                    // Сервис остаётся доступным для немедленного fallback от HomeViewModel.
                     return@launch
                 }
                 logCollector.info(TAG, "Xray startLoop OK, SOCKS 127.0.0.1:${TunnelManager.SOCKS_PORT}")

@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
+import com.vpnproxy.logging.LogCollectorHolder
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
@@ -37,6 +38,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
             Timber.plant(Timber.DebugTree())
         }
         Timber.plant(LogCollectorTree(logCollector))
+        LogCollectorHolder.install(logCollector)
         logCollector.info("VpnProxyApp", "Application started, version=${BuildConfig.VERSION_NAME}")
 
         // Периодические задачи
