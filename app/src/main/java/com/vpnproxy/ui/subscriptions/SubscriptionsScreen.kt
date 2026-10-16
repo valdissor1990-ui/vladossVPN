@@ -15,6 +15,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.subscription.SubscriptionRepository
+import com.vpnproxy.ui.theme.OnDark
+import com.vpnproxy.ui.theme.WarningYellow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,7 +29,9 @@ fun SubscriptionsScreen(
     val configs by viewModel.allConfigs.collectAsStateWithLifecycle()
     val refreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
+    val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
 
+    var dismissCacheBanner by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -36,6 +40,10 @@ fun SubscriptionsScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.clearMessage()
         }
+    }
+
+    LaunchedEffect(usingCache) {
+        if (!usingCache) dismissCacheBanner = false
     }
 
     Scaffold(
@@ -75,6 +83,30 @@ fun SubscriptionsScreen(
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (usingCache && !dismissCacheBanner) {
+                item(key = "cache-warning") {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        color = WarningYellow.copy(alpha = 0.14f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.size})",
+                                color = WarningYellow,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            TextButton(onClick = { dismissCacheBanner = true }) {
+                                Text("Скрыть", color = OnDark)
+                            }
+                        }
+                    }
+                }
+            }
             if (subs.isEmpty()) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {

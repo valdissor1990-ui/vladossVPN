@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +23,15 @@ class SubscriptionsViewModel @Inject constructor(
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private val _usingCache = MutableStateFlow(false)
+    val usingCache: StateFlow<Boolean> = _usingCache.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.lastRefreshUsedCache.collect { _usingCache.value = it }
+        }
+    }
 
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
@@ -54,6 +64,8 @@ class SubscriptionsViewModel @Inject constructor(
                 val count = repository.refreshAll()
                 _message.value = "Загружено серверов: $count"
                 logCollector.info("SubscriptionsVM", "Refreshed: $count")
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 _message.value = "Ошибка: ${e.message}"
                 logCollector.error("SubscriptionsVM", "Refresh failed", e)

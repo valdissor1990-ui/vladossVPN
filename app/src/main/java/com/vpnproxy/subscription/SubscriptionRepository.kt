@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -39,6 +40,10 @@ class SubscriptionRepository @Inject constructor(
 
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
+        const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
+        const val MIRROR_URL_GITHUB =
+            "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN/mirror-data/list_universal.txt"
+        val FALLBACK_CHAIN = listOf(PRIMARY_URL, MIRROR_URL_GITHUB)
         const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
         const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
     }
@@ -70,8 +75,8 @@ class SubscriptionRepository @Inject constructor(
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
     private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
@@ -79,6 +84,9 @@ class SubscriptionRepository @Inject constructor(
 
     private val _allConfigs = MutableStateFlow<List<ParsedConfig>>(emptyList())
     val allConfigs: StateFlow<List<ParsedConfig>> = _allConfigs.asStateFlow()
+
+    private val _lastRefreshUsedCache = MutableStateFlow(false)
+    val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
     private val refreshMutex = Mutex()
 
@@ -147,6 +155,7 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun refreshAll(): Int = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
+            _lastRefreshUsedCache.value = false
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
@@ -169,6 +178,7 @@ class SubscriptionRepository @Inject constructor(
                     // Оффлайн-режим: подгружаем кэш для этой подписки
                     val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
                     if (cached.isNotEmpty()) {
+                        if (sub.url == PRIMARY_URL) _lastRefreshUsedCache.value = true
                         logCollector.info(TAG, "Using cached configs for ${sub.name}: ${cached.size}")
                         allConfigsList.addAll(cached.map { it.toParsedConfig() })
                         totalConfigs += cached.size
@@ -188,26 +198,47 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
+    suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(sub.url)
-                .header("User-Agent", "VPNProxy/1.0")
-                .build()
+            val sources = if (sub.url == PRIMARY_URL) FALLBACK_CHAIN else listOf(sub.url)
+            var lastFailure: Exception? = null
 
-            httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw Exception("HTTP ${response.code}")
+            for (sourceUrl in sources) {
+                try {
+                    val request = Request.Builder()
+                        .url(sourceUrl)
+                        .header("User-Agent", "VPNProxy/1.0")
+                        .build()
+
+                    httpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw IOException("HTTP ${response.code}")
+                        }
+                        response.header("subscription-userinfo")?.let { info ->
+                            parseUserInfo(info, sub.id)
+                        }
+                        val body = response.body?.string()
+                            ?: throw IOException("Empty response body")
+                        if (body.isBlank()) throw IOException("Empty response body")
+                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
+                        return@withContext body to sourceUrl
+                    }
+                } catch (c: kotlinx.coroutines.CancellationException) {
+                    throw c
+                } catch (e: Exception) {
+                    lastFailure = e
+                    logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
-
-                response.header("subscription-userinfo")?.let { info ->
-                    parseUserInfo(info, sub.id)
-                }
-
-                val body = response.body?.string() ?: return@withContext emptyList()
-                parser.parse(body, providerTag = sub.name)
             }
+
+            throw IOException("All sources failed", lastFailure)
         }
+
+    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
+        val (body, sourceUrl) = fetchWithFallback(sub)
+        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, size=${body.length}")
+        return parser.parse(body, providerTag = sub.name)
+    }
 
     private fun parseUserInfo(info: String, subId: String) {
         try {
