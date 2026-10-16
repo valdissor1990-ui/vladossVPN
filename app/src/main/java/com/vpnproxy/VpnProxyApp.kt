@@ -3,6 +3,7 @@ package com.vpnproxy
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.logging.LogCollectorHolder
@@ -15,6 +16,7 @@ import javax.inject.Inject
  * Application-класс.
  *
  * Обязанности:
+ * - CrashHandler (до всего остального)
  * - Инициализация Timber → LogCollector
  * - Настройка WorkManager через HiltWorkerFactory
  * - Планирование периодических задач (subscriptions)
@@ -33,6 +35,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // ★ CrashHandler — ДО всего остального, чтобы перехватить краши на раннем старте
+        CrashHandler.install(this)
 
         if (BuildConfig.LOG_DEBUG) {
             Timber.plant(Timber.DebugTree())
