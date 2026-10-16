@@ -44,6 +44,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.ServerMetrics
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -152,7 +153,9 @@ fun ServerListContent(
             ) {
                 items(
                     items = uniqueItems,
-                    key = { "${it.config.address}|${it.config.port}|${it.config.uuid}" }
+                    key = {
+                        ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
+                    }
                 ) { scoredServer ->
                     val s = scoredServer.config
                     Card(
