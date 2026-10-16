@@ -15,6 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
+import com.vpnproxy.update.UpdateManager
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,12 +85,45 @@ fun SettingsScreen(
                 }
                 Switch(checked = checkUpdates, onCheckedChange = { viewModel.setCheckUpdates(it) })
             }
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+
+            // Кнопка проверки + inline-индикатор статуса
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Проверить обновления сейчас", style = MaterialTheme.typography.bodyLarge)
-                    Text("Запросить GitHub Releases", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text(
+                        text = when (val s = updateState) {
+                            is UpdateManager.State.Checking -> "Загрузка с GitHub…"
+                            is UpdateManager.State.UpToDate -> "Обновлений нет"
+                            is UpdateManager.State.UpdateAvailable -> "Доступна версия ${s.release.extractVersionName()}"
+                            is UpdateManager.State.Downloading -> "Скачивание: ${s.percent}%"
+                            is UpdateManager.State.Ready -> "Готово к установке"
+                            is UpdateManager.State.Error -> "Не удалось: ${s.message.take(60)}"
+                            else -> "Нажмите для проверки"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when (updateState) {
+                            is UpdateManager.State.Error -> MaterialTheme.colorScheme.error
+                            is UpdateManager.State.UpToDate -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        }
+                    )
                 }
-                TextButton(onClick = { updateViewModel.check(force = true) }) { Text("Проверить") }
+                Spacer(Modifier.width(8.dp))
+                if (updateState is UpdateManager.State.Checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Button(onClick = { updateViewModel.check(force = true) }) {
+                        Text("Проверить")
+                    }
+                }
             }
 
             Text("О ПРИЛОЖЕНИИ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
@@ -122,6 +157,15 @@ fun SettingsScreen(
             },
             confirmButton = { TextButton(onClick = { showIntervalDialog = false }) { Text("Отмена") } }
         )
+    }
+
+    // Авто-скрытие "Обновлений нет" / "Ошибки" через 3 секунды
+    LaunchedEffect(updateState) {
+        if (updateState is UpdateManager.State.UpToDate ||
+            updateState is UpdateManager.State.Error) {
+            delay(3000)
+            updateViewModel.dismiss()
+        }
     }
 
     UpdateDialog(
