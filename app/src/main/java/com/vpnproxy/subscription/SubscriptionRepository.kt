@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -18,6 +20,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,6 +35,12 @@ class SubscriptionRepository @Inject constructor(
         private const val TAG = "SubRepo"
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
+        private const val CACHE_FILE = "cached_configs.json"
+
+        const val DEFAULT_SUBSCRIPTION_URL =
+            "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
+        const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
+        const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
     }
 
     @Serializable
@@ -48,6 +57,7 @@ class SubscriptionRepository @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val listSerializer = ListSerializer(ProviderSubscription.serializer())
+    private val configsSerializer = ListSerializer(CachedConfig.serializer())
 
     private val masterKey = MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -70,8 +80,11 @@ class SubscriptionRepository @Inject constructor(
     private val _allConfigs = MutableStateFlow<List<ParsedConfig>>(emptyList())
     val allConfigs: StateFlow<List<ParsedConfig>> = _allConfigs.asStateFlow()
 
+    private val refreshMutex = Mutex()
+
     init {
         loadFromPrefs()
+        ensureDefaultSubscription()
     }
 
     private fun loadFromPrefs() {
@@ -94,6 +107,21 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
+    private fun ensureDefaultSubscription() {
+        val hasDefault = _subscriptions.value.any { it.url == DEFAULT_SUBSCRIPTION_URL }
+        if (!hasDefault) {
+            val sub = ProviderSubscription(
+                id = DEFAULT_SUBSCRIPTION_ID,
+                url = DEFAULT_SUBSCRIPTION_URL,
+                name = DEFAULT_SUBSCRIPTION_NAME,
+                enabled = true
+            )
+            _subscriptions.value = _subscriptions.value + sub
+            saveToPrefs()
+            logCollector.info(TAG, "Default subscription added: $DEFAULT_SUBSCRIPTION_URL")
+        }
+    }
+
     suspend fun addSubscription(url: String, name: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val id = java.util.UUID.randomUUID().toString()
@@ -109,35 +137,53 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun removeSubscription(id: String) {
+        if (id == DEFAULT_SUBSCRIPTION_ID) {
+            logCollector.warn(TAG, "Cannot remove built-in subscription")
+            return
+        }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
         saveToPrefs()
     }
 
-    suspend fun refreshAll(): Int = withContext(Dispatchers.IO) {
-        val subs = _subscriptions.value.filter { it.enabled }
-        var totalConfigs = 0
-        val allConfigsList = mutableListOf<ParsedConfig>()
+    suspend fun refreshAll(): Int = refreshMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val subs = _subscriptions.value.filter { it.enabled }
+            var totalConfigs = 0
+            val allConfigsList = mutableListOf<ParsedConfig>()
 
-        for (sub in subs) {
-            try {
-                val configs = fetchAndParse(sub)
-                allConfigsList.addAll(configs)
-                totalConfigs += configs.size
+            for (sub in subs) {
+                try {
+                    val configs = fetchAndParse(sub)
+                    allConfigsList.addAll(configs)
+                    totalConfigs += configs.size
 
-                val updated = sub.copy(lastUpdated = System.currentTimeMillis())
-                _subscriptions.value = _subscriptions.value.map {
-                    if (it.id == sub.id) updated else it
+                    val updated = sub.copy(lastUpdated = System.currentTimeMillis())
+                    _subscriptions.value = _subscriptions.value.map {
+                        if (it.id == sub.id) updated else it
+                    }
+                    logCollector.info(TAG, "Refreshed ${sub.name}: ${configs.size} configs")
+                } catch (c: kotlinx.coroutines.CancellationException) {
+                    throw c
+                } catch (e: Exception) {
+                    logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
+                    // Оффлайн-режим: подгружаем кэш для этой подписки
+                    val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
+                    if (cached.isNotEmpty()) {
+                        logCollector.info(TAG, "Using cached configs for ${sub.name}: ${cached.size}")
+                        allConfigsList.addAll(cached.map { it.toParsedConfig() })
+                        totalConfigs += cached.size
+                    }
                 }
-                logCollector.info(TAG, "Refreshed ${sub.name}: ${configs.size} configs")
-            } catch (e: Exception) {
-                logCollector.error(TAG, "Failed to refresh ${sub.name}", e)
             }
-        }
 
-        _allConfigs.value = allConfigsList
-        saveToPrefs()
-        logCollector.info(TAG, "Total configs loaded: $totalConfigs")
-        totalConfigs
+            if (allConfigsList.isNotEmpty()) {
+                saveConfigsToCache(allConfigsList)
+            }
+            _allConfigs.value = allConfigsList
+            saveToPrefs()
+            logCollector.info(TAG, "Total configs loaded: $totalConfigs (cached fallback applied)")
+            totalConfigs
+        }
     }
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
@@ -183,4 +229,85 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
+
+    fun getCachedConfigs(): List<ParsedConfig> =
+        loadConfigsFromCache().map { it.toParsedConfig() }
+
+    @Serializable
+    private data class CachedConfig(
+        val uuid: String,
+        val address: String,
+        val port: Int,
+        val transport: String,
+        val security: String,
+        val sni: String? = null,
+        val path: String? = null,
+        val host: String? = null,
+        val mode: String? = null,
+        val fingerprint: String? = null,
+        val publicKey: String? = null,
+        val shortId: String? = null,
+        val flow: String? = null,
+        val name: String,
+        val providerTag: String = ""
+    ) {
+        fun toParsedConfig() = ParsedConfig(
+            uuid = uuid,
+            address = address,
+            port = port,
+            transport = transport,
+            security = security,
+            sni = sni,
+            path = path,
+            host = host,
+            mode = mode,
+            fingerprint = fingerprint,
+            publicKey = publicKey,
+            shortId = shortId,
+            flow = flow,
+            name = name,
+            providerTag = providerTag
+        )
+
+        companion object {
+            fun from(c: ParsedConfig) = CachedConfig(
+                uuid = c.uuid,
+                address = c.address,
+                port = c.port,
+                transport = c.transport,
+                security = c.security,
+                sni = c.sni,
+                path = c.path,
+                host = c.host,
+                mode = c.mode,
+                fingerprint = c.fingerprint,
+                publicKey = c.publicKey,
+                shortId = c.shortId,
+                flow = c.flow,
+                name = c.name,
+                providerTag = c.providerTag
+            )
+        }
+    }
+
+    private fun saveConfigsToCache(configs: List<ParsedConfig>) {
+        try {
+            val cached = configs.map { CachedConfig.from(it) }
+            val jsonStr = json.encodeToString(configsSerializer, cached)
+            File(context.filesDir, CACHE_FILE).writeText(jsonStr)
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Cache save failed", e)
+        }
+    }
+
+    private fun loadConfigsFromCache(): List<CachedConfig> {
+        return try {
+            val f = File(context.filesDir, CACHE_FILE)
+            if (!f.exists()) return emptyList()
+            json.decodeFromString(configsSerializer, f.readText())
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Cache load failed", e)
+            emptyList()
+        }
+    }
 }

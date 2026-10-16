@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,8 +46,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.ui.theme.ConnectedGreen
@@ -193,32 +198,67 @@ fun HomeScreen(
 
                     Spacer(Modifier.height(40.dp))
 
-                    NeonConnectButton(
-                        isConnected = uiState.connectionState == ConnectionUiState.CONNECTED ||
-                            uiState.connectionState == ConnectionUiState.UNSTABLE,
-                        enabled = !uiState.isBusy,
-                        onClick = { viewModel.toggleConnection() }
-                    )
+                    if (uiState.connectionState == ConnectionUiState.CONNECTING) {
+                        OutlinedButton(
+                            onClick = { viewModel.forceDisconnect() },
+                            modifier = Modifier
+                                .width(220.dp)
+                                .height(80.dp),
+                            shape = RoundedCornerShape(4.dp),
+                            border = ButtonDefaults.outlinedButtonBorder.copy(
+                                brush = SolidColor(Color(0xFFFF3B30))
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = null,
+                                tint = Color(0xFFFF3B30)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "ОТМЕНИТЬ",
+                                color = Color(0xFFFF3B30),
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    } else {
+                        NeonConnectButton(
+                            isConnected = uiState.connectionState == ConnectionUiState.CONNECTED ||
+                                uiState.connectionState == ConnectionUiState.UNSTABLE,
+                            enabled = !uiState.isBusy,
+                            onClick = { viewModel.toggleConnection() }
+                        )
+                    }
 
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(16.dp))
 
                     OutlinedButton(
                         onClick = { viewModel.switchServer() },
                         modifier = Modifier
-                            .width(200.dp)
-                            .height(48.dp),
-                        shape = RoundedCornerShape(24.dp),
+                            .width(160.dp)
+                            .height(40.dp),
+                        shape = RoundedCornerShape(4.dp),
                         enabled = !uiState.isBusy &&
                             (uiState.connectionState == ConnectionUiState.CONNECTED ||
-                                uiState.connectionState == ConnectionUiState.UNSTABLE)
+                                uiState.connectionState == ConnectionUiState.UNSTABLE),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = SolidColor(
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                            )
+                        )
                     ) {
                         Icon(
                             Icons.Default.SwapHoriz,
                             contentDescription = null,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text("СМЕНИТЬ", fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "ДРУГОЙ СЕРВЕР",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        )
                     }
                 }
             }
