@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogEntry
 import com.vpnproxy.logging.LogExporter
@@ -29,8 +30,20 @@ class DebugViewModel @Inject constructor(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    private val _lastCrash = MutableStateFlow<String?>(null)
+    val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
+
     private var currentSearch: String? = null
     private var currentLevel: LogLevel? = null
+
+    init {
+        _lastCrash.value = CrashHandler.readLastCrash(context)
+    }
+
+    fun clearCrash() {
+        CrashHandler.clearCrashes(context)
+        _lastCrash.value = null
+    }
 
     fun setSearch(query: String) {
         currentSearch = query.ifBlank { null }
