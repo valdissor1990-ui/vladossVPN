@@ -3,6 +3,7 @@ package com.vpnproxy.core.xray
 import android.content.Context
 import android.util.Log
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.logging.LogCollectorHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,7 +47,12 @@ class XrayCore @Inject constructor(
         override fun startup(): Long = 0L
         override fun shutdown(): Long = 0L
         override fun onEmitStatus(code: Long, message: String?): Long {
-            Log.d(TAG, "status code=$code msg=$message")
+            val text = "onEmitStatus code=$code msg=$message"
+            Log.w(TAG, text)
+            LogCollectorHolder.get()?.let { collector ->
+                if (code == 0L) collector.info(TAG, text)
+                else collector.error(TAG, text)
+            }
             return 0L
         }
     }
@@ -72,25 +78,54 @@ class XrayCore @Inject constructor(
      * @param tunFd 0 — TUN у hev; иначе fd встроенного TUN
      */
     suspend fun start(configJson: String, tunFd: Int = 0): Boolean = withContext(Dispatchers.IO) {
+        var ctrl: CoreController? = null
         try {
             if (!initEnv()) return@withContext false
-            JSONObject(configJson) // validate
+            JSONObject(configJson) // syntax validation before JNI
 
             controller?.let {
                 try { it.stopLoop() } catch (_: Throwable) {}
             }
 
-            val ctrl = Libv2ray.newCoreController(callback)
-            ctrl.startLoop(configJson, tunFd)
+            ctrl = Libv2ray.newCoreController(callback)
             controller = ctrl
+            running = false
+            Log.i(TAG, "startLoop invoking tunFd=$tunFd")
+            // This libv2ray API exposes startLoop(configJson, tunFd), not a result code.
+            // A thrown exception and callback statuses are therefore logged separately.
+            ctrl.startLoop(configJson, tunFd)
             running = true
-            Log.i(TAG, "startLoop OK tunFd=$tunFd")
+            Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
             true
         } catch (t: Throwable) {
-            Log.e(TAG, "startLoop failed", t)
+            val masked = maskConfigForLog(configJson)
+            Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
+            LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
+            try { ctrl?.stopLoop() } catch (_: Throwable) {}
+            controller = null
             running = false
             false
         }
+    }
+
+    /**
+     * Маскирует идентификаторы и ключи, прежде чем писать Xray JSON в диагностический лог.
+     * Адрес узла скрывается; transport/path/SNI остаются для диагностики.
+     */
+    private fun maskConfigForLog(json: String): String {
+        var masked = json
+        val replacements = listOf(
+            Regex("\\\"id\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"id\\\":\\\"***UUID***\\\"",
+            Regex("\\\"publicKey\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"publicKey\\\":\\\"***PBK***\\\"",
+            Regex("\\\"shortId\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"shortId\\\":\\\"***SID***\\\"",
+            Regex("\\\"address\\\"\\s*:\\s*\\\"[^\\\"]+\\\"") to "\\\"address\\\":\\\"***HOST***\\\"",
+            Regex("\\\"password\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"password\\\":\\\"***MASKED***\\\"",
+            Regex("\\\"token\\\"\\s*:\\s*\\\"[^\\\"]*\\\"") to "\\\"token\\\":\\\"***MASKED***\\\""
+        )
+        for ((pattern, replacement) in replacements) {
+            masked = pattern.replace(masked, replacement)
+        }
+        return masked
     }
 
     suspend fun stop(): Boolean = withContext(Dispatchers.IO) {
