@@ -87,13 +87,14 @@ class XrayCore @Inject constructor(
                 try { it.stopLoop() } catch (_: Throwable) {}
             }
 
-            ctrl = Libv2ray.newCoreController(callback)
-            controller = ctrl
+            val newController = Libv2ray.newCoreController(callback)
+            ctrl = newController
+            controller = newController
             running = false
             Log.i(TAG, "startLoop invoking tunFd=$tunFd")
             // This libv2ray API exposes startLoop(configJson, tunFd), not a result code.
             // A thrown exception and callback statuses are therefore logged separately.
-            ctrl.startLoop(configJson, tunFd)
+            newController.startLoop(configJson, tunFd)
             running = true
             Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
             true
