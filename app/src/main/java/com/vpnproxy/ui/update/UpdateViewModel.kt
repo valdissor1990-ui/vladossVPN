@@ -15,6 +15,14 @@ class UpdateViewModel @Inject constructor(
 
     val state: StateFlow<UpdateManager.State> = updateManager.state
 
+    private var checkedThisSession = false
+
+    fun checkOnce() {
+        if (checkedThisSession) return
+        checkedThisSession = true
+        check(force = false)
+    }
+
     fun check(force: Boolean = false) = viewModelScope.launch {
         updateManager.checkForUpdate(force = force)
     }
