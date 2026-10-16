@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vpnproxy.subscription.SubscriptionRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,6 +88,7 @@ fun SubscriptionsScreen(
             }
             items(subs, key = { it.id }) { sub ->
                 val countForSub = configs.count { it.providerTag == sub.name }
+                val canRemove = sub.id != SubscriptionRepository.DEFAULT_SUBSCRIPTION_ID
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -94,8 +96,10 @@ fun SubscriptionsScreen(
                     Column(modifier = Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(text = sub.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { viewModel.removeSubscription(sub.id) }) {
-                                Icon(Icons.Default.Delete, "Удалить")
+                            if (canRemove) {
+                                IconButton(onClick = { viewModel.removeSubscription(sub.id) }) {
+                                    Icon(Icons.Default.Delete, "Удалить")
+                                }
                             }
                         }
                         Text(text = sub.url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
