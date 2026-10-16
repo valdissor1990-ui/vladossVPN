@@ -9,16 +9,17 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIBS_DIR="$PROJECT_DIR/app/libs"
 ASSETS_DIR="$PROJECT_DIR/app/src/main/assets"
 
+# Exact pinned release verified via GitHub Releases on 2026-10-16: v26.10.10.
 LIBV2RAY_URL="https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.10.10/libv2ray.aar"
 # Maven Central (verified 200 OK). GitHub release URL returned 404.
 HEV_URL="https://repo1.maven.org/maven2/com/zaneschepke/hevtunnel/1.0.1/hevtunnel-1.0.1.aar"
 
 mkdir -p "$LIBS_DIR" "$ASSETS_DIR"
 
-echo "=== [1/4] Downloading libv2ray.aar ==="
-if [ ! -s "$LIBS_DIR/libv2ray.aar" ]; then
-  curl -fSL --retry 3 "$LIBV2RAY_URL" -o "$LIBS_DIR/libv2ray.aar"
-fi
+echo "=== [1/4] Downloading pinned libv2ray.aar ==="
+# Never reuse a stale local/CI cache when changing or validating the native core.
+rm -f "$LIBS_DIR/libv2ray.aar"
+curl -fSL --retry 3 "$LIBV2RAY_URL" -o "$LIBS_DIR/libv2ray.aar"
 
 echo "=== [2/4] Downloading hev-socks5-tunnel.aar ==="
 if [ ! -s "$LIBS_DIR/hev-socks5-tunnel.aar" ]; then
