@@ -65,6 +65,14 @@ class VpnProxyService : VpnService() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
 
+    /**
+     * Защита от гонки: параллельные ACTION_START / null-intent не должны
+     * запускать второй startVpn, пока первый не завершил setup.
+     * Пока true — все новые startVpn игнорируются.
+     */
+    @Volatile
+    private var startInProgress = false
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -79,16 +87,42 @@ class VpnProxyService : VpnService() {
                 delay(400)
                 startVpn()
             }
-            ACTION_START, null -> startVpn()
+            ACTION_START -> startVpn()
+            null -> {
+                // START_STICKY redelivery: Android вызывает onStartCommand(null)
+                // после перезапуска процесса. Если VPN уже работает — не дублируем.
+                // Если не работает (первый запуск после kill) — стартуем.
+                logCollector.debug(TAG, "onStartCommand(null): isRunning=${_isRunning.value}, inProgress=$startInProgress")
+                startVpn()
+            }
         }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
-    private fun startVpn() {
-        if (_isRunning.value) return
+    /**
+     * Система отзывает VPN (пользователь отключил, Always-on переключился
+     * на другой VpnService, разрешение revoked). Логируем — чтобы в DebugScreen
+     * было видно причину тихого "VPN stopped".
+     */
+    override fun onRevoke() {
+        logCollector.warn(TAG, "onRevoke — VPN revoked by system")
+        scope.launch { stopVpnInternal() }
+        stopSelf()
+        super.onRevoke()
+    }
 
+    private fun startVpn() {
+        if (startInProgress || _isRunning.value) {
+            logCollector.debug(TAG,
+                "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
+            return
+        }
+        startInProgress = true
+
+        // Defensive: если старая Job почему-то ещё жива — отменяем
+        vpnJob?.cancel()
         vpnJob = scope.launch {
             try {
                 logCollector.info(TAG, "Starting VPN orchestrator…")
@@ -165,6 +199,8 @@ class VpnProxyService : VpnService() {
                 logCollector.error(TAG, "Failed to start VPN", t)
                 stopVpnInternal()
                 stopSelf()
+            } finally {
+                startInProgress = false
             }
         }
     }
