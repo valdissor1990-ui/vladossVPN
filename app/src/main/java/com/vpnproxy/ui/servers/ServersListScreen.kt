@@ -99,6 +99,13 @@ fun ServerListContent(
         }
     }
 
+    // Duplicate subscription entries must not produce duplicate LazyColumn keys.
+    val uniqueItems = remember(filtered) {
+        filtered.distinctBy {
+            "${it.config.address}|${it.config.port}|${it.config.uuid}"
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -144,8 +151,8 @@ fun ServerListContent(
                 modifier = Modifier.heightIn(max = 420.dp)
             ) {
                 items(
-                    items = filtered,
-                    key = { it.config.address + it.config.port + it.config.uuid }
+                    items = uniqueItems,
+                    key = { "${it.config.address}|${it.config.port}|${it.config.uuid}" }
                 ) { scoredServer ->
                     val s = scoredServer.config
                     Card(
