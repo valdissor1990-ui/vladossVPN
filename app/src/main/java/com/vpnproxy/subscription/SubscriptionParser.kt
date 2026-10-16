@@ -43,9 +43,10 @@ class SubscriptionParser @Inject constructor(
         fun isValid(): Boolean {
             if (uuid.isBlank() || address.isBlank()) return false
             if (port !in 1..65535) return false
+            // HOTFIX: XHTTP временно не поддержан — отбраковываем без явного mode
+            if (transport == "xhttp" && mode.isNullOrBlank()) return false
             // Reality: pbk обязателен, shortId может быть пустым "" (валидный кейс).
             if (security == "reality" && publicKey.isNullOrBlank()) return false
-            // Остальные проверки выполняются на этапе парсинга (mode, flow, дефолты).
             return true
         }
 
@@ -66,7 +67,7 @@ class SubscriptionParser @Inject constructor(
                 when (transport) {
                     "xhttp" -> putJsonObject("xhttpSettings") {
                         put("path", path ?: "/")
-                        put("mode", mode ?: "stream-one")
+                        put("mode", mode ?: "")   // пусто → Xray-core отвергнет явно
                         host?.let { put("host", it) }
                     }
                     "ws" -> putJsonObject("wsSettings") {
@@ -175,12 +176,11 @@ class SubscriptionParser @Inject constructor(
             val rawFlow = params["flow"]
             val rawMode = params["mode"]
 
-            // XHTTP: дефолт stream-one; auto принудительно заменяем.
+            // ⚠️ HOTFIX 2026-10-16: libv2ray v26.10.10 не поддерживает XHTTP-транспорт.
+            // Автоподстановка mode=stream-one пропускала XHTTP-конфиги, Xray-core падал на startLoop.
+            // Возвращаем прежнее поведение: XHTTP без явного mode → отбраковка.
             val mode: String? = when (transport) {
-                "xhttp" -> when (rawMode?.lowercase()) {
-                    null, "" , "auto" -> "stream-one"
-                    else -> rawMode
-                }
+                "xhttp" -> rawMode    // ← не подставляем дефолт, оставляем как есть
                 else -> rawMode
             }
 
@@ -205,6 +205,8 @@ class SubscriptionParser @Inject constructor(
                     if (config.uuid.isBlank()) add("uuid empty")
                     if (config.address.isBlank()) add("address empty")
                     if (config.port !in 1..65535) add("port invalid=${config.port}")
+                    if (config.transport == "xhttp" && config.mode.isNullOrBlank())
+                        add("xhttp mode missing (unsupported in libv2ray)")
                     if (config.security == "reality" && config.publicKey.isNullOrBlank())
                         add("reality missing pbk")
                 }
