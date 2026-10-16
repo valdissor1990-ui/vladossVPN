@@ -74,8 +74,9 @@ fun HomeScreen(
     val googleRtt by viewModel.googleRtt.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
+    // Проверка обновлений при первом входе — один раз за жизнь ViewModel.
     LaunchedEffect(Unit) {
-        updateViewModel.check(force = false)
+        updateViewModel.checkOnce()
     }
 
     Scaffold(
