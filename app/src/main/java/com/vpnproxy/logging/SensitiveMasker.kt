@@ -26,7 +26,7 @@ object SensitiveMasker {
 
     /** sid=XXXX или shortId=XXXX / "shortId": "XXXX". */
     private val SHORT_ID_REGEX = Regex(
-        """(?:sid=|shortId["']?\\s*[:=]\\s*["']?)([a-fA-F0-9]+)""",
+        """(?:^|[^A-Za-z0-9_])sid=([a-fA-F0-9]{6,})""",
         RegexOption.IGNORE_CASE
     )
 
@@ -69,7 +69,8 @@ object SensitiveMasker {
             // 4. shortId (sid / shortId)
             result = SHORT_ID_REGEX.replace(result) { m ->
                 val full = m.value
-                val prefixLen = full.length - m.groupValues[1].length
+                val value = m.groupValues[1]
+                val prefixLen = full.length - value.length
                 full.substring(0, prefixLen) + "***SID***"
             }
 
