@@ -43,7 +43,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -54,15 +55,24 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class ServersListViewModel @Inject constructor(
-    private val repository: SubscriptionRepository
+    private val repository: SubscriptionRepository,
+    private val autoSwitcher: AutoSwitcher
 ) : ViewModel() {
 
-    private val _servers = MutableStateFlow<List<ParsedConfig>>(emptyList())
-    val servers: StateFlow<List<ParsedConfig>> = _servers.asStateFlow()
+    private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
+    val servers: StateFlow<List<ScoredServer>> = _servers.asStateFlow()
 
     init {
         viewModelScope.launch {
-            repository.allConfigs.collect { _servers.value = it }
+            repository.allConfigs.collect { configs ->
+                if (configs.isNotEmpty() && autoSwitcher.rankedServers.value.isEmpty()) {
+                    autoSwitcher.selectBest(configs)
+                }
+                _servers.value = autoSwitcher.rankedServers.value
+            }
+        }
+        viewModelScope.launch {
+            autoSwitcher.rankedServers.collect { _servers.value = it }
         }
         viewModelScope.launch { repository.refreshAll() }
     }
@@ -74,7 +84,7 @@ class ServersListViewModel @Inject constructor(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerListContent(
-    onServerSelected: () -> Unit = {},
+    onServerSelected: (ScoredServer) -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
@@ -83,9 +93,9 @@ fun ServerListContent(
     val filtered = remember(servers, query) {
         if (query.isBlank()) servers
         else servers.filter {
-            it.name.contains(query, ignoreCase = true) ||
-                it.address.contains(query, ignoreCase = true) ||
-                it.providerTag.contains(query, ignoreCase = true)
+            it.config.name.contains(query, ignoreCase = true) ||
+                it.config.address.contains(query, ignoreCase = true) ||
+                it.config.providerTag.contains(query, ignoreCase = true)
         }
     }
 
@@ -135,10 +145,11 @@ fun ServerListContent(
             ) {
                 items(
                     items = filtered,
-                    key = { it.address + it.port + it.uuid }
-                ) { s ->
+                    key = { it.config.address + it.config.port + it.config.uuid }
+                ) { scoredServer ->
+                    val s = scoredServer.config
                     Card(
-                        onClick = onServerSelected,
+                        onClick = { onServerSelected(scoredServer) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant
