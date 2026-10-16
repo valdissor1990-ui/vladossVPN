@@ -45,8 +45,14 @@ jobs:
           chmod +x scripts/download_xray.sh
           ./scripts/download_xray.sh
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x gradlew
+      - name: Bootstrap Gradle Wrapper JAR
+        run: |
+          mkdir -p gradle/wrapper
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+          fi
+          chmod +x gradlew || true
 
       - name: Build Direct Release APK
         run: ./gradlew assembleDirectRelease --stacktrace
