@@ -35,9 +35,10 @@ private val FallbackLightScheme = lightColorScheme()
 @Composable
 fun VPNProxyTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    // dynamicColor сохранён в сигнатуре ради совместимости вызовов; намеренно не используется
+    @Suppress("UNUSED_PARAMETER") dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    // dynamicColor отключён намеренно — космическая палитра несовместима с Material You
     MaterialTheme(
         colorScheme = if (darkTheme) CosmosDarkScheme else FallbackLightScheme,
         typography = Typography,
