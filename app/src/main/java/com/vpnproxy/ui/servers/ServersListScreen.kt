@@ -42,10 +42,12 @@ class ServersListViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Список серверов без Scaffold — для ModalBottomSheet на HomeScreen.
+ */
 @Composable
-fun ServersListScreen(
-    onBack: () -> Unit,
+fun ServerListContent(
+    onServerSelected: () -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
@@ -60,10 +62,111 @@ fun ServersListScreen(
         }
     }
 
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Text(
+            text = "Серверы (${servers.size})",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Поиск по имени/хосту/провайдеру") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            singleLine = true
+        )
+
+        if (filtered.isEmpty()) {
+            Box(
+                Modifier.fillMaxWidth().height(160.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (servers.isEmpty()) "Список пуст. Обновите подписки." else "Ничего не найдено",
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.heightIn(max = 420.dp)
+            ) {
+                items(filtered, key = { it.address + it.port + it.uuid }) { s ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onServerSelected,
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = s.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1
+                                )
+                                AssistChip(
+                                    onClick = {},
+                                    label = {
+                                        Text(s.providerTag.ifBlank { "—" }, fontSize = 10.sp)
+                                    }
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "${s.address}:${s.port}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Row {
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = "transport=${s.transport}",
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = "security=${s.security}",
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ServersListScreen(
+    onBack: () -> Unit,
+    viewModel: ServersListViewModel = hiltViewModel()
+) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Серверы (${servers.size})") },
+                title = { Text("Серверы") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, "Назад")
@@ -72,52 +175,8 @@ fun ServersListScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                placeholder = { Text("Поиск по имени/хосту/провайдеру") },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                singleLine = true
-            )
-
-            if (filtered.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (servers.isEmpty()) "Список пуст. Обновите подписки." else "Ничего не найдено",
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(filtered, key = { it.address + it.port + it.uuid }) { s ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(text = s.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1)
-                                    AssistChip(onClick = {}, label = { Text(s.providerTag.ifBlank { "—" }, fontSize = 10.sp) })
-                                }
-                                Spacer(Modifier.height(4.dp))
-                                Text(text = "${s.address}:${s.port}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                                Spacer(Modifier.height(2.dp))
-                                Row {
-                                    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
-                                        Text(text = "transport=${s.transport}", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
-                                        Text(text = "security=${s.security}", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        Box(Modifier = Modifier.fillMaxSize().padding(padding)) {
+            ServerListContent(viewModel = viewModel)
         }
     }
 }
