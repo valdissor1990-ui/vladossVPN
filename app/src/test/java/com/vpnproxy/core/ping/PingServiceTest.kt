@@ -1,6 +1,5 @@
 package com.vpnproxy.core.ping
 
-import android.test.mock.MockContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -14,7 +13,7 @@ class PingServiceTest {
             delay(500L)
             TargetResult(target.id, 500L, true, timestamp = System.nanoTime() / 1_000_000L)
         }
-        val service = PingService(fakeExecutor, RegionDetector(MockContext()))
+        val service = PingService(fakeExecutor)
         val target = target("timeout_test")
         val started = System.nanoTime()
         val result = service.pingAll(listOf(target), timeoutMs = 100L)
@@ -38,8 +37,7 @@ class PingServiceTest {
                 active.decrementAndGet()
             }
         }
-        val service = PingService(fakeExecutor, RegionDetector(MockContext()))
-        val result = service.pingAll(
+        val result = PingService(fakeExecutor).pingAll(
             (1..6).map { target("test_$it") },
             concurrency = 2,
             timeoutMs = 1000L
