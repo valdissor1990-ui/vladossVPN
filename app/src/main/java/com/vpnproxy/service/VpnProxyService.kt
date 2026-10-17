@@ -148,9 +148,14 @@ class VpnProxyService : VpnService() {
                     }
                 }
 
-                // Гарантированно освобождаем :10808 перед новым startLoop
-                xrayCore.stop()
-                delay(200)
+                // Never proceed if Xray could not confirm that the previous loop stopped.
+                if (!xrayCore.stop()) {
+                    val reason = "Could not stop previous Xray loop; refusing to start a second one"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
+                    stopSelf()
+                    return@launch
+                }
 
                 val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {
