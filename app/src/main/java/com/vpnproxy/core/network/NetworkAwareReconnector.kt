@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.ConcurrentHashMap
@@ -33,8 +34,8 @@ class NetworkAwareReconnector(
 
     @Volatile private var registered = false
     @Volatile private var lastReconnectAt = 0L
-    @Volatile private var lastNetworkId: Int? = null
-    private val vpnNetworkIds = ConcurrentHashMap.newKeySet<Int>()
+    @Volatile private var lastNetwork: Network? = null
+    private val vpnNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     private val pendingRestart = Runnable {
         if (!isVpnActive()) {
@@ -72,7 +73,7 @@ class NetworkAwareReconnector(
 
         override fun onLost(network: Network) {
             val netId = network.hashCode()
-            if (vpnNetworkIds.remove(netId)) {
+            if (vpnNetworks.remove(network)) {
                 logCollector.info(TAG, "VPN network lost netId=$netId; scheduling recovery if tunnel still marked active")
                 if (isVpnActive() && !isBusy()) scheduleRestart()
                 return
@@ -89,11 +90,11 @@ class NetworkAwareReconnector(
     private fun handleAvailable(network: Network, caps: NetworkCapabilities) {
         val netId = network.hashCode()
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-            vpnNetworkIds.add(netId)
+            vpnNetworks.add(network)
             logCollector.debug(TAG, "VPN transport ignored on available/capabilities netId=$netId")
             return
         }
-        vpnNetworkIds.remove(netId)
+        vpnNetworks.remove(network)
 
         val transport = when {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
@@ -104,7 +105,7 @@ class NetworkAwareReconnector(
 
         if (isBusy()) {
             logCollector.debug(TAG, "Network callback ignored (busy) transport=$transport netId=$netId")
-            lastNetworkId = netId
+            lastNetwork = network
             return
         }
 
@@ -113,7 +114,7 @@ class NetworkAwareReconnector(
             lastNetworkId = netId
             return
         }
-        if (lastNetworkId == null) {
+        if (lastNetwork == null) {
             lastNetworkId = netId
             return
         }
@@ -125,7 +126,12 @@ class NetworkAwareReconnector(
     fun start() {
         if (registered) return
         try {
-            cm.registerDefaultNetworkCallback(callback)
+            cm.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build(),
+                callback
+            )
             registered = true
             logCollector.info(TAG, "Registered default network callback")
         } catch (t: Throwable) {
