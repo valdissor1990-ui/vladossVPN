@@ -108,38 +108,46 @@ class XrayCore @Inject constructor(
                 Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
                 true
             } catch (e: CancellationException) {
-                val cleanupSucceeded = try {
-                    ctrl?.stopLoop()
-                    true
-                } catch (cleanup: Throwable) {
-                    Log.e(TAG, "Cleanup after start cancellation failed; retaining controller", cleanup)
-                    false
-                }
-                if (cleanupSucceeded) {
-                    controller = null
-                    running = false
-                } else {
-                    controller = ctrl
-                    running = true
+                // If cancellation happened before creating the new controller, preserve the
+                // previous controller/state; it may still own the SOCKS port.
+                if (ctrl != null) {
+                    val cleanupSucceeded = try {
+                        ctrl.stopLoop()
+                        true
+                    } catch (cleanup: Throwable) {
+                        Log.e(TAG, "Cleanup after start cancellation failed; retaining controller", cleanup)
+                        false
+                    }
+                    if (cleanupSucceeded) {
+                        if (controller === ctrl) controller = null
+                        running = false
+                    } else {
+                        controller = ctrl
+                        running = true
+                    }
                 }
                 throw e
             } catch (t: Throwable) {
                 val masked = maskConfigForLog(configJson)
                 Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
                 LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
-                val cleanupSucceeded = try {
-                    ctrl?.stopLoop()
-                    true
-                } catch (cleanup: Throwable) {
-                    Log.e(TAG, "Cleanup after start failure failed; retaining controller", cleanup)
-                    false
-                }
-                if (cleanupSucceeded) {
-                    controller = null
-                    running = false
-                } else {
-                    controller = ctrl
-                    running = true
+                // Do not clear a pre-existing controller when failure happened before the
+                // new controller was created (for example, invalid JSON or init failure).
+                if (ctrl != null) {
+                    val cleanupSucceeded = try {
+                        ctrl.stopLoop()
+                        true
+                    } catch (cleanup: Throwable) {
+                        Log.e(TAG, "Cleanup after start failure failed; retaining controller", cleanup)
+                        false
+                    }
+                    if (cleanupSucceeded) {
+                        if (controller === ctrl) controller = null
+                        running = false
+                    } else {
+                        controller = ctrl
+                        running = true
+                    }
                 }
                 false
             }
