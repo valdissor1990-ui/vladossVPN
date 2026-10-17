@@ -26,20 +26,29 @@ import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 fun ServerGridCard(
     server: ScoredServer,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Если задан — показываем compositeScore / label из Feature 3. */
+    scoreOverride: String? = null
 ) {
     val c = server.config
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
     val protocol = c.transport.uppercase().ifBlank { "VLESS" }
-    val pingLabel = when {
+    val pingLabel = scoreOverride ?: when {
         server.latencyMs in 1..9998 -> "${server.latencyMs}ms"
         else -> "—"
     }
     val pingColor = when {
-        server.latencyMs in 1 until 100 -> Color(0xFF43A047)
-        server.latencyMs in 100 until 300 -> Color(0xFFF9A825)
-        server.latencyMs >= 300 -> Color(0xFFE53935)
+        pingLabel == "Slow" || pingLabel == "N/A" -> Color(0xFFE53935)
+        pingLabel.endsWith("ms") -> {
+            val ms = pingLabel.removeSuffix("ms").toLongOrNull() ?: 0L
+            when {
+                ms in 1 until 100 -> Color(0xFF43A047)
+                ms in 100 until 300 -> Color(0xFFF9A825)
+                ms >= 300 -> Color(0xFFE53935)
+                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            }
+        }
         else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
     }
 
@@ -103,7 +112,6 @@ private fun extractFlag(name: String): String {
     if (name.isEmpty()) return ""
     val first = name.codePoints().findFirst().orElse(-1)
     if (first < 0) return ""
-    // Regional indicator symbols A–Z: U+1F1E6..U+1F1FF (обычно пара = флаг)
     val isRi = first in 0x1F1E6..0x1F1FF
     if (!isRi) return ""
     val cps = name.codePoints().toArray()
