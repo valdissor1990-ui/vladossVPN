@@ -40,6 +40,12 @@ jobs:
               https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar
           fi
 
+      - name: Download native libs
+        run: |
+          chmod +x scripts/download_xray.sh
+          ./scripts/download_xray.sh
+          ls -la app/libs/
+
       # Product flavors: direct / play → testDebugUnitTest is ambiguous
       - name: Run unit tests
         run: ./gradlew testDirectDebugUnitTest --stacktrace
