@@ -269,6 +269,8 @@ class HomeViewModel @Inject constructor(
 
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
                 startVpnService()
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "Connect failed", e)
                 connectTimeoutJob?.cancel()
