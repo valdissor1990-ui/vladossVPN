@@ -111,15 +111,15 @@ class NetworkAwareReconnector(
 
         logCollector.info(TAG, "Network available transport=$transport netId=$netId vpn=${isVpnActive()}")
         if (!isVpnActive()) {
-            lastNetworkId = netId
+            lastNetwork = network
             return
         }
         if (lastNetwork == null) {
-            lastNetworkId = netId
+            lastNetwork = network
             return
         }
-        if (lastNetworkId == netId) return
-        lastNetworkId = netId
+        if (lastNetwork == network) return
+        lastNetwork = network
         scheduleRestart()
     }
 
