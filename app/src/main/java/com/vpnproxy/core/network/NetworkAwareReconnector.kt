@@ -10,17 +10,19 @@ import com.vpnproxy.logging.LogCollector
 
 /**
  * Следит за сменой сети (WiFi → LTE и обратно).
- * Если VPN активен — инициирует reconnect с debounce 300ms и cooldown 5s.
+ * Debounce 2s + cooldown 5s; игнорирует события во время старта/переключения VPN.
  */
 class NetworkAwareReconnector(
     context: Context,
     private val logCollector: LogCollector,
     private val isVpnActive: () -> Boolean,
+    /** true пока VPN стартует или идёт switch/reconnect — callback молчит. */
+    private val isBusy: () -> Boolean = { false },
     private val onReconnectRequested: () -> Unit
 ) {
     companion object {
         private const val TAG = "NetworkAwareReconnector"
-        private const val DEBOUNCE_MS = 300L
+        private const val DEBOUNCE_MS = 2_000L
         private const val COOLDOWN_MS = 5_000L
     }
 
@@ -37,13 +39,17 @@ class NetworkAwareReconnector(
             logCollector.debug(TAG, "Debounced restart skipped — VPN not active")
             return@Runnable
         }
+        if (isBusy()) {
+            logCollector.debug(TAG, "Debounced restart skipped — VPN busy")
+            return@Runnable
+        }
         val now = System.currentTimeMillis()
         if (now - lastReconnectAt < COOLDOWN_MS) {
             logCollector.debug(TAG, "Cooldownoldown active, skip restart")
             return@Runnable
         }
         lastReconnectAt = now
-        logCollector.info(TAG, "Network changed, restarting tunnel in ${DEBOUNCE_MS}ms…")
+        logCollector.info(TAG, "Network changed → reconnect after ${DEBOUNCE_MS}ms debounce")
         onReconnectRequested()
     }
 
@@ -57,6 +63,13 @@ class NetworkAwareReconnector(
                 else -> "OTHER"
             }
             val netId = network.hashCode()
+
+            if (isBusy()) {
+                logCollector.debug(TAG, "onAvailable ignored (busy) transport=$transport netId=$netId")
+                lastNetworkId = netId
+                return
+            }
+
             logCollector.info(TAG, "onAvailable transport=$transport netId=$netId vpn=${isVpnActive()}")
 
             if (!isVpnActive()) {
@@ -73,6 +86,10 @@ class NetworkAwareReconnector(
         }
 
         override fun onLost(network: Network) {
+            if (isBusy()) {
+                logCollector.debug(TAG, "onLost ignored (busy) netId=${network.hashCode()}")
+                return
+            }
             logCollector.info(TAG, "onLost netId=${network.hashCode()} vpn=${isVpnActive()}")
         }
     }
