@@ -120,10 +120,10 @@ class AutoSwitcher @Inject constructor(
         return best
     }
 
-    fun forceSelect(server: ScoredServer) {
+    fun forceSelect(server: ScoredServer): Boolean {
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "forceSelect ignored — already switching")
-            return
+            return false
         }
         try {
             _currentServer.value = server
@@ -131,6 +131,7 @@ class AutoSwitcher @Inject constructor(
             consecutiveErrors = 0
             _switchEvents.value = "Переключено на ${server.config.name}"
             logCollector.info(TAG, "Force select: ${server.config.name}")
+            return true
         } finally {
             switching.set(false)
         }
