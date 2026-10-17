@@ -34,7 +34,6 @@ class NetworkAwareReconnector(
 
     @Volatile private var registered = false
     @Volatile private var lastReconnectAt = 0L
-    @Volatile private var lastNetwork: Network? = null
     private val vpnNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     private val pendingRestart = Runnable {
@@ -83,7 +82,8 @@ class NetworkAwareReconnector(
                 logCollector.debug(TAG, "onLost ignored (busy) netId=$netId")
                 return
             }
-            logCollector.info(TAG, "onLost netId=$netId vpn=${isVpnActive()}")
+            logCollector.info(TAG, "Underlying network lost netId=$netId vpn=${isVpnActive()}")
+            if (isVpnActive()) scheduleRestart()
         }
     }
 
@@ -103,24 +103,10 @@ class NetworkAwareReconnector(
             else -> "OTHER"
         }
 
-        if (isBusy()) {
-            logCollector.debug(TAG, "Network callback ignored (busy) transport=$transport netId=$netId")
-            lastNetwork = network
-            return
-        }
-
-        logCollector.info(TAG, "Network available transport=$transport netId=$netId vpn=${isVpnActive()}")
-        if (!isVpnActive()) {
-            lastNetwork = network
-            return
-        }
-        if (lastNetwork == null) {
-            lastNetwork = network
-            return
-        }
-        if (lastNetwork == network) return
-        lastNetwork = network
-        scheduleRestart()
+        // A NetworkRequest can report several simultaneously available transports.
+        // Do not restart merely because another physical network becomes visible;
+        // onLost below is the reliable transition signal for a disappearing network.
+        logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
     }
 
     fun start() {
