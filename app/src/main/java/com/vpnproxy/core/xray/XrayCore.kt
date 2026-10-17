@@ -82,18 +82,21 @@ class XrayCore @Inject constructor(
                 JSONObject(configJson)
 
                 // Всегда гасим предыдущий контроллер, чтобы освободить :10808
-                controller?.let {
+                controller?.let { previous ->
                     try {
-                        it.stopLoop()
+                        previous.stopLoop()
+                        controller = null
+                        running = false
                         Log.i(TAG, "pre-start stopLoop OK")
                     } catch (e: CancellationException) {
+                        // Keep the controller reference so a later stop can retry cleanup.
                         throw e
                     } catch (t: Throwable) {
-                        Log.w(TAG, "pre-start stopLoop: ${t.message}")
+                        // Do not start a second core if the previous loop may still own :10808.
+                        Log.e(TAG, "pre-start stopLoop failed; refusing to start another controller", t)
+                        return@withLock false
                     }
                 }
-                controller = null
-                running = false
                 delay(STOP_SETTLE_MS)
 
                 val newController = Libv2ray.newCoreController(callback)
@@ -105,17 +108,39 @@ class XrayCore @Inject constructor(
                 Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
                 true
             } catch (e: CancellationException) {
-                try { ctrl?.stopLoop() } catch (_: Throwable) {}
-                controller = null
-                running = false
+                val cleanupSucceeded = try {
+                    ctrl?.stopLoop()
+                    true
+                } catch (cleanup: Throwable) {
+                    Log.e(TAG, "Cleanup after start cancellation failed; retaining controller", cleanup)
+                    false
+                }
+                if (cleanupSucceeded) {
+                    controller = null
+                    running = false
+                } else {
+                    controller = ctrl
+                    running = true
+                }
                 throw e
             } catch (t: Throwable) {
                 val masked = maskConfigForLog(configJson)
                 Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
                 LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
-                try { ctrl?.stopLoop() } catch (_: Throwable) {}
-                controller = null
-                running = false
+                val cleanupSucceeded = try {
+                    ctrl?.stopLoop()
+                    true
+                } catch (cleanup: Throwable) {
+                    Log.e(TAG, "Cleanup after start failure failed; retaining controller", cleanup)
+                    false
+                }
+                if (cleanupSucceeded) {
+                    controller = null
+                    running = false
+                } else {
+                    controller = ctrl
+                    running = true
+                }
                 false
             }
         }
