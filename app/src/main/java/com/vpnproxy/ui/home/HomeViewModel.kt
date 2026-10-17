@@ -491,7 +491,12 @@ class HomeViewModel @Inject constructor(
             logCollector.info(TAG, "VPN service start requested")
         } else {
             isFallingBack.set(false)
-            _uiState.value = _uiState.value.copy(isBusy = false)
+            connectTimeoutJob?.cancel()
+            connectTimeoutJob = null
+            _uiState.value = _uiState.value.copy(
+                connectionState = ConnectionUiState.ERROR,
+                isBusy = false
+            )
         }
     }
 
