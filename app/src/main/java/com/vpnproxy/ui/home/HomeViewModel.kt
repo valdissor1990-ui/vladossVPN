@@ -5,7 +5,10 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.ping.LatencyBreakdown
+import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
+import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
@@ -60,6 +63,9 @@ class HomeViewModel @Inject constructor(
     private val _googleRtt = MutableStateFlow<Long?>(null)
     val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
 
+    private val _latencyBreakdown = MutableStateFlow<LatencyBreakdown?>(null)
+    val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
+
     private var pingJob: Job? = null
     private var connectTimeoutJob: Job? = null
     private val connectTimeoutMs = 20_000L
@@ -100,7 +106,6 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Ошибка запуска Xray приходит сразу; не ждём общий connect timeout.
         viewModelScope.launch {
             VpnProxyService.lastError.collect { err ->
                 if (err == null) return@collect
@@ -146,24 +151,30 @@ class HomeViewModel @Inject constructor(
         pingJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    val result = pingService.pingDefault()
-                    if (result.success) {
-                        _googleRtt.value = result.rttMs
+                    val region = PingTargets.detectRegion(context)
+                    val targets = PingTargets.forRegion(region)
+                    val multi = pingService.pingAll(targets = targets, region = region)
+                    val breakdown = LatencyCalculator.compute(multi.results)
+                    _latencyBreakdown.value = breakdown
+                    if (breakdown.isValid) {
+                        val score = breakdown.compositeScore.toLong()
+                        _googleRtt.value = score
                         logCollector.debug(
                             TAG,
-                            "Ping OK: ${result.rttMs}ms via ${result.method} (${result.target})"
+                            "Ping OK: ${score}ms via TCP (region=$region, ok=${breakdown.successCount}/${multi.results.size}, median=${breakdown.medianMs?.toInt()}ms)"
                         )
                     } else {
                         _googleRtt.value = null
                         logCollector.warn(
                             TAG,
-                            "Ping failed: ${result.error ?: "unknown"} (${result.method} ${result.target})"
+                            "Ping failed: insufficient samples (${breakdown.successCount}/${multi.results.size}) region=$region"
                         )
                     }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (t: Throwable) {
                     _googleRtt.value = null
+                    _latencyBreakdown.value = null
                     logCollector.warn(TAG, "Ping exception: ${t.message}")
                 }
                 delay(30_000)
