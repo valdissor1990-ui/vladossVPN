@@ -1,24 +1,23 @@
 package com.vpnproxy.ui.servers
 
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,8 +26,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,7 +54,6 @@ import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import android.content.Context
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -167,10 +165,12 @@ fun ServerListContent(
                 )
             }
         } else {
-            LazyColumn(
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
                 contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.heightIn(max = 420.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.heightIn(max = 520.dp)
             ) {
                 items(
                     items = uniqueItems,
@@ -178,11 +178,19 @@ fun ServerListContent(
                         ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
                     }
                 ) { scoredServer ->
-                    val s = scoredServer.config
-                    val key = ServerMetrics.serverKey(s.address, s.port, s.uuid)
+                    val key = ServerMetrics.serverKey(
+                        scoredServer.config.address,
+                        scoredServer.config.port,
+                        scoredServer.config.uuid
+                    )
                     val expanded = expandedKey == key
-                    val scoreLabel = breakdown?.displayScore() ?: scoredServer.latencyMs.takeIf { it > 0 }?.toString() ?: "—"
-                    val scoreColor = rttColor(breakdown?.compositeScore?.toLong() ?: scoredServer.latencyMs)
+                    val scoreMs = breakdown?.compositeScore?.toLong()
+                        ?: scoredServer.latencyMs.takeIf { it > 0 }
+                    val scoreLabel = when {
+                        breakdown != null && !breakdown!!.isValid -> "Slow"
+                        scoreMs != null && scoreMs > 0 -> "${scoreMs}ms"
+                        else -> "—"
+                    }
 
                     Card(
                         modifier = Modifier
@@ -194,101 +202,48 @@ fun ServerListContent(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = s.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = if (scoreLabel == "N/A") "Slow" else "${scoreLabel}ms",
-                                    color = scoreColor,
-                                    fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.padding(end = 8.dp)
-                                )
-                                AssistChip(
-                                    onClick = { onServerSelected(scoredServer) },
-                                    label = {
-                                        Text(
-                                            text = s.providerTag.ifBlank { "—" },
-                                            fontSize = 10.sp
-                                        )
-                                    }
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "${s.address}:${s.port}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace
+                        Column {
+                            ServerGridCard(
+                                server = scoredServer,
+                                scoreOverride = scoreLabel,
+                                onClick = {
+                                    expandedKey = if (expanded) null else key
+                                }
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Row {
-                                Surface(
-                                    shape = MaterialTheme.shapes.small,
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Text(
-                                        text = "transport=${s.transport}",
-                                        modifier = Modifier.padding(
-                                            horizontal = 6.dp,
-                                            vertical = 2.dp
-                                        ),
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = MaterialTheme.shapes.small,
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Text(
-                                        text = "security=${s.security}",
-                                        modifier = Modifier.padding(
-                                            horizontal = 6.dp,
-                                            vertical = 2.dp
-                                        ),
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-
                             if (expanded) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                val targets = breakdown?.perTarget.orEmpty()
-                                if (targets.isEmpty()) {
-                                    Text(
-                                        text = "Ping targets: waiting…",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                    )
-                                } else {
-                                    targets.forEach { t ->
-                                        val label = when {
-                                            t.success && t.rttMs != null -> "${t.targetId}: ${t.rttMs}ms"
-                                            else -> "${t.targetId}: fail"
-                                        }
-                                        val c = if (t.success && t.rttMs != null) rttColor(t.rttMs) else Color(0xFFE53935)
+                                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                    val targets = breakdown?.perTarget.orEmpty()
+                                    if (targets.isEmpty()) {
                                         Text(
-                                            text = label,
+                                            text = "Ping targets: waiting…",
                                             fontSize = 11.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = c,
-                                            modifier = Modifier.padding(vertical = 1.dp)
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                         )
+                                    } else {
+                                        targets.forEach { t ->
+                                            val label = when {
+                                                t.success && t.rttMs != null -> "${t.targetId}: ${t.rttMs}ms"
+                                                else -> "${t.targetId}: fail"
+                                            }
+                                            val c = if (t.success && t.rttMs != null) rttColor(t.rttMs) else Color(0xFFE53935)
+                                            Text(
+                                                text = label,
+                                                fontSize = 10.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = c,
+                                                modifier = Modifier.padding(vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(onClick = { onServerSelected(scoredServer) }) {
+                                            Text("Подключить", fontSize = 12.sp)
+                                        }
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Нажмите чип провайдера, чтобы подключиться",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                )
                             }
                         }
                     }
