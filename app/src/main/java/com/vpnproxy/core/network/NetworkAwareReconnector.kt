@@ -90,7 +90,6 @@ class NetworkAwareReconnector(
         val netId = network.hashCode()
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
             vpnNetworkIds.add(netId)
-            mainHandler.removeCallbacks(pendingRestart)
             logCollector.debug(TAG, "VPN transport ignored on available/capabilities netId=$netId")
             return
         }
