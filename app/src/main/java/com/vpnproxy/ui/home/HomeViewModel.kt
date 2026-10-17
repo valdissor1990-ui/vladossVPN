@@ -490,6 +490,7 @@ class HomeViewModel @Inject constructor(
         if (safeStartService(intent)) {
             logCollector.info(TAG, "VPN service start requested")
         } else {
+            isFallingBack.set(false)
             _uiState.value = _uiState.value.copy(isBusy = false)
         }
     }
