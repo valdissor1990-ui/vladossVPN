@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
+import java.util.concurrent.ConcurrentHashMap
 import com.vpnproxy.logging.LogCollector
 
 /**
@@ -33,6 +34,7 @@ class NetworkAwareReconnector(
     @Volatile private var registered = false
     @Volatile private var lastReconnectAt = 0L
     @Volatile private var lastNetworkId: Int? = null
+    private val vpnNetworkIds = ConcurrentHashMap.newKeySet<Int>()
 
     private val pendingRestart = Runnable {
         if (!isVpnActive()) {
@@ -56,42 +58,69 @@ class NetworkAwareReconnector(
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val caps = cm.getNetworkCapabilities(network)
-            val transport = when {
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "WIFI"
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "CELLULAR"
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ETHERNET"
-                else -> "OTHER"
-            }
-            val netId = network.hashCode()
-
-            if (isBusy()) {
-                logCollector.debug(TAG, "onAvailable ignored (busy) transport=$transport netId=$netId")
-                lastNetworkId = netId
+            if (caps == null) {
+                // Wait for onCapabilitiesChanged rather than guessing whether this is VPN.
+                logCollector.debug(TAG, "onAvailable awaiting capabilities netId=${network.hashCode()}")
                 return
             }
+            handleAvailable(network, caps)
+        }
 
-            logCollector.info(TAG, "onAvailable transport=$transport netId=$netId vpn=${isVpnActive()}")
-
-            if (!isVpnActive()) {
-                lastNetworkId = netId
-                return
-            }
-            if (lastNetworkId == null) {
-                lastNetworkId = netId
-                return
-            }
-            if (lastNetworkId == netId) return
-            lastNetworkId = netId
-            scheduleRestart()
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            handleAvailable(network, caps)
         }
 
         override fun onLost(network: Network) {
-            if (isBusy()) {
-                logCollector.debug(TAG, "onLost ignored (busy) netId=${network.hashCode()}")
+            val netId = network.hashCode()
+            if (vpnNetworkIds.remove(netId)) {
+                logCollector.info(TAG, "VPN network lost netId=$netId; scheduling recovery if tunnel still marked active")
+                if (isVpnActive() && !isBusy()) scheduleRestart()
                 return
             }
-            logCollector.info(TAG, "onLost netId=${network.hashCode()} vpn=${isVpnActive()}")
+
+            if (isBusy()) {
+                logCollector.debug(TAG, "onLost ignored (busy) netId=$netId")
+                return
+            }
+            logCollector.info(TAG, "onLost netId=$netId vpn=${isVpnActive()}")
         }
+    }
+
+    private fun handleAvailable(network: Network, caps: NetworkCapabilities) {
+        val netId = network.hashCode()
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            vpnNetworkIds.add(netId)
+            mainHandler.removeCallbacks(pendingRestart)
+            logCollector.debug(TAG, "VPN transport ignored on available/capabilities netId=$netId")
+            return
+        }
+        vpnNetworkIds.remove(netId)
+
+        val transport = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "OTHER"
+        }
+
+        if (isBusy()) {
+            logCollector.debug(TAG, "Network callback ignored (busy) transport=$transport netId=$netId")
+            lastNetworkId = netId
+            return
+        }
+
+        logCollector.info(TAG, "Network available transport=$transport netId=$netId vpn=${isVpnActive()}")
+        if (!isVpnActive()) {
+            lastNetworkId = netId
+            return
+        }
+        if (lastNetworkId == null) {
+            lastNetworkId = netId
+            return
+        }
+        if (lastNetworkId == netId) return
+        lastNetworkId = netId
+        scheduleRestart()
     }
 
     fun start() {
