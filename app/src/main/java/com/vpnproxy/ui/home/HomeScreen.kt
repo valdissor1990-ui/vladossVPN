@@ -170,7 +170,7 @@ fun HomeScreen(
     LaunchedEffect(pendingSelection) {
         pendingSelection?.let { server ->
             delay(250)
-            viewModel.connectTo(server)
+            viewModel.onServerSelected(server)
             pendingSelection = null
         }
     }

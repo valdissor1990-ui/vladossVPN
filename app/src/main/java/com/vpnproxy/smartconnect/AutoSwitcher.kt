@@ -7,12 +7,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -47,6 +49,11 @@ class AutoSwitcher @Inject constructor(
     private val _switchEvents = MutableStateFlow<String?>(null)
     val switchEvents: StateFlow<String?> = _switchEvents.asStateFlow()
 
+    /** Блокирует параллельные switchToNext / forceSelect. */
+    private val switching = AtomicBoolean(false)
+
+    fun isSwitching(): Boolean = switching.get()
+
     fun startMonitoring() {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
@@ -64,6 +71,7 @@ class AutoSwitcher @Inject constructor(
 
     private suspend fun checkCurrentServer() {
         val current = _currentServer.value ?: return
+        if (switching.get()) return
         try {
             val result = healthChecker.testLatency(listOf(current.config)).firstOrNull()
                 ?: return
@@ -89,6 +97,8 @@ class AutoSwitcher @Inject constructor(
                     reSelect()
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logCollector.error(TAG, "Health check error", e)
             consecutiveErrors++
@@ -113,35 +123,53 @@ class AutoSwitcher @Inject constructor(
         return best
     }
 
-    /** Force-select a specific server from the server picker. */
-    fun forceSelect(server: ScoredServer) {
-        _currentServer.value = server
-        baselineRtt = server.latencyMs
-        consecutiveErrors = 0
-        _switchEvents.value = "Переключено на ${server.config.name}"
-        logCollector.info(TAG, "Force select: ${server.config.name}")
+    fun forceSelect(server: ScoredServer): Boolean {
+        if (!switching.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "forceSelect ignored — already switching")
+            return false
+        }
+        try {
+            _currentServer.value = server
+            baselineRtt = server.latencyMs
+            consecutiveErrors = 0
+            _switchEvents.value = "Переключено на ${server.config.name}"
+            logCollector.info(TAG, "Force select: ${server.config.name}")
+            return true
+        } finally {
+            switching.set(false)
+        }
     }
 
     suspend fun switchToNext(): ScoredServer? {
-        val ranked = _rankedServers.value
-        val current = _currentServer.value
-        if (ranked.isEmpty()) return null
-
-        val currentIndex = ranked.indexOfFirst {
-            it.config.address == current?.config?.address
+        if (!switching.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "switchToNext ignored — already switching")
+            return null
         }
-        val nextIndex = (currentIndex + 1).coerceAtLeast(0) % ranked.size
-        val next = ranked[nextIndex]
+        try {
+            val ranked = _rankedServers.value
+            val current = _currentServer.value
+            if (ranked.isEmpty()) return null
 
-        _currentServer.value = next
-        baselineRtt = next.latencyMs
-        consecutiveErrors = 0
-        _switchEvents.value = "Переключено на ${next.config.name}"
-        logCollector.info(TAG, "Manual switch to: ${next.config.name}")
-        return next
+            val currentIndex = ranked.indexOfFirst {
+                it.config.address == current?.config?.address
+            }
+            val nextIndex = (currentIndex + 1).coerceAtLeast(0) % ranked.size
+            val next = ranked[nextIndex]
+
+            _currentServer.value = next
+            baselineRtt = next.latencyMs
+            consecutiveErrors = 0
+            _switchEvents.value = "Переключено на ${next.config.name}"
+            logCollector.info(TAG, "Manual switch to: ${next.config.name}")
+            delay(50)
+            return next
+        } finally {
+            switching.set(false)
+        }
     }
 
     private fun reSelect() {
+        if (switching.get()) return
         val ranked = _rankedServers.value
         val best = ranked.firstOrNull() ?: return
         _currentServer.value = best

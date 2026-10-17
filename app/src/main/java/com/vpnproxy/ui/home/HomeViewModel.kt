@@ -25,11 +25,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
-/**
- * ViewModel главного экрана.
- */
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -71,6 +69,7 @@ class HomeViewModel @Inject constructor(
     private val connectTimeoutMs = 20_000L
     private var fallbackAttempts = 0
     private val attemptedServerKeys = mutableSetOf<String>()
+    private val isFallingBack = AtomicBoolean(false)
 
     private fun serverKey(address: String, port: Int): String = "$address:$port"
 
@@ -83,6 +82,7 @@ class HomeViewModel @Inject constructor(
                 if (running) {
                     fallbackAttempts = 0
                     attemptedServerKeys.clear()
+                    isFallingBack.set(false)
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     VpnProxyService.clearError()
@@ -116,6 +116,9 @@ class HomeViewModel @Inject constructor(
                 if (_uiState.value.connectionState == ConnectionUiState.CONNECTING ||
                     _uiState.value.isBusy
                 ) {
+                    // The previous fallback attempt has received a terminal service error.
+                    // Release the gate before scheduling the next attempt.
+                    isFallingBack.set(false)
                     tryNextServer()
                 } else {
                     logCollector.warn(TAG, "Ignoring stale service error outside connection attempt")
@@ -191,13 +194,14 @@ class HomeViewModel @Inject constructor(
         when (current) {
             ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> disconnect()
             ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> connect()
-            ConnectionUiState.CONNECTING -> { /* уже в процессе */ }
+            ConnectionUiState.CONNECTING -> { }
         }
     }
 
     private fun connect() {
         fallbackAttempts = 0
         attemptedServerKeys.clear()
+        isFallingBack.set(false)
         VpnProxyService.clearError()
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.CONNECTING,
@@ -265,6 +269,8 @@ class HomeViewModel @Inject constructor(
 
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
                 startVpnService()
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "Connect failed", e)
                 connectTimeoutJob?.cancel()
@@ -290,6 +296,7 @@ class HomeViewModel @Inject constructor(
     fun disconnect() {
         fallbackAttempts = 0
         attemptedServerKeys.clear()
+        isFallingBack.set(false)
         VpnProxyService.clearError()
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
@@ -306,6 +313,7 @@ class HomeViewModel @Inject constructor(
     fun forceDisconnect() {
         fallbackAttempts = 0
         attemptedServerKeys.clear()
+        isFallingBack.set(false)
         VpnProxyService.clearError()
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
@@ -324,6 +332,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun switchServer() {
+        if (isFallingBack.get() || autoSwitcher.isSwitching()) {
+            logCollector.warn(TAG, "switchServer ignored — busy")
+            return
+        }
         viewModelScope.launch {
             try {
                 logCollector.info(TAG, "Switch server requested")
@@ -381,7 +393,14 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun tryNextServer() {
+        if (!isFallingBack.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "tryNextServer ignored — already falling back")
+            return
+        }
         viewModelScope.launch {
+            // Keep the fallback gate locked after requesting service start. It is released
+            // by a terminal service event (connected/error/timeout), not by startService().
+            var awaitingServiceResult = false
             try {
                 if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) {
                     logCollector.error(TAG, "Fallback exhausted after $MAX_FALLBACK_ATTEMPTS attempts")
@@ -447,6 +466,8 @@ class HomeViewModel @Inject constructor(
                         forceDisconnect()
                     }
                 }
+                delay(500)
+                awaitingServiceResult = true
                 startVpnService()
             } catch (c: CancellationException) {
                 throw c
@@ -456,6 +477,10 @@ class HomeViewModel @Inject constructor(
                     connectionState = ConnectionUiState.ERROR,
                     isBusy = false
                 )
+            } finally {
+                // On a normal request, keep the gate until the service reports success/error.
+                // All terminal paths before requesting a start release it immediately.
+                if (!awaitingServiceResult) isFallingBack.set(false)
             }
         }
     }
@@ -467,7 +492,13 @@ class HomeViewModel @Inject constructor(
         if (safeStartService(intent)) {
             logCollector.info(TAG, "VPN service start requested")
         } else {
-            _uiState.value = _uiState.value.copy(isBusy = false)
+            isFallingBack.set(false)
+            connectTimeoutJob?.cancel()
+            connectTimeoutJob = null
+            _uiState.value = _uiState.value.copy(
+                connectionState = ConnectionUiState.ERROR,
+                isBusy = false
+            )
         }
     }
 
@@ -482,70 +513,31 @@ class HomeViewModel @Inject constructor(
             }
             true
         } catch (t: Throwable) {
-            logCollector.error(
-                TAG,
-                "Failed to start service: ${t.javaClass.simpleName}",
-                t
-            )
+            logCollector.error(TAG, "startService failed: ${t.message}", t)
             false
         }
     }
 
-    fun connectTo(server: ScoringEngine.ScoredServer) {
+    fun onServerSelected(server: ScoringEngine.ScoredServer) {
         viewModelScope.launch {
             try {
-                logCollector.info(TAG, "Connect to: ${server.config.name}")
-                autoSwitcher.forceSelect(server)
-                fallbackAttempts = 0
-                attemptedServerKeys.clear()
-                attemptedServerKeys.add(serverKey(server.config.address, server.config.port))
-                VpnProxyService.clearError()
-                connectTimeoutJob?.cancel()
+                if (!autoSwitcher.forceSelect(server)) {
+                    logCollector.warn(TAG, "Server selection ignored because another switch is in progress")
+                    return@launch
+                }
                 _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.CONNECTING,
                     currentServerName = server.config.name,
-                    currentRtt = server.latencyMs,
-                    isBusy = true
+                    currentRtt = server.latencyMs
                 )
-                connectTimeoutJob = viewModelScope.launch {
-                    delay(connectTimeoutMs)
-                    if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                        logCollector.warn(TAG, "Connect-to timeout ${connectTimeoutMs}ms — forcing reset")
-                        forceDisconnect()
-                    }
-                }
-                val action = if (VpnProxyService.isRunning.value) {
-                    VpnProxyService.ACTION_RECONNECT
-                } else {
-                    VpnProxyService.ACTION_START
-                }
-                val intent = Intent(context, VpnProxyService::class.java).apply {
-                    this.action = action
-                }
-                if (!safeStartService(intent)) {
-                    connectTimeoutJob?.cancel()
-                    connectTimeoutJob = null
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
-                }
+                val running = VpnProxyService.isRunning.value
+                val action = if (running) VpnProxyService.ACTION_RECONNECT else VpnProxyService.ACTION_START
+                val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
+                safeStartService(intent)
             } catch (c: CancellationException) {
                 throw c
-            } catch (t: Throwable) {
-                logCollector.error(TAG, "connectTo failed", t)
-                _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.ERROR,
-                    isBusy = false
-                )
+            } catch (e: Exception) {
+                logCollector.error(TAG, "onServerSelected failed", e)
             }
         }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        pingJob?.cancel()
-        connectTimeoutJob?.cancel()
-        logCollector.debug(TAG, "HomeViewModel cleared")
     }
 }

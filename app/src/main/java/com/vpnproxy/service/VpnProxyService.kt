@@ -76,7 +76,12 @@ class VpnProxyService : VpnService() {
             context = this,
             logCollector = logCollector,
             isVpnActive = { _isRunning.value },
+            isBusy = { startInProgress || autoSwitcher.isSwitching() },
             onReconnectRequested = {
+                if (startInProgress || autoSwitcher.isSwitching()) {
+                    logCollector.debug(TAG, "Network reconnect skipped — busy")
+                    return@NetworkAwareReconnector
+                }
                 val intent = Intent(this, VpnProxyService::class.java).apply {
                     action = ACTION_RECONNECT
                 }
@@ -93,8 +98,12 @@ class VpnProxyService : VpnService() {
         when (intent?.action) {
             ACTION_STOP -> stopVpn()
             ACTION_RECONNECT -> scope.launch {
+                if (startInProgress) {
+                    logCollector.debug(TAG, "RECONNECT skipped — startInProgress")
+                    return@launch
+                }
                 stopVpnInternal()
-                delay(400)
+                delay(500)
                 startVpn()
             }
             ACTION_START -> startVpn()
@@ -139,9 +148,20 @@ class VpnProxyService : VpnService() {
                     }
                 }
 
+                // Never proceed if Xray could not confirm that the previous loop stopped.
+                if (!xrayCore.stop()) {
+                    val reason = "Could not stop previous Xray loop; refusing to start a second one"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
+                    stopSelf()
+                    return@launch
+                }
+
                 val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {
-                    logCollector.error(TAG, "TUN establishment failed")
+                    val reason = "TUN establishment failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     stopSelf()
                     return@launch
                 }
@@ -149,14 +169,18 @@ class VpnProxyService : VpnService() {
                 val parsed = autoSwitcher.currentServer.value?.config
                     ?: subscriptionRepository.getAllConfigs().firstOrNull()
                 if (parsed == null) {
-                    logCollector.warn(TAG, "No server selected — open Subscriptions first")
+                    val reason = "No server selected — open Subscriptions first"
+                    logCollector.warn(TAG, reason)
+                    _lastError.value = reason
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
                 }
 
                 if (!xrayCore.initEnv()) {
-                    logCollector.error(TAG, "initCoreEnv failed")
+                    val reason = "initCoreEnv failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
@@ -179,7 +203,9 @@ class VpnProxyService : VpnService() {
 
                 val hevOk = tunnelManager.startHev(pfd.fd)
                 if (!hevOk) {
-                    logCollector.error(TAG, "TProxyStartService failed")
+                    val reason = "TProxyStartService failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     xrayCore.stop()
                     tunnelManager.tearDown()
                     stopSelf()

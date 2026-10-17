@@ -4,23 +4,27 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
+import java.util.concurrent.ConcurrentHashMap
 import com.vpnproxy.logging.LogCollector
 
 /**
  * Следит за сменой сети (WiFi → LTE и обратно).
- * Если VPN активен — инициирует reconnect с debounce 300ms и cooldown 5s.
+ * Debounce 2s + cooldown 5s; игнорирует события во время старта/переключения VPN.
  */
 class NetworkAwareReconnector(
     context: Context,
     private val logCollector: LogCollector,
     private val isVpnActive: () -> Boolean,
+    /** true пока VPN стартует или идёт switch/reconnect — callback молчит. */
+    private val isBusy: () -> Boolean = { false },
     private val onReconnectRequested: () -> Unit
 ) {
     companion object {
         private const val TAG = "NetworkAwareReconnector"
-        private const val DEBOUNCE_MS = 300L
+        private const val DEBOUNCE_MS = 2_000L
         private const val COOLDOWN_MS = 5_000L
     }
 
@@ -30,11 +34,15 @@ class NetworkAwareReconnector(
 
     @Volatile private var registered = false
     @Volatile private var lastReconnectAt = 0L
-    @Volatile private var lastNetworkId: Int? = null
+    private val vpnNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     private val pendingRestart = Runnable {
         if (!isVpnActive()) {
             logCollector.debug(TAG, "Debounced restart skipped — VPN not active")
+            return@Runnable
+        }
+        if (isBusy()) {
+            logCollector.debug(TAG, "Debounced restart skipped — VPN busy")
             return@Runnable
         }
         val now = System.currentTimeMillis()
@@ -43,44 +51,73 @@ class NetworkAwareReconnector(
             return@Runnable
         }
         lastReconnectAt = now
-        logCollector.info(TAG, "Network changed, restarting tunnel in ${DEBOUNCE_MS}ms…")
+        logCollector.info(TAG, "Network changed → reconnect after ${DEBOUNCE_MS}ms debounce")
         onReconnectRequested()
     }
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val caps = cm.getNetworkCapabilities(network)
-            val transport = when {
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "WIFI"
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "CELLULAR"
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ETHERNET"
-                else -> "OTHER"
+            if (caps == null) {
+                // Wait for onCapabilitiesChanged rather than guessing whether this is VPN.
+                logCollector.debug(TAG, "onAvailable awaiting capabilities netId=${network.hashCode()}")
+                return
             }
-            val netId = network.hashCode()
-            logCollector.info(TAG, "onAvailable transport=$transport netId=$netId vpn=${isVpnActive()}")
+            handleAvailable(network, caps)
+        }
 
-            if (!isVpnActive()) {
-                lastNetworkId = netId
-                return
-            }
-            if (lastNetworkId == null) {
-                lastNetworkId = netId
-                return
-            }
-            if (lastNetworkId == netId) return
-            lastNetworkId = netId
-            scheduleRestart()
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            handleAvailable(network, caps)
         }
 
         override fun onLost(network: Network) {
-            logCollector.info(TAG, "onLost netId=${network.hashCode()} vpn=${isVpnActive()}")
+            val netId = network.hashCode()
+            if (vpnNetworks.remove(network)) {
+                logCollector.info(TAG, "VPN network lost netId=$netId; scheduling recovery if tunnel still marked active")
+                if (isVpnActive() && !isBusy()) scheduleRestart()
+                return
+            }
+
+            if (isBusy()) {
+                logCollector.debug(TAG, "onLost ignored (busy) netId=$netId")
+                return
+            }
+            logCollector.info(TAG, "Underlying network lost netId=$netId vpn=${isVpnActive()}")
+            if (isVpnActive()) scheduleRestart()
         }
+    }
+
+    private fun handleAvailable(network: Network, caps: NetworkCapabilities) {
+        val netId = network.hashCode()
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            vpnNetworks.add(network)
+            logCollector.debug(TAG, "VPN transport ignored on available/capabilities netId=$netId")
+            return
+        }
+        vpnNetworks.remove(network)
+
+        val transport = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "OTHER"
+        }
+
+        // A NetworkRequest can report several simultaneously available transports.
+        // Do not restart merely because another physical network becomes visible;
+        // onLost below is the reliable transition signal for a disappearing network.
+        logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
     }
 
     fun start() {
         if (registered) return
         try {
-            cm.registerDefaultNetworkCallback(callback)
+            cm.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build(),
+                callback
+            )
             registered = true
             logCollector.info(TAG, "Registered default network callback")
         } catch (t: Throwable) {

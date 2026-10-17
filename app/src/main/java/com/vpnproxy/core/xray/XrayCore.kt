@@ -5,7 +5,11 @@ import android.util.Log
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import com.vpnproxy.logging.LogCollectorHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
@@ -19,13 +23,7 @@ import javax.inject.Singleton
 /**
  * Обёртка над AndroidLibXrayLite (libv2ray.aar).
  *
- * Проверено javap v26.10.10:
- *   Libv2ray.initCoreEnv(String assetPath, String certPath)
- *   Libv2ray.newCoreController(CoreCallbackHandler)
- *   CoreController.startLoop(String configJson, int tunFd)  // 0 = без встроенного TUN
- *   CoreController.stopLoop()
- *
- * TUN обслуживает hev-socks5-tunnel; Xray только SOCKS-in на 127.0.0.1.
+ * start/stop защищены Mutex — параллельные вызовы не оставляют зомби на :10808.
  */
 @Singleton
 class XrayCore @Inject constructor(
@@ -34,10 +32,12 @@ class XrayCore @Inject constructor(
 
     companion object {
         private const val TAG = "XrayCore"
+        private const val STOP_SETTLE_MS = 200L
 
         @Volatile private var envReady = false
     }
 
+    private val mutex = Mutex()
     private var controller: CoreController? = null
 
     @Volatile
@@ -57,12 +57,10 @@ class XrayCore @Inject constructor(
         }
     }
 
-    /** Инициализация env (geoip/geosite из AAR assets + filesDir). */
     fun initEnv(): Boolean {
         if (envReady) return true
         return try {
             val dir = File(context.filesDir, "xray").apply { mkdirs() }
-            // (assetPath, certFile) — geoip/geosite подхватываются из AAR assets
             Libv2ray.initCoreEnv(dir.absolutePath, "")
             envReady = true
             Log.i(TAG, "initCoreEnv OK path=${dir.absolutePath}")
@@ -74,45 +72,88 @@ class XrayCore @Inject constructor(
     }
 
     /**
-     * @param configJson полный JSON Xray
-     * @param tunFd 0 — TUN у hev; иначе fd встроенного TUN
+     * Останавливает предыдущий loop (если был), ждёт закрытия сокета, затем startLoop.
      */
     suspend fun start(configJson: String, tunFd: Int = 0): Boolean = withContext(Dispatchers.IO) {
-        var ctrl: CoreController? = null
-        try {
-            if (!initEnv()) return@withContext false
-            JSONObject(configJson) // syntax validation before JNI
+        mutex.withLock {
+            var ctrl: CoreController? = null
+            try {
+                if (!initEnv()) return@withLock false
+                JSONObject(configJson)
 
-            controller?.let {
-                try { it.stopLoop() } catch (_: Throwable) {}
+                // Всегда гасим предыдущий контроллер, чтобы освободить :10808
+                controller?.let { previous ->
+                    try {
+                        previous.stopLoop()
+                        controller = null
+                        running = false
+                        Log.i(TAG, "pre-start stopLoop OK")
+                    } catch (e: CancellationException) {
+                        // Keep the controller reference so a later stop can retry cleanup.
+                        throw e
+                    } catch (t: Throwable) {
+                        // Do not start a second core if the previous loop may still own :10808.
+                        Log.e(TAG, "pre-start stopLoop failed; refusing to start another controller", t)
+                        return@withLock false
+                    }
+                }
+                delay(STOP_SETTLE_MS)
+
+                val newController = Libv2ray.newCoreController(callback)
+                ctrl = newController
+                controller = newController
+                Log.i(TAG, "startLoop invoking tunFd=$tunFd")
+                newController.startLoop(configJson, tunFd)
+                running = true
+                Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
+                true
+            } catch (e: CancellationException) {
+                // If cancellation happened before creating the new controller, preserve the
+                // previous controller/state; it may still own the SOCKS port.
+                if (ctrl != null) {
+                    val cleanupSucceeded = try {
+                        ctrl.stopLoop()
+                        true
+                    } catch (cleanup: Throwable) {
+                        Log.e(TAG, "Cleanup after start cancellation failed; retaining controller", cleanup)
+                        false
+                    }
+                    if (cleanupSucceeded) {
+                        if (controller === ctrl) controller = null
+                        running = false
+                    } else {
+                        controller = ctrl
+                        running = true
+                    }
+                }
+                throw e
+            } catch (t: Throwable) {
+                val masked = maskConfigForLog(configJson)
+                Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
+                LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
+                // Do not clear a pre-existing controller when failure happened before the
+                // new controller was created (for example, invalid JSON or init failure).
+                if (ctrl != null) {
+                    val cleanupSucceeded = try {
+                        ctrl.stopLoop()
+                        true
+                    } catch (cleanup: Throwable) {
+                        Log.e(TAG, "Cleanup after start failure failed; retaining controller", cleanup)
+                        false
+                    }
+                    if (cleanupSucceeded) {
+                        if (controller === ctrl) controller = null
+                        running = false
+                    } else {
+                        controller = ctrl
+                        running = true
+                    }
+                }
+                false
             }
-
-            val newController = Libv2ray.newCoreController(callback)
-            ctrl = newController
-            controller = newController
-            running = false
-            Log.i(TAG, "startLoop invoking tunFd=$tunFd")
-            // This libv2ray API exposes startLoop(configJson, tunFd), not a result code.
-            // A thrown exception and callback statuses are therefore logged separately.
-            newController.startLoop(configJson, tunFd)
-            running = true
-            Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
-            true
-        } catch (t: Throwable) {
-            val masked = maskConfigForLog(configJson)
-            Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
-            LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
-            try { ctrl?.stopLoop() } catch (_: Throwable) {}
-            controller = null
-            running = false
-            false
         }
     }
 
-    /**
-     * Маскирует идентификаторы и ключи, прежде чем писать Xray JSON в диагностический лог.
-     * Адрес узла скрывается; transport/path/SNI остаются для диагностики.
-     */
     private fun maskConfigForLog(json: String): String {
         var masked = json
         val replacements = listOf(
@@ -130,16 +171,22 @@ class XrayCore @Inject constructor(
     }
 
     suspend fun stop(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            controller?.stopLoop()
-            controller = null
-            running = false
-            Log.i(TAG, "stopLoop OK")
-            true
-        } catch (t: Throwable) {
-            Log.e(TAG, "stopLoop failed", t)
-            running = false
-            false
+        mutex.withLock {
+            try {
+                controller?.stopLoop()
+                controller = null
+                running = false
+                delay(STOP_SETTLE_MS)
+                Log.i(TAG, "stopLoop OK")
+                true
+            } catch (e: CancellationException) {
+                // Preserve state: stopLoop may have been interrupted before cleanup completed.
+                throw e
+            } catch (t: Throwable) {
+                // Retain the controller so a subsequent stop/start can retry cleanup.
+                Log.e(TAG, "stopLoop failed; retaining controller for retry", t)
+                false
+            }
         }
     }
 
