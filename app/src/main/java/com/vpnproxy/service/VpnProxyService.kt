@@ -159,7 +159,9 @@ class VpnProxyService : VpnService() {
 
                 val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {
-                    logCollector.error(TAG, "TUN establishment failed")
+                    val reason = "TUN establishment failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     stopSelf()
                     return@launch
                 }
@@ -167,14 +169,18 @@ class VpnProxyService : VpnService() {
                 val parsed = autoSwitcher.currentServer.value?.config
                     ?: subscriptionRepository.getAllConfigs().firstOrNull()
                 if (parsed == null) {
-                    logCollector.warn(TAG, "No server selected — open Subscriptions first")
+                    val reason = "No server selected — open Subscriptions first"
+                    logCollector.warn(TAG, reason)
+                    _lastError.value = reason
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
                 }
 
                 if (!xrayCore.initEnv()) {
-                    logCollector.error(TAG, "initCoreEnv failed")
+                    val reason = "initCoreEnv failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     tunnelManager.tearDown()
                     stopSelf()
                     return@launch
@@ -197,7 +203,9 @@ class VpnProxyService : VpnService() {
 
                 val hevOk = tunnelManager.startHev(pfd.fd)
                 if (!hevOk) {
-                    logCollector.error(TAG, "TProxyStartService failed")
+                    val reason = "TProxyStartService failed"
+                    logCollector.error(TAG, reason)
+                    _lastError.value = reason
                     xrayCore.stop()
                     tunnelManager.tearDown()
                     stopSelf()
