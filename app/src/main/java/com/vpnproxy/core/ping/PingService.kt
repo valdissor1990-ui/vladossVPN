@@ -20,10 +20,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class PingService @Inject constructor() {
-    internal constructor(executor: PingExecutor) : this() {
-        this.executor = executor
-    }
+class PingService private constructor(private val executor: PingExecutor) {
+    @Inject
+    constructor() : this(RealPingExecutor())
+
+    // Secondary constructor is a test seam; production Hilt injection uses the no-arg constructor.
+    internal constructor(executor: PingExecutor, testOnly: Unit = Unit) : this(executor)
 
     companion object {
         val HTTP_TARGETS = listOf(
@@ -33,9 +35,6 @@ class PingService @Inject constructor() {
         )
         const val DEFAULT_TIMEOUT_MS = 3000
     }
-
-    // Internal constructor injection is a test seam; production always uses RealPingExecutor.
-    private var executor: PingExecutor = RealPingExecutor()
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(DEFAULT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
