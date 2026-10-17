@@ -116,6 +116,9 @@ class HomeViewModel @Inject constructor(
                 if (_uiState.value.connectionState == ConnectionUiState.CONNECTING ||
                     _uiState.value.isBusy
                 ) {
+                    // The previous fallback attempt has received a terminal service error.
+                    // Release the gate before scheduling the next attempt.
+                    isFallingBack.set(false)
                     tryNextServer()
                 } else {
                     logCollector.warn(TAG, "Ignoring stale service error outside connection attempt")
@@ -393,6 +396,9 @@ class HomeViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
+            // Keep the fallback gate locked after requesting service start. It is released
+            // by a terminal service event (connected/error/timeout), not by startService().
+            var awaitingServiceResult = false
             try {
                 if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) {
                     logCollector.error(TAG, "Fallback exhausted after $MAX_FALLBACK_ATTEMPTS attempts")
@@ -459,6 +465,7 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 delay(500)
+                awaitingServiceResult = true
                 startVpnService()
             } catch (c: CancellationException) {
                 throw c
@@ -469,7 +476,9 @@ class HomeViewModel @Inject constructor(
                     isBusy = false
                 )
             } finally {
-                isFallingBack.set(false)
+                // On a normal request, keep the gate until the service reports success/error.
+                // All terminal paths before requesting a start release it immediately.
+                if (!awaitingServiceResult) isFallingBack.set(false)
             }
         }
     }
