@@ -1,5 +1,6 @@
 package com.vpnproxy.ui.servers
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,11 +45,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.ping.LatencyBreakdown
+import com.vpnproxy.core.ping.LatencyCalculator
+import com.vpnproxy.core.ping.PingService
+import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ServerMetrics
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,12 +64,17 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class ServersListViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repository: SubscriptionRepository,
-    private val autoSwitcher: AutoSwitcher
+    private val autoSwitcher: AutoSwitcher,
+    private val pingService: PingService
 ) : ViewModel() {
 
     private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
     val servers: StateFlow<List<ScoredServer>> = _servers.asStateFlow()
+
+    private val _breakdown = MutableStateFlow<LatencyBreakdown?>(null)
+    val breakdown: StateFlow<LatencyBreakdown?> = _breakdown.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -76,12 +89,19 @@ class ServersListViewModel @Inject constructor(
             autoSwitcher.rankedServers.collect { _servers.value = it }
         }
         viewModelScope.launch { repository.refreshAll() }
+        viewModelScope.launch {
+            runCatching {
+                val region = PingTargets.detectRegion(context)
+                val multi = pingService.pingAll(
+                    targets = PingTargets.forRegion(region),
+                    region = region
+                )
+                _breakdown.value = LatencyCalculator.compute(multi.results)
+            }
+        }
     }
 }
 
-/**
- * Список серверов без Scaffold — для ModalBottomSheet на HomeScreen.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerListContent(
@@ -89,7 +109,9 @@ fun ServerListContent(
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
+    val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
+    var expandedKey by remember { mutableStateOf<String?>(null) }
 
     val filtered = remember(servers, query) {
         if (query.isBlank()) servers
@@ -100,7 +122,6 @@ fun ServerListContent(
         }
     }
 
-    // Duplicate subscription entries must not produce duplicate LazyColumn keys.
     val uniqueItems = remember(filtered) {
         filtered.distinctBy {
             "${it.config.address}|${it.config.port}|${it.config.uuid}"
@@ -158,9 +179,17 @@ fun ServerListContent(
                     }
                 ) { scoredServer ->
                     val s = scoredServer.config
+                    val key = ServerMetrics.serverKey(s.address, s.port, s.uuid)
+                    val expanded = expandedKey == key
+                    val scoreLabel = breakdown?.displayScore() ?: scoredServer.latencyMs.takeIf { it > 0 }?.toString() ?: "—"
+                    val scoreColor = rttColor(breakdown?.compositeScore?.toLong() ?: scoredServer.latencyMs)
+
                     Card(
-                        onClick = { onServerSelected(scoredServer) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                expandedKey = if (expanded) null else key
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant
                         )
@@ -173,8 +202,15 @@ fun ServerListContent(
                                     modifier = Modifier.weight(1f),
                                     maxLines = 1
                                 )
+                                Text(
+                                    text = if (scoreLabel == "N/A") "Slow" else "${scoreLabel}ms",
+                                    color = scoreColor,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
                                 AssistChip(
-                                    onClick = {},
+                                    onClick = { onServerSelected(scoredServer) },
                                     label = {
                                         Text(
                                             text = s.providerTag.ifBlank { "—" },
@@ -221,12 +257,53 @@ fun ServerListContent(
                                     )
                                 }
                             }
+
+                            if (expanded) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                val targets = breakdown?.perTarget.orEmpty()
+                                if (targets.isEmpty()) {
+                                    Text(
+                                        text = "Ping targets: waiting…",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                } else {
+                                    targets.forEach { t ->
+                                        val label = when {
+                                            t.success && t.rttMs != null -> "${t.targetId}: ${t.rttMs}ms"
+                                            else -> "${t.targetId}: fail"
+                                        }
+                                        val c = if (t.success && t.rttMs != null) rttColor(t.rttMs) else Color(0xFFE53935)
+                                        Text(
+                                            text = label,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = c,
+                                            modifier = Modifier.padding(vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Нажмите чип провайдера, чтобы подключиться",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun rttColor(rtt: Long): Color = when {
+    rtt <= 0L -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    rtt < 100 -> Color(0xFF43A047)
+    rtt < 300 -> Color(0xFFF9A825)
+    else -> Color(0xFFE53935)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -175,7 +175,6 @@ class SubscriptionRepository @Inject constructor(
                     throw c
                 } catch (e: Exception) {
                     logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
-                    // Оффлайн-режим: подгружаем кэш для этой подписки
                     val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
                     if (cached.isNotEmpty()) {
                         if (sub.url == PRIMARY_URL) _lastRefreshUsedCache.value = true
@@ -193,7 +192,12 @@ class SubscriptionRepository @Inject constructor(
                 "${it.address}|${it.port}|${it.uuid}"
             }
             saveToPrefs()
-            logCollector.info(TAG, "Total configs loaded: $totalConfigs (cached fallback applied)")
+            val sourceLabel = if (_lastRefreshUsedCache.value) {
+                "cached fallback applied"
+            } else {
+                "fetched from network"
+            }
+            logCollector.info(TAG, "Total configs loaded: $totalConfigs ($sourceLabel)")
             totalConfigs
         }
     }
