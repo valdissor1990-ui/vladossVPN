@@ -29,6 +29,17 @@ jobs:
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Bootstrap Gradle Wrapper JAR
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            mkdir -p gradle/wrapper
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+              https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+          fi
+
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
