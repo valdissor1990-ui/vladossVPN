@@ -17,11 +17,11 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -130,10 +130,8 @@ jobs:
             exit 1
           fi
 
-          # Gradle flavor+splits naming: app-<flavor>-<abi>-<buildType>.apk
           APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
 
-          # Fallback: any APK if universal missing (defensive)
           if [ ! -f "$APK" ]; then
             APK=$(find app/build/outputs/apk/direct/release -name 'app-direct-*-release.apk' | head -1)
           fi
@@ -175,13 +173,13 @@ jobs:
           cat release-meta/version.json
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: apk-direct-${{ steps.ver.outputs.name }}
           path: app/build/outputs/apk/direct/release/*.apk
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: aab-play-${{ steps.ver.outputs.name }}
           path: app/build/outputs/bundle/playRelease/*.aab
