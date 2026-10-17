@@ -519,7 +519,10 @@ class HomeViewModel @Inject constructor(
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
         viewModelScope.launch {
             try {
-                autoSwitcher.forceSelect(server)
+                if (!autoSwitcher.forceSelect(server)) {
+                    logCollector.warn(TAG, "Server selection ignored because another switch is in progress")
+                    return@launch
+                }
                 _uiState.value = _uiState.value.copy(
                     currentServerName = server.config.name,
                     currentRtt = server.latencyMs
