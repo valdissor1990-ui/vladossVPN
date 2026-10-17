@@ -35,8 +35,8 @@ class XrayCore @Inject constructor(
     companion object {
         private const val TAG = "XrayCore"
         private const val STOP_SETTLE_MS = 200L
-        private const val GEO_CONNECT_TIMEOUT_MS = 5_000
-        private const val GEO_READ_TIMEOUT_MS = 15_000
+        private const val GEO_CONNECT_TIMEOUT_MS = 2_000
+        private const val GEO_READ_TIMEOUT_MS = 3_000
 
         private const val GEOSITE_URL =
             "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat"
@@ -123,7 +123,7 @@ class XrayCore @Inject constructor(
                 temporary.delete()
             }
             Log.i(TAG, "Geo database ready: ${target.name} (${target.length()} bytes)")
-        } catch (t: Throwable) {
+        } catch (t: Exception) {
             temporary.delete()
             Log.w(TAG, "Optional geo database unavailable: ${target.name}; geo routing will be skipped if geosite.dat is missing", t)
         } finally {
