@@ -2,7 +2,6 @@ package com.vpnproxy.core.ping
 
 import android.content.Context
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +35,11 @@ class PingService @Inject constructor(
         )
         const val DEFAULT_TIMEOUT_MS = 3000
     }
+
+    internal var pingOneOverrideForTest: (suspend (PingTarget, Long) -> TargetResult)? = null
+
+    private fun monotonicNowMs(): Long = runCatching { SystemClock.elapsedRealtime() }
+        .getOrElse { System.nanoTime() / 1_000_000L }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(DEFAULT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -141,7 +145,7 @@ class PingService @Inject constructor(
         val semaphore = Semaphore(concurrency)
         val results = coroutineScope {
             targets.map { target ->
-                async(Dispatchers.IO) { semaphore.withPermit { pingOne(target, timeoutMs) } }
+                async(Dispatchers.IO) { semaphore.withPermit { pingOneOverrideForTest?.invoke(target, timeoutMs) ?: pingOne(target, timeoutMs) } }
             }.awaitAll()
         }
         return MultiPingResult(results, region, SystemClock.elapsedRealtime())
