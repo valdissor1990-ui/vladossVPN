@@ -172,13 +172,11 @@ class XrayCore @Inject constructor(
                 Log.i(TAG, "stopLoop OK")
                 true
             } catch (e: CancellationException) {
-                controller = null
-                running = false
+                // Preserve state: stopLoop may have been interrupted before cleanup completed.
                 throw e
             } catch (t: Throwable) {
-                Log.e(TAG, "stopLoop failed", t)
-                controller = null
-                running = false
+                // Retain the controller so a subsequent stop/start can retry cleanup.
+                Log.e(TAG, "stopLoop failed; retaining controller for retry", t)
                 false
             }
         }
