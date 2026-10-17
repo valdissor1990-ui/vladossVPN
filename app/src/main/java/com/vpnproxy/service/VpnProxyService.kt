@@ -76,7 +76,12 @@ class VpnProxyService : VpnService() {
             context = this,
             logCollector = logCollector,
             isVpnActive = { _isRunning.value },
+            isBusy = { startInProgress || autoSwitcher.isSwitching() },
             onReconnectRequested = {
+                if (startInProgress || autoSwitcher.isSwitching()) {
+                    logCollector.debug(TAG, "Network reconnect skipped — busy")
+                    return@NetworkAwareReconnector
+                }
                 val intent = Intent(this, VpnProxyService::class.java).apply {
                     action = ACTION_RECONNECT
                 }
@@ -93,8 +98,12 @@ class VpnProxyService : VpnService() {
         when (intent?.action) {
             ACTION_STOP -> stopVpn()
             ACTION_RECONNECT -> scope.launch {
+                if (startInProgress) {
+                    logCollector.debug(TAG, "RECONNECT skipped — startInProgress")
+                    return@launch
+                }
                 stopVpnInternal()
-                delay(400)
+                delay(500)
                 startVpn()
             }
             ACTION_START -> startVpn()
@@ -138,6 +147,10 @@ class VpnProxyService : VpnService() {
                         stopSelf()
                     }
                 }
+
+                // Гарантированно освобождаем :10808 перед новым startLoop
+                xrayCore.stop()
+                delay(200)
 
                 val pfd = tunnelManager.establishTun(Builder())
                 if (pfd == null) {
