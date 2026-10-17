@@ -64,6 +64,9 @@ class RealPingExecutor @Inject constructor() : PingExecutor {
         return result ?: TargetResult(target.id, null, false, "outer_timeout", timestamp)
     }
 
+    // TODO(tech-debt): InetAddress.getAllByName is not reliably interrupted by Future.cancel(true).
+    // The pool is capped at four threads to prevent unbounded growth, but a stuck DNS lookup
+    // can occupy a worker until the system resolver times out. Revisit with OkHttp Dns or a custom resolver.
     private suspend fun resolveIpv4(host: String, timeoutMs: Long): DnsResult =
         withContext(Dispatchers.IO) {
             val future = DNS_EXECUTOR.submit(Callable {

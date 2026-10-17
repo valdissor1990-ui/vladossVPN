@@ -20,13 +20,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class PingService private constructor(private val executor: PingExecutor) {
-    @Inject
-    constructor() : this(RealPingExecutor())
-
-    // Secondary constructor is a test seam; production Hilt injection uses the no-arg constructor.
-    internal constructor(executor: PingExecutor, testOnly: Unit = Unit) : this(executor)
-
+class PingService @Inject constructor(
+    private val executor: PingExecutor
+) {
     companion object {
         val HTTP_TARGETS = listOf(
             "https://www.google.com/generate_204",
