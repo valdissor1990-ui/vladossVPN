@@ -53,10 +53,6 @@ class TunnelManager @Inject constructor(
                 .setSession("VPNProxy")
                 .setBlocking(true)
 
-            try {
-                builder.addDisallowedApplication(context.packageName)
-            } catch (_: Exception) { /* ignore */ }
-
             // Kill-switch style: no underlying network fallback
             builder.setUnderlyingNetworks(null)
 

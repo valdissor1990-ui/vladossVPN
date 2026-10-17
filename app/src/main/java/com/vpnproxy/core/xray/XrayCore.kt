@@ -191,7 +191,9 @@ class XrayCore @Inject constructor(
     }
 
     fun buildClientConfig(serverConfig: ParsedConfig, socksPort: Int): String {
-        val outbound = JSONObject(serverConfig.toXrayOutbound().toString())
+        val outbound = JSONObject(serverConfig.toXrayOutbound().toString()).apply {
+            if (!has("tag")) put("tag", "proxy")
+        }
         return JSONObject().apply {
             put("log", JSONObject().put("loglevel", "warning"))
             put("inbounds", JSONArray().put(JSONObject().apply {
@@ -208,10 +210,23 @@ class XrayCore @Inject constructor(
                     put("destOverride", JSONArray().put("http").put("tls").put("quic"))
                 })
             }))
-            put("outbounds", JSONArray().put(outbound))
+            put("outbounds", JSONArray()
+                .put(outbound)
+                .put(JSONObject().put("tag", "block").put("protocol", "blackhole"))
+                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
             put("routing", JSONObject().apply {
                 put("domainStrategy", "IPIfNonMatch")
-                put("rules", JSONArray())
+                put("rules", JSONArray()
+                    .put(JSONObject().apply {
+                        put("type", "field")
+                        put("domain", JSONArray().put("geosite:category-ads-all"))
+                        put("outboundTag", "block")
+                    })
+                    .put(JSONObject().apply {
+                        put("type", "field")
+                        put("domain", JSONArray().put("geosite:private"))
+                        put("outboundTag", "direct")
+                    }))
             })
         }.toString()
     }

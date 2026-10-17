@@ -1,5 +1,6 @@
 package com.vpnproxy.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +21,7 @@ import com.vpnproxy.ui.update.UpdateViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onNavigateToSplitTunnel: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel()
 ) {
@@ -57,6 +59,18 @@ fun SettingsScreen(
                     Text("Блокировать трафик при разрыве туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 Switch(checked = killSwitch, onCheckedChange = { viewModel.setKillSwitch(it) })
+            }
+
+            Text("СЕТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onNavigateToSplitTunnel).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Обход VPN", style = MaterialTheme.typography.bodyLarge)
+                    Text("Выбрать приложения для туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                TextButton(onClick = onNavigateToSplitTunnel) { Text("Настроить") }
             }
 
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))

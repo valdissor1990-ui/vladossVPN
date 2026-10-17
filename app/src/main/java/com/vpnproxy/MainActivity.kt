@@ -27,6 +27,7 @@ import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
 import com.vpnproxy.ui.servers.ServersListScreen
 import com.vpnproxy.ui.settings.SettingsScreen
+import com.vpnproxy.ui.settings.SplitTunnelScreen
 import com.vpnproxy.ui.subscriptions.SubscriptionsScreen
 import com.vpnproxy.ui.theme.VPNProxyTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -131,7 +132,14 @@ private fun VPNProxyNavHost(
         }
 
         composable(Route.Settings.path) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToSplitTunnel = { navController.navigate(Route.SplitTunnel.path) }
+            )
+        }
+
+        composable(Route.SplitTunnel.path) {
+            SplitTunnelScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Route.Debug.path) {
@@ -145,5 +153,6 @@ sealed class Route(val path: String) {
     data object Subscriptions : Route("subscriptions")
     data object Servers : Route("servers")
     data object Settings : Route("settings")
+    data object SplitTunnel : Route("split-tunnel")
     data object Debug : Route("debug")
 }

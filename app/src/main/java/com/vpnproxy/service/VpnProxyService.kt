@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
 import com.vpnproxy.core.network.NetworkAwareReconnector
+import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.xray.XrayCore
@@ -54,6 +55,7 @@ class VpnProxyService : VpnService() {
     }
 
     @Inject lateinit var tunnelManager: TunnelManager
+    @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var xrayCore: XrayCore
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
@@ -157,7 +159,10 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
-                val pfd = tunnelManager.establishTun(Builder())
+                val builder = Builder()
+                // Apply per-app policy before establish(); SplitTunnelManager always excludes this app.
+                splitTunnelManager.applyRules(builder, this@VpnProxyService)
+                val pfd = tunnelManager.establishTun(builder)
                 if (pfd == null) {
                     val reason = "TUN establishment failed"
                     logCollector.error(TAG, reason)
