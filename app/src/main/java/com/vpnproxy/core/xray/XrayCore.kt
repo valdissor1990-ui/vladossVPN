@@ -5,6 +5,7 @@ import android.util.Log
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import com.vpnproxy.logging.LogCollectorHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -85,6 +86,8 @@ class XrayCore @Inject constructor(
                     try {
                         it.stopLoop()
                         Log.i(TAG, "pre-start stopLoop OK")
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (t: Throwable) {
                         Log.w(TAG, "pre-start stopLoop: ${t.message}")
                     }
@@ -101,6 +104,11 @@ class XrayCore @Inject constructor(
                 running = true
                 Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
                 true
+            } catch (e: CancellationException) {
+                try { ctrl?.stopLoop() } catch (_: Throwable) {}
+                controller = null
+                running = false
+                throw e
             } catch (t: Throwable) {
                 val masked = maskConfigForLog(configJson)
                 Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
@@ -138,6 +146,10 @@ class XrayCore @Inject constructor(
                 delay(STOP_SETTLE_MS)
                 Log.i(TAG, "stopLoop OK")
                 true
+            } catch (e: CancellationException) {
+                controller = null
+                running = false
+                throw e
             } catch (t: Throwable) {
                 Log.e(TAG, "stopLoop failed", t)
                 controller = null
