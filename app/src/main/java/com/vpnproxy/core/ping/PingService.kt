@@ -20,10 +20,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class PingService @Inject constructor(
-    private val executor: PingExecutor,
-    private val regionDetector: RegionDetector
-) {
+class PingService @Inject constructor() {
+    internal constructor(executor: PingExecutor) : this() {
+        this.executor = executor
+    }
+
     companion object {
         val HTTP_TARGETS = listOf(
             "https://www.google.com/generate_204",
@@ -32,6 +33,9 @@ class PingService @Inject constructor(
         )
         const val DEFAULT_TIMEOUT_MS = 3000
     }
+
+    // Internal constructor injection is a test seam; production always uses RealPingExecutor.
+    private var executor: PingExecutor = RealPingExecutor()
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(DEFAULT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -131,19 +135,18 @@ class PingService @Inject constructor(
     suspend fun pingAllTargets(): List<PingResult> = HTTP_TARGETS.map { httpPing(it, retries = 0) }
 
     suspend fun pingAll(
-        targets: List<PingTarget> = PingTargets.forRegion(regionDetector.detect()),
+        targets: List<PingTarget>,
         concurrency: Int = 10,
-        timeoutMs: Long = 2000L
+        timeoutMs: Long = 2000L,
+        region: PingRegion = targets.firstOrNull()?.regions?.singleOrNull() ?: PingRegion.GLOBAL
     ): MultiPingResult {
         require(concurrency > 0) { "concurrency must be greater than zero" }
         require(timeoutMs > 0) { "timeoutMs must be greater than zero" }
-        val region = targets.firstOrNull()?.regions?.singleOrNull() ?: regionDetector.detect()
         val semaphore = Semaphore(concurrency)
         val results = coroutineScope {
             targets.map { target ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        // This timeout also protects callers using a cancellable fake executor in unit tests.
                         withTimeoutOrNull(timeoutMs) { executor.ping(target, timeoutMs) }
                             ?: TargetResult(target.id, null, false, "timeout", monotonicNowMs())
                     }
