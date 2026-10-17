@@ -1,8 +1,6 @@
 package com.vpnproxy.core.ping
 
-import android.content.Context
 import android.os.SystemClock
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -15,8 +13,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -25,7 +21,8 @@ import javax.inject.Singleton
 
 @Singleton
 class PingService @Inject constructor(
-    @ApplicationContext private val context: Context
+    private val executor: PingExecutor,
+    private val regionDetector: RegionDetector
 ) {
     companion object {
         val HTTP_TARGETS = listOf(
@@ -35,11 +32,6 @@ class PingService @Inject constructor(
         )
         const val DEFAULT_TIMEOUT_MS = 3000
     }
-
-    internal var pingOneOverrideForTest: (suspend (PingTarget, Long) -> TargetResult)? = null
-
-    private fun monotonicNowMs(): Long = runCatching { SystemClock.elapsedRealtime() }
-        .getOrElse { System.nanoTime() / 1_000_000L }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(DEFAULT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -58,6 +50,10 @@ class PingService @Inject constructor(
 
     enum class Method { ICMP, HTTP, TCP }
 
+    private fun monotonicNowMs(): Long =
+        runCatching { SystemClock.elapsedRealtime() }
+            .getOrElse { System.nanoTime() / 1_000_000L }
+
     suspend fun httpPing(target: String = HTTP_TARGETS[0], retries: Int = 2): PingResult =
         withContext(Dispatchers.IO) {
             var lastResult: PingResult? = null
@@ -71,17 +67,18 @@ class PingService @Inject constructor(
         }
 
     private suspend fun singleHttpPing(target: String): PingResult = withContext(Dispatchers.IO) {
-        val start = SystemClock.elapsedRealtime()
+        val start = monotonicNowMs()
         try {
             val request = Request.Builder().url(target).head()
                 .header("User-Agent", "VPNProxy/1.0")
                 .header("Cache-Control", "no-cache").build()
             httpClient.newCall(request).execute().use { response ->
-                val rtt = SystemClock.elapsedRealtime() - start
+                val rtt = monotonicNowMs() - start
                 val ok = response.isSuccessful || response.code == 204
                 PingResult(target, rtt, ok, Method.HTTP, if (ok) null else "HTTP ${response.code}")
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             PingResult(target, -1, false, Method.HTTP, e.message ?: e::class.simpleName)
         }
     }
@@ -120,11 +117,11 @@ class PingService @Inject constructor(
 
     suspend fun tcpPing(host: String, port: Int, timeoutMs: Int = DEFAULT_TIMEOUT_MS): PingResult =
         withContext(Dispatchers.IO) {
-            val start = SystemClock.elapsedRealtime()
+            val start = monotonicNowMs()
             try {
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(host, port), timeoutMs.coerceAtLeast(1))
-                    PingResult("$host:$port", SystemClock.elapsedRealtime() - start, true, Method.TCP)
+                    PingResult("$host:$port", monotonicNowMs() - start, true, Method.TCP)
                 }
             } catch (e: Exception) {
                 PingResult("$host:$port", -1, false, Method.TCP, e.message)
@@ -134,55 +131,25 @@ class PingService @Inject constructor(
     suspend fun pingAllTargets(): List<PingResult> = HTTP_TARGETS.map { httpPing(it, retries = 0) }
 
     suspend fun pingAll(
-        targets: List<PingTarget> = PingTargets.forRegion(PingTargets.detectRegion(context)),
+        targets: List<PingTarget> = PingTargets.forRegion(regionDetector.detect()),
         concurrency: Int = 10,
         timeoutMs: Long = 2000L
     ): MultiPingResult {
-        val region = PingTargets.detectRegion(context)
-        if (targets.isEmpty()) return MultiPingResult(emptyList(), region, SystemClock.elapsedRealtime())
         require(concurrency > 0) { "concurrency must be greater than zero" }
         require(timeoutMs > 0) { "timeoutMs must be greater than zero" }
+        val region = targets.firstOrNull()?.regions?.singleOrNull() ?: regionDetector.detect()
         val semaphore = Semaphore(concurrency)
         val results = coroutineScope {
             targets.map { target ->
-                async(Dispatchers.IO) { semaphore.withPermit { pingOneOverrideForTest?.invoke(target, timeoutMs) ?: pingOne(target, timeoutMs) } }
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        // This timeout also protects callers using a cancellable fake executor in unit tests.
+                        withTimeoutOrNull(timeoutMs) { executor.ping(target, timeoutMs) }
+                            ?: TargetResult(target.id, null, false, "timeout", monotonicNowMs())
+                    }
+                }
             }.awaitAll()
         }
-        return MultiPingResult(results, region, SystemClock.elapsedRealtime())
-    }
-
-    private suspend fun pingOne(target: PingTarget, timeoutMs: Long): TargetResult {
-        val timestamp = SystemClock.elapsedRealtime()
-        return try {
-            val result = withTimeoutOrNull(timeoutMs) {
-                val addresses = withTimeoutOrNull(1000L) {
-                    withContext(Dispatchers.IO) {
-                        runCatching { InetAddress.getAllByName(target.host) }.getOrElse { emptyArray() }
-                    }
-                }
-                val address = addresses?.firstOrNull { it is Inet4Address } as? Inet4Address
-                if (address == null) {
-                    TargetResult(target.id, null, false, if (addresses == null) "dns_timeout" else "dns_fail", timestamp)
-                } else {
-                    var socket: Socket? = null
-                    try {
-                        socket = Socket()
-                        val start = SystemClock.elapsedRealtime()
-                        socket.connect(InetSocketAddress(address, target.port), timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt())
-                        TargetResult(target.id, SystemClock.elapsedRealtime() - start, true, timestamp = timestamp)
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        TargetResult(target.id, null, false, e.message ?: "connect_fail", timestamp)
-                    } finally {
-                        runCatching { socket?.close() }
-                    }
-                }
-            }
-            result ?: TargetResult(target.id, null, false, "timeout", timestamp)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            TargetResult(target.id, null, false, e.message ?: e::class.simpleName ?: "error", timestamp)
-        }
+        return MultiPingResult(results, region, monotonicNowMs())
     }
 }
