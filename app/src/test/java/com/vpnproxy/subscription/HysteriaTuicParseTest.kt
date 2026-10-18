@@ -36,6 +36,17 @@ class HysteriaTuicParseTest {
     }
 
     @Test
+    fun parsesHy2AliasAndPreservesEncodedPassword() {
+        val cfg = parser.parseHysteria2Uri(
+            "hy2://secret%3Apass@hy2.example.com:443?sni=hy2.example.com#Alias"
+        )
+        assertNotNull(cfg)
+        assertEquals("secret:pass", cfg!!.uuid)
+        assertEquals("hysteria2", cfg.transport)
+        assertEquals("Alias", cfg.name)
+    }
+
+    @Test
     fun parseMixedLinesIncludesHy2AndTuic() {
         val text = """
             hysteria2://pwd@hy2.example.com:443?sni=hy2.example.com#HY2
