@@ -2,7 +2,6 @@ package com.vpnproxy.core.singbox
 
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -13,7 +12,7 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
-    fun build(config: ParsedConfig): String = Json.encodeToString(buildJsonObject {
+    fun build(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject { put("level", "warn") })
         put("inbounds", buildJsonArray {
             add(buildJsonObject {
@@ -27,7 +26,7 @@ object SingboxConfigBuilder {
             add(buildOutbound(config))
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
         })
-    })
+    }.toString()
 
     fun buildOutbound(config: ParsedConfig): JsonObject {
         require(config.requiresSingBox()) { "Sing-box outbound requires Hysteria2 or TUIC" }
