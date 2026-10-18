@@ -175,8 +175,8 @@ class SingboxProxyService : Service() {
             } ?: error("libbox service start() API not found"), created)
             coreService = created
             var listenerReady = false
-            repeat(50) {
-                if (listenerReady) return@repeat
+            for (attempt in 0 until 50) {
+                if (listenerReady) break
                 try {
                     Socket().use { socket ->
                         socket.connect(InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT), 250)
