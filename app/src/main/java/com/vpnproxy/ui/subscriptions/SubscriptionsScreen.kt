@@ -135,6 +135,7 @@ fun SubscriptionsScreen(
                             }
                         }
                         Text(text = sub.url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(text = "Тег: ${sub.displayTag()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.height(6.dp))
                         Text(text = "Серверов: $countForSub", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
                     }
@@ -146,6 +147,7 @@ fun SubscriptionsScreen(
     if (showAddDialog) {
         var url by remember { mutableStateOf("") }
         var name by remember { mutableStateOf("") }
+        var tag by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
             title = { Text("Добавить подписку") },
@@ -154,10 +156,12 @@ fun SubscriptionsScreen(
                     OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("URL подписки") }, singleLine = false, maxLines = 3, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Название (опционально)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = tag, onValueChange = { tag = it }, label = { Text("Тег (опционально)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
             },
             confirmButton = {
-                Button(onClick = { viewModel.addSubscription(url.trim(), name.trim()); showAddDialog = false }, enabled = url.isNotBlank()) { Text("Добавить") }
+                Button(onClick = { viewModel.addSubscription(url.trim(), name.trim(), tag.trim()); showAddDialog = false }, enabled = url.isNotBlank()) { Text("Добавить") }
             },
             dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Отмена") } }
         )
