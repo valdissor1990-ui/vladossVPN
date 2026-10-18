@@ -75,6 +75,7 @@ class VpnProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        autoSwitcher.attachVpnService(this)
         logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
 
         networkReconnector = NetworkAwareReconnector(
@@ -288,6 +289,7 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onDestroy() {
+        autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
         watchdogJob?.cancel()
@@ -344,5 +346,11 @@ class VpnProxyService : VpnService() {
     private fun updateNotification(state: String) {
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(state))
+    }
+
+    /** Updates the persistent VPN notification when repeated switches indicate an unstable network. */
+    fun showUnstableNetworkNotification() {
+        logCollector.warn(TAG, "Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
+        updateNotification("Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
     }
 }
