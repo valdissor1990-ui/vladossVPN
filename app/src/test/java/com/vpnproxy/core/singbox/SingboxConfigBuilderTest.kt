@@ -48,6 +48,8 @@ class SingboxConfigBuilderTest {
         assertEquals("hy2-secret", outbound["password"]!!.jsonPrimitive.content)
         assertEquals("sni.example.org", outbound["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
         assertEquals("salamander", outbound["obfs"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("obfs-secret", outbound["obfs"]!!.jsonObject["password"]!!.jsonPrimitive.content)
+        assertEquals("h3", outbound["tls"]!!.jsonObject["alpn"]!!.jsonArray.first().jsonPrimitive.content)
         assertFalse(outbound["tls"]!!.jsonObject["insecure"]!!.jsonPrimitive.boolean)
     }
 
@@ -61,6 +63,7 @@ class SingboxConfigBuilderTest {
         assertEquals("11111111-1111-1111-1111-111111111111", outbound["uuid"]!!.jsonPrimitive.content)
         assertEquals("tuic-secret", outbound["password"]!!.jsonPrimitive.content)
         assertEquals("cubic", outbound["congestion_control"]!!.jsonPrimitive.content)
+        assertEquals("native", outbound["udp_relay_mode"]!!.jsonPrimitive.content)
         assertTrue(outbound["tls"]!!.jsonObject["alpn"]!!.jsonArray.isNotEmpty())
     }
     @Test
