@@ -76,10 +76,16 @@ class VpnProxyService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "VpnProxyService.onCreate entered")
         createNotificationChannel()
-        autoSwitcher.attachVpnService(this)
-        singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
-        logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
+        try {
+            autoSwitcher.attachVpnService(this)
+            singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
+        } catch (t: Throwable) {
+            Log.e(TAG, "VpnProxyService.onCreate failed during Sing-box/service initialization", t)
+            throw t
+        }
 
         networkReconnector = NetworkAwareReconnector(
             context = this,
@@ -110,6 +116,7 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand: action=${intent?.action}, startId=$startId, flags=$flags")
         when (intent?.action) {
             ACTION_STOP -> stopVpn()
             ACTION_RECONNECT -> scope.launch {
@@ -141,6 +148,7 @@ class VpnProxyService : VpnService() {
     }
 
     private fun startVpn() {
+        Log.i(TAG, "startVpn requested: startInProgress=$startInProgress isRunning=${_isRunning.value}")
         if (startInProgress || _isRunning.value) {
             logCollector.debug(TAG,
                 "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
