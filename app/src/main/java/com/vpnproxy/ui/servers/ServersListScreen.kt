@@ -310,17 +310,7 @@ fun ServerListContent(
 
                     ServerGridCard(
                         server = scoredServer,
-                        onClick = {
-                            if (scoredServer.config.isUnsupportedProtocol) {
-                                Toast.makeText(
-                                    context,
-                                    "Протокол Hysteria2/TUIC требует ядра Sing-box и пока не поддерживается для подключения",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } else {
-                                onServerSelected(scoredServer)
-                            }
-                        },
+                        onClick = { onServerSelected(scoredServer) },
                         scoreOverride = scoreLabel,
                         scoreColorOverride = scoreColor,
                         onDetailsClick = { detailsServer = scoredServer }
