@@ -28,13 +28,46 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    fun buildOutbound(config: ParsedConfig): JsonObject {
+    /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
+    fun buildMulti(configs: List<ParsedConfig>, ports: List<Int>): String {
+        require(configs.isNotEmpty()) { "At least one Sing-box config is required" }
+        require(configs.size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
+        return buildJsonObject {
+            put("log", buildJsonObject { put("level", "warn") })
+            put("inbounds", buildJsonArray {
+                configs.forEachIndexed { index, _ ->
+                    add(buildJsonObject {
+                        put("type", "mixed")
+                        put("tag", "mixed-in-$index")
+                        put("listen", "127.0.0.1")
+                        put("listen_port", ports[index])
+                    })
+                }
+            })
+            put("outbounds", buildJsonArray {
+                configs.forEachIndexed { index, config -> add(buildOutbound(config, "proxy-$index")) }
+                add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
+            })
+            put("route", buildJsonObject {
+                put("rules", buildJsonArray {
+                    configs.forEachIndexed { index, _ ->
+                        add(buildJsonObject {
+                            put("inbound", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("mixed-in-$index")) })
+                            put("outbound", "proxy-$index")
+                        })
+                    }
+                })
+            })
+        }.toString()
+    }
+
+    fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
         require(config.requiresSingBox()) { "Sing-box outbound requires Hysteria2 or TUIC" }
         return buildJsonObject {
             val isHy2 = config.transport.equals("hysteria2", true) ||
                 config.transport.equals("hy2", true)
             put("type", if (isHy2) "hysteria2" else "tuic")
-            put("tag", "proxy")
+            put("tag", tag)
             put("server", config.address)
             put("server_port", config.port)
             if (isHy2) {
