@@ -52,6 +52,38 @@ class XrayCore @Inject constructor(
     @Volatile
     private var running = false
 
+    private val sessionLock = Any()
+    @Volatile private var deepProbeLease = false
+    @Volatile private var vpnStartupInProgress = false
+
+    /** Atomically reserves the singleton JNI core for a temporary deep-probe session. */
+    fun tryAcquireDeepProbeLease(): Boolean = synchronized(sessionLock) {
+        if (running || vpnStartupInProgress || deepProbeLease) false
+        else {
+            deepProbeLease = true
+            true
+        }
+    }
+
+    fun releaseDeepProbeLease() {
+        synchronized(sessionLock) { deepProbeLease = false }
+    }
+
+    /** Prevents a VPN start from racing with a deep-probe JNI session. */
+    fun beginVpnStartup(): Boolean = synchronized(sessionLock) {
+        if (deepProbeLease || vpnStartupInProgress) false
+        else {
+            vpnStartupInProgress = true
+            true
+        }
+    }
+
+    fun endVpnStartup() {
+        synchronized(sessionLock) { vpnStartupInProgress = false }
+    }
+
+    fun isDeepProbeActive(): Boolean = deepProbeLease
+
     private val callback = object : CoreCallbackHandler {
         override fun startup(): Long = 0L
         override fun shutdown(): Long = 0L
