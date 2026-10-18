@@ -81,7 +81,7 @@ class AutoSwitcher @Inject constructor(
 
     fun currentState(): AutoSwitchState = state
 
-    /** Keeps only a weakly-owned service reference in the existing VPN service lifecycle. */
+    /** Tracks the existing VPN service only for its active lifecycle. */
     fun attachVpnService(service: VpnService) {
         vpnService = service
         logCollector.info(TAG, "VpnService attached for protected direct probes")
@@ -301,6 +301,7 @@ class AutoSwitcher @Inject constructor(
                     logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
                 }
             }
+            vpnService?.reconnectAfterSlowServerSwitch()
             logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
         } else {
             logCollector.warn(TAG, "Slow-server switch could not select a different server")
