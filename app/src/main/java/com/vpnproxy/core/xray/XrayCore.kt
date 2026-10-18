@@ -265,8 +265,19 @@ class XrayCore @Inject constructor(
     }
 
     fun buildClientConfig(serverConfig: ParsedConfig, socksPort: Int): String {
-        val outbound = JSONObject(serverConfig.toXrayOutbound().toString()).apply {
-            if (!has("tag")) put("tag", "proxy")
+        val outbound = if (serverConfig.requiresSingBox()) {
+            JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "socks")
+                .put("settings", JSONObject().put("servers", JSONArray().put(
+                    JSONObject()
+                        .put("address", "127.0.0.1")
+                        .put("port", com.vpnproxy.core.singbox.SingboxConfigBuilder.PROXY_PORT)
+                )))
+        } else {
+            JSONObject(serverConfig.toXrayOutbound().toString()).apply {
+                if (!has("tag")) put("tag", "proxy")
+            }
         }
         return JSONObject().apply {
             put("log", JSONObject().put("loglevel", "warning"))
