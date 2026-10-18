@@ -20,7 +20,12 @@ class SplitTunnelManager @Inject constructor(
         private const val TAG = "SplitTunnelManager"
     }
 
-    suspend fun applyRules(builder: VpnService.Builder, context: Context) {
+    suspend fun applyRules(
+        builder: VpnService.Builder,
+        context: Context,
+        optionIncludes: Set<String> = emptySet(),
+        optionExcludes: Set<String> = emptySet()
+    ) {
         val stored = store.readRules()
         val selected = (stored.selectedPackages - context.packageName)
             .filterTo(linkedSetOf()) { packageName ->
@@ -36,24 +41,45 @@ class SplitTunnelManager @Inject constructor(
             store.saveRules(stored.copy(selectedPackages = selected))
         }
 
+        val includes = (selected + optionIncludes) - optionExcludes - context.packageName
+        val excludes = selected + optionExcludes + context.packageName
         when (stored.mode) {
             SplitTunnelMode.ALL_APPS -> {
-                // Android defaults to all apps; only exclude this VPN app.
-                builder.addDisallowedApplication(context.packageName)
+                if (optionIncludes.isNotEmpty()) {
+                    // Android permits either an allow-list or a deny-list on a VPN builder,
+                    // never both. Explicit Sing-box includes therefore select allow-list mode.
+                    addAllowed(builder, includes)
+                } else {
+                    addDisallowed(builder, excludes)
+                }
             }
             SplitTunnelMode.EXCLUDE_SELECTED -> {
-                builder.addDisallowedApplication(context.packageName)
-                selected.forEach(builder::addDisallowedApplication)
+                check(optionIncludes.isEmpty()) {
+                    "Conflicting per-app policies: EXCLUDE_SELECTED cannot be combined with TunOptions.includePackage on Android"
+                }
+                addDisallowed(builder, excludes)
             }
             SplitTunnelMode.INCLUDE_SELECTED -> {
-                // An empty allow-list can fall back to the default all-apps behavior.
-                // Fail closed instead of unexpectedly sending every app through VPN.
-                check(selected.isNotEmpty()) {
+                check(includes.isNotEmpty()) {
                     "Split tunneling mode 'Only selected apps' requires at least one installed app"
                 }
-                selected.forEach(builder::addAllowedApplication)
+                addAllowed(builder, includes)
             }
         }
-        Log.i(TAG, "Applied split-tunnel mode=${stored.mode}, selected=${selected.size}")
+        Log.i(TAG, "Applied split-tunnel mode=${stored.mode}, selected=${selected.size}, tunIncludes=${optionIncludes.size}, tunExcludes=${optionExcludes.size}")
+    }
+
+    private fun addAllowed(builder: VpnService.Builder, packages: Set<String>) {
+        packages.forEach { packageName ->
+            try { builder.addAllowedApplication(packageName) }
+            catch (e: PackageManager.NameNotFoundException) { Log.w(TAG, "Unknown included package: $packageName", e) }
+        }
+    }
+
+    private fun addDisallowed(builder: VpnService.Builder, packages: Set<String>) {
+        packages.forEach { packageName ->
+            try { builder.addDisallowedApplication(packageName) }
+            catch (e: PackageManager.NameNotFoundException) { Log.w(TAG, "Unknown excluded package: $packageName", e) }
+        }
     }
 }

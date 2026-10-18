@@ -100,27 +100,6 @@ class SingBoxPlatform(
         return pfd.fd
     }
 
-    private fun applyOptionPackageRules(builder: VpnService.Builder, options: TunOptions) {
-        val includes = mutableSetOf<String>()
-        val excludes = mutableSetOf<String>()
-        val includeIterator = options.includePackage
-        while (includeIterator.hasNext()) includes += includeIterator.next()
-        val excludeIterator = options.excludePackage
-        while (excludeIterator.hasNext()) excludes += excludeIterator.next()
-        includes -= context.packageName
-        excludes += context.packageName
-        // These lists are Sing-box's own TunOptions routing directives. Invalid package
-        // names are logged and skipped, rather than aborting VPN startup.
-        includes.filterNot { it in excludes }.forEach { packageName ->
-            try { builder.addAllowedApplication(packageName) }
-            catch (e: PackageManager.NameNotFoundException) { Log.w(TAG, "Unknown included package: $packageName", e) }
-        }
-        excludes.forEach { packageName ->
-            try { builder.addDisallowedApplication(packageName) }
-            catch (e: PackageManager.NameNotFoundException) { Log.w(TAG, "Unknown excluded package: $packageName", e) }
-        }
-    }
-
     fun closeTun() {
         runCatching { tunDescriptor?.close() }.onFailure { Log.w(TAG, "Failed to close TUN", it) }
         tunDescriptor = null
