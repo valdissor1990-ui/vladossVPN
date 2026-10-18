@@ -36,7 +36,17 @@ fun ServerGridCard(
     val c = server.config
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
-    val protocol = c.transport.uppercase().ifBlank { "VLESS" }
+    val transportKey = c.transport.lowercase()
+    val protocol = when (transportKey) {
+        "hysteria2", "hy2" -> "HY2"
+        "tuic" -> "TUIC"
+        else -> c.transport.uppercase().ifBlank { "VLESS" }
+    }
+    val protocolColor = when (protocol) {
+        "HY2" -> Color(0xFFFF9800)
+        "TUIC" -> Color(0xFFFFC107)
+        else -> MaterialTheme.colorScheme.primary
+    }
     val scoreLabel = scoreOverride ?: "—"
     val score = scoreLabel.removeSuffix("ms").trim().toDoubleOrNull()
     val scoreColor = scoreColorOverride ?: when {
@@ -80,13 +90,14 @@ fun ServerGridCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = MaterialTheme.shapes.small,
-                    color = MaterialTheme.colorScheme.primaryContainer
+                    color = protocolColor.copy(alpha = 0.25f)
                 ) {
                     Text(
                         text = protocol,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        color = protocolColor
                     )
                 }
                 Spacer(Modifier.weight(1f))
