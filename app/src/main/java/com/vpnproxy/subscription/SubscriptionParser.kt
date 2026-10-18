@@ -38,7 +38,14 @@ class SubscriptionParser @Inject constructor(
         val shortId: String?,
         val flow: String?,
         val name: String,
-        val providerTag: String = ""
+        val providerTag: String = "",
+        val password: String? = null,
+        val insecure: Boolean = false,
+        val alpn: List<String> = emptyList(),
+        val obfsType: String? = null,
+        val obfsPassword: String? = null,
+        val pinSHA256: String? = null,
+        val congestionControl: String = "bbr"
     ) {
         fun isValid(): Boolean {
             if (uuid.isBlank() || address.isBlank()) return false
@@ -169,7 +176,7 @@ class SubscriptionParser @Inject constructor(
         return try {
             val normalized = uri.replaceFirst("hy2://", "hysteria2://")
             val parsed = URI(normalized)
-            val password = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
+            val password = parsed.rawUserInfo?.takeIf { it.isNotBlank() }?.let(::decodeUriComponent) ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
             val params = parseUriQuery(parsed.rawQuery)
@@ -180,7 +187,13 @@ class SubscriptionParser @Inject constructor(
                 transport = "hysteria2", security = "tls", sni = sni,
                 path = null, host = null, mode = null, fingerprint = null,
                 publicKey = null, shortId = null, flow = null,
-                name = name, providerTag = providerTag
+                name = name, providerTag = providerTag,
+                password = password,
+                insecure = params["insecure"].isTruthy(),
+                alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
+                obfsType = params["obfs"] ?: params["obfs-type"],
+                obfsPassword = params["obfs-password"],
+                pinSHA256 = params["pinSHA256"] ?: params["pin_sha256"]
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
@@ -192,8 +205,11 @@ class SubscriptionParser @Inject constructor(
     fun parseTuicUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
             val parsed = URI(uri)
-            val userInfo = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
-            val uuid = userInfo.substringBefore(":").takeIf { it.isNotBlank() } ?: return null
+            val rawUserInfo = parsed.rawUserInfo?.takeIf { it.isNotBlank() } ?: return null
+            val rawUuid = rawUserInfo.substringBefore(":").takeIf { it.isNotBlank() } ?: return null
+            val rawPassword = rawUserInfo.substringAfter(":", missingDelimiterValue = "")
+            val uuid = decodeUriComponent(rawUuid)
+            val password = decodeUriComponent(rawPassword)
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
             val params = parseUriQuery(parsed.rawQuery)
@@ -204,7 +220,13 @@ class SubscriptionParser @Inject constructor(
                 transport = "tuic", security = "tls", sni = sni,
                 path = null, host = null, mode = null, fingerprint = null,
                 publicKey = null, shortId = null, flow = null,
-                name = name, providerTag = providerTag
+                name = name, providerTag = providerTag,
+                password = password,
+                insecure = params["insecure"].isTruthy(),
+                alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
+                pinSHA256 = params["pinSHA256"] ?: params["pin_sha256"],
+                congestionControl = (params["congestion_control"] ?: params["congestionControl"] ?: "bbr")
+                    .takeIf { it in setOf("bbr", "cubic", "new_reno") } ?: "bbr"
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
@@ -212,6 +234,9 @@ class SubscriptionParser @Inject constructor(
             null
         }
     }
+
+    private fun String?.isTruthy(): Boolean =
+        this?.lowercase() in setOf("1", "true", "yes", "on")
 
     /**
      * Parse query components with java.net.URI so these protocol parsers also work
