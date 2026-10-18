@@ -78,7 +78,7 @@ class VpnProxyService : VpnService() {
         super.onCreate()
         createNotificationChannel()
         autoSwitcher.attachVpnService(this)
-        singBoxCore = SingBoxCore(this, SingBoxPlatform(this, splitTunnelManager))
+        singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
         logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
 
         networkReconnector = NetworkAwareReconnector(
