@@ -264,15 +264,29 @@ class SubscriptionRepository @Inject constructor(
             for (sourceUrl in sources) {
                 try {
                     val hwid = deviceIdManager.getHwid()
-                    val request = Request.Builder()
+                    val cacheKey = sourceUrl.hashCode().toUInt().toString(16)
+                    val bodyKey = "subscription_body_$cacheKey"
+                    val etagKey = "subscription_etag_$cacheKey"
+                    val cachedBody = encryptedPrefs.getString(bodyKey, null)
+                    val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                    val requestBuilder = Request.Builder()
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
                         .header("x-hwid", hwid)
                         .header("x-device-os", "android")
                         .header("x-ver-os", Build.VERSION.RELEASE ?: "")
                         .header("x-device-model", Build.MODEL ?: "")
-                        .build()
-                    httpClient.newCall(request).execute().use { response ->
+                    if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
+                        requestBuilder.header("If-None-Match", cachedEtag)
+                    }
+                    httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                        if (response.code == 304) {
+                            if (cachedBody.isNullOrBlank()) {
+                                throw IOException("HTTP 304 received without a cached subscription body")
+                            }
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
+                            return@withContext cachedBody to sourceUrl
+                        }
                         if (!response.isSuccessful) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
                             throw IOException("HTTP ${response.code}")
@@ -283,6 +297,11 @@ class SubscriptionRepository @Inject constructor(
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
                             throw IOException("Empty response body")
                         }
+                        val newEtag = response.header("ETag")
+                        val editor = encryptedPrefs.edit().putString(bodyKey, body)
+                        if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
+                        else editor.remove(etagKey)
+                        editor.apply()
                         logCollector.info(TAG, "Subscription source OK: $sourceUrl")
                         return@withContext body to sourceUrl
                     }
