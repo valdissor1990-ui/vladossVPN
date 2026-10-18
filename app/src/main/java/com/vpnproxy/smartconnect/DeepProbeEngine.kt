@@ -47,6 +47,12 @@ class DeepProbeEngine @Inject constructor(
             val jitter = metrics.map { it.jitterMs.toDouble() }
             val loss = metrics.map { it.lossRate }
             return metrics.map { m ->
+                if (!m.healthOk) {
+                    return@map m.copy(
+                        latencyScore = 0.0, speedScore = 0.0, jitterScore = 0.0,
+                        lossScore = 0.0, normalizedScore = 0.0
+                    )
+                }
                 val latencyScore = lowerIsBetter(m.medianLatencyMs.toDouble(), latency)
                 val speedScore = higherIsBetter(m.speedMbps, speed)
                 val jitterScore = lowerIsBetter(m.jitterMs.toDouble(), jitter)
