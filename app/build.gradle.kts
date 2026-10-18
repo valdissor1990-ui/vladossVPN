@@ -140,8 +140,8 @@ android {
 }
 
 dependencies {
-    // JitPack release of the Android libbox binding (stable release pinned to 1.14.3).
-    implementation("com.github.singbox-android:libbox:1.14.3")
+    // Official libbox 1.14.3 release, downloaded and de-duplicated by scripts/download_xray.sh.
+    implementation(files("libs/libbox-stripped.aar"))
 
     // Downloaded by scripts/download_xray.sh in CI
     implementation(files("libs/libv2ray.aar"))
