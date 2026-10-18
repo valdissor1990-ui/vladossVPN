@@ -38,7 +38,9 @@ class SingBoxPlatform(
     }
 
     override fun openTun(options: TunOptions): Int {
-        val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
+        try {
+            Log.i(TAG, "openTun requested by libbox")
+            val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
         check(VpnService.prepare(context) == null) { "VPN permission is missing" }
         tunDescriptor?.close()
         val builder = service.Builder()
@@ -109,6 +111,10 @@ class SingBoxPlatform(
         tunDescriptor = pfd
         Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
         return pfd.fd
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
+            throw IllegalStateException("Sing-box openTun failed: ${t.message}", t)
+        }
     }
 
     fun closeTun() {
