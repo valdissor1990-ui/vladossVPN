@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # VPNProxy — подготовка нативных библиотек.
-# Скачивает libv2ray.aar + hev-socks5-tunnel.aar, удаляет дублирующийся Go runtime
+# Скачивает libv2ray.aar + hev-socks5-tunnel.aar + libbox.aar, удаляет дублирующийся Go runtime
 # из hev, проверяет целостность. Падает с exit 1 при любой проблеме.
 
 set -euo pipefail
@@ -19,12 +19,12 @@ LIBBOX_URL="https://github.com/singbox-android/libbox/releases/download/${LIBBOX
 
 mkdir -p "$LIBS_DIR" "$ASSETS_DIR"
 
-echo "=== [1/4] Downloading pinned libv2ray.aar ==="
+echo "=== [1/5] Downloading pinned libv2ray.aar ==="
 # Never reuse a stale local/CI cache when changing or validating the native core.
 rm -f "$LIBS_DIR/libv2ray.aar"
 curl -fSL --retry 3 "$LIBV2RAY_URL" -o "$LIBS_DIR/libv2ray.aar"
 
-echo "=== [2/4] Downloading hev-socks5-tunnel.aar ==="
+echo "=== [2/5] Downloading hev-socks5-tunnel.aar ==="
 if [ ! -s "$LIBS_DIR/hev-socks5-tunnel.aar" ]; then
   echo "   URL: $HEV_URL"
   HTTP_CODE=$(curl -sL -w "%{http_code}" -o "$LIBS_DIR/hev-socks5-tunnel.aar" "$HEV_URL")
@@ -37,7 +37,7 @@ if [ ! -s "$LIBS_DIR/hev-socks5-tunnel.aar" ]; then
   echo "   ✅ Downloaded ($(du -h "$LIBS_DIR/hev-socks5-tunnel.aar" | cut -f1))"
 fi
 
-echo "=== [3/4] Stripping duplicate Go runtime from hev-socks5-tunnel.aar ==="
+echo "=== [3/5] Stripping duplicate Go runtime from hev-socks5-tunnel.aar ==="
 # libv2ray.aar и hev-socks5-tunnel.aar оба содержат go.Seq / go.Universe
 # → checkDuplicateClasses падает. Удаляем go.* из hev (libv2ray первый в classpath).
 HEV_AAR="$LIBS_DIR/hev-socks5-tunnel.aar"
@@ -69,7 +69,7 @@ else
   echo "   ⚠️  classes.jar not found in hev AAR — skip (expected for Maven Central AAR)"
 fi
 
-echo "=== [4/4] Sanity checks ==="
+echo "=== [4/5] Sanity checks ==="
 FAIL=0
 
 check_file() {
@@ -129,6 +129,11 @@ if [ ! -s "$LIBBOX_STRIPPED_AAR" ]; then
 fi
 unzip -p "$LIBBOX_STRIPPED_AAR" classes.jar > "$TMP_LIBBOX_DIR/libbox-classes.jar"
 if jar tf "$TMP_LIBBOX_DIR/libbox-classes.jar" | grep -q '^go/Seq.class
+  echo "❌ Duplicate Go bridge classes remain in libbox AAR"
+  exit 1
+fi
+echo "   ✅ libbox ${LIBBOX_VERSION} prepared with duplicate Go bridge classes removed"
+echo "   ✅ All native libraries ready"
 ; then
   echo "❌ Duplicate Go bridge classes remain in libbox AAR"
   exit 1
