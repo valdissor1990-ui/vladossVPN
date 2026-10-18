@@ -1,78 +1,49 @@
 # VPNProxy
 
-Production-ready Android VPN-клиент на VLESS + XHTTP + Reality с умным автовыбором серверов.
+Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3** с VLESS/Reality, Hysteria2, TUIC и автоматическим выбором сервера.
 
 ## Возможности
 
-- **Протоколы:** VLESS + XHTTP (stream-one) + Reality, fallback TCP + Reality + Vision
-- **Умный автовыбор:** параллельный latency-тест, speed-тест топ-5, скоринг, автосвитч
-- **Мультиподписки:** base64, JSON, Clash YAML, `subscription-userinfo`
-- **Журнал отладки:** ring buffer 5000 записей, фильтры, экспорт через MediaStore, маскировка чувствительных данных
-- **Kill Switch:** блокировка трафика при разрыве туннеля, IPv6 egress заблокирован
-- **UI:** Jetpack Compose Material 3, динамическая цветная строка состояния, Material You
-- **Безопасность:** EncryptedSharedPreferences, Android Keystore, маскировка UUID/ключей
+- **Протоколы:** VLESS + Reality (включая Vision flow), Hysteria2 и TUIC
+- **Единый процесс:** libbox запускается внутри процесса приложения; отдельного процесса `:singbox` нет
+- **TUN:** создаётся через `VpnService.Builder` из `PlatformInterface.openTun()`
+- **Split Tunneling:** режимы INCLUDE_SELECTED и EXCLUDE_SELECTED с исключением самого VPN-приложения
+- **UDP:** native UDP relay и маршрутизация через TUN
+- **Умный автовыбор:** latency/speed probes, скоринг и автопереключение
+- **Подписки:** base64, JSON, Clash YAML и URI `vless://`, `hysteria2://`, `hy2://`, `tuic://`
+- **Безопасность:** EncryptedSharedPreferences, Android Keystore и маскировка UUID/ключей
 
 ## Быстрый старт
 
 ```bash
 git clone https://github.com/valdissor1990-ui/vladossVPN.git
 cd vladossVPN
-chmod +x scripts/download_xray.sh
-./scripts/download_xray.sh
+chmod +x scripts/download_libbox.sh
+./scripts/download_libbox.sh
 ./gradlew assembleDirectRelease
 ```
 
-APK: app/build/outputs/apk/direct/release/app-direct-release.apk
+Полный `libbox.aar` скачивается скриптом из официального релиза 1.14.3; Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
 
 ## Архитектура
 
-```
-app/src/main/java/com/vpnproxy/
-├── core/
-│   ├── xray/XrayCore.kt          # JNI-обёртка над libxray.so
-│   ├── tunnel/TunnelManager.kt   # VpnService + tun2socks
-│   ├── tunnel/TrafficStatsCollector.kt
-│   └── tunnel/KillSwitch.kt
-├── subscription/
-│   ├── SubscriptionParser.kt     # vless://, base64, JSON, YAML
-│   ├── SubscriptionRepository.kt
-│   └── SubscriptionUpdater.kt    # WorkManager
-├── smartconnect/
-│   ├── HealthChecker.kt          # latency + speed
-│   ├── ScoringEngine.kt
-│   └── AutoSwitcher.kt
-├── logging/
-│   ├── LogCollector.kt           # ring buffer 5000
-│   ├── LogExporter.kt            # MediaStore + FileProvider
-│   └── SensitiveMasker.kt
-├── ui/
-│   ├── home/HomeScreen.kt
-│   ├── home/StatusBar.kt         # ★ цветная строка состояния
-│   ├── subscriptions/SubscriptionsScreen.kt
-│   ├── servers/ServersListScreen.kt
-│   ├── settings/SettingsScreen.kt
-│   ├── debug/DebugScreen.kt
-│   └── theme/
-├── service/VpnProxyService.kt    # foreground service
-└── di/
-```
+- `core/singbox/SingBoxCore.kt` — жизненный цикл `CommandServer` в основном процессе.
+- `core/singbox/SingBoxPlatform.kt` — `PlatformInterface`, создание/закрытие TUN, маршруты, DNS и защита сокетов.
+- `core/singbox/SingboxConfigBuilder.kt` — outbounds VLESS/Reality, Hysteria2, TUIC и VPN/probe-конфигурации.
+- `core/splittunnel/SplitTunnelManager.kt` — per-app policy в том же `VpnService.Builder`.
+- `service/VpnProxyService.kt` — foreground VPN service и сетевой reconnect.
+- `smartconnect/DeepProbeEngine.kt` — временный proxy-only Sing-box для измерений.
 
 ## Документация
 
-· ARCHITECTURE.md
-· PROTOCOLS.md
-· TROUBLESHOOTING.md
-
-## Ссылки
-
-· Xray-core
-· XHTTP specification
-· REALITY
+- [Архитектура](docs/ARCHITECTURE.md)
+- [Протоколы](docs/PROTOCOLS.md)
+- [Диагностика](docs/TROUBLESHOOTING.md)
 
 ## Disclaimer
 
-Приложение предназначено для обеспечения приватности и обхода несправедливых блокировок. Пользователь несёт ответственность за соблюдение местного законодательства.
+Приложение предназначено для обеспечения приватности и обхода сетевых ограничений. Пользователь несёт ответственность за соблюдение местного законодательства.
 
 ## Лицензия
 
-GPL-3.0 (совместимо с sing-box и hev-socks5-tunnel).
+GPL-3.0.

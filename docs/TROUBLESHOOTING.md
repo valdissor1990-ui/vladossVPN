@@ -1,44 +1,42 @@
-# Troubleshooting
+# Диагностика
 
-## Сборка
+## Сборка не находит libbox
 
-### `UnsatisfiedLinkError: dlopen failed: library "libxray.so" not found`
-Причина: не выполнен `scripts/download_xray.sh` или ABI не совпадает.
-Решение:
+Выполните:
+
 ```bash
-chmod +x scripts/download_xray.sh
-./scripts/download_xray.sh
-./gradlew clean assembleDirectDebug
+chmod +x scripts/download_libbox.sh
+./scripts/download_libbox.sh
 ```
 
-Для production используйте AndroidLibXrayLite.aar из официального репозитория.
+Скрипт загружает полный официальный `libbox.aar` 1.14.3 и проверяет наличие `PlatformInterface` и Go bridge-классов. Не заменяйте AAR stripped-версией.
 
-### Keystore was tampered with, or password was incorrect
-Причина: неверный KEYSTORE_PASSWORD или KEY_PASSWORD.
-Решение: перепроверьте значения. В CI — Secrets; локально — keystore.properties.
+## VPN не запускается
 
-## Runtime
+1. Убедитесь, что Android выдал приложению VPN-разрешение.
+2. Проверьте журналы `VpnProxyService`, `SingBoxCore` и `SingBoxPlatform`.
+3. Проверьте валидность URI/подписки: адрес, порт, UUID или пароль, SNI и параметры TLS/Reality.
+4. Убедитесь, что `CommandServer.startOrReloadService()` не возвращает ошибку конфигурации.
 
-### VPN не подключается, статус «Ошибка»
-1. Откройте DebugScreen → фильтр ERROR.
-2. Ищите записи с тегами XrayCore, TunnelManager, VpnProxyService.
-3. Типичные причины:
-   · Неверный UUID / pbk / sid в подписке.
-   · Reality-сервер за Cloudflare (несовместимо — только point-to-point).
-   · flow: xtls-rprx-vision на XHTTP — критическая ошибка.
-   · mode: auto на XHTTP — использовать только stream-one.
+## VLESS/Reality не устанавливает соединение
 
-### «Установка заблокирована» при обновлении
-Причина: не выдано разрешение «Установка неизвестных приложений».
-Решение: Настройки → Приложения → VPNProxy → Установка неизвестных приложений → Разрешить.
+Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с настройками сервера.
 
-### INSTALL_FAILED_UPDATE_INCOMPATIBLE
-Причина: APK подписан другим keystore, чем установленная версия.
-Решение: удалить приложение и установить заново (данные будут потеряны).
-Никогда не меняйте keystore между релизами.
+## Hysteria2 / TUIC не передают трафик
 
-### Обновление не приходит автоматически
-1. Проверьте BuildConfig.GITHUB_OWNER и GITHUB_REPO.
-2. Убедитесь, что релиз на GitHub помечен как latest (не draft, не prerelease).
-3. WorkManager может откладывать задачи в Doze — откройте приложение вручную.
-4. Проверьте через DebugScreen: ищите UpdateChecker.
+Проверьте пароль, SNI, ALPN, obfs-параметры Hysteria2 и `congestion_control` / `udp_relay_mode` для TUIC. Проверяйте реальный HTTPS-запрос и UDP-трафик, а не только факт старта ядра.
+
+## Split tunneling работает не так, как ожидалось
+
+- **INCLUDE_SELECTED:** в VPN направляются только выбранные установленные приложения.
+- **EXCLUDE_SELECTED:** выбранные приложения обходят VPN, остальные приложения используют VPN.
+- Само VPN-приложение исключается из пользовательского списка, чтобы соединения управления не зацикливались.
+- Android не позволяет одновременно задать allow-list и deny-list на одном `VpnService.Builder`; противоречивые правила должны приводить к диагностируемой ошибке.
+
+## Deep Probe
+
+Deep Probe нельзя запускать одновременно с активным VPN. Он использует временный proxy-only Sing-box в том же процессе и должен останавливать его после завершения измерений.
+
+## Проверка APK
+
+После `./gradlew assembleDirectRelease` проверьте содержимое APK: в нём должен быть libbox для нужных ABI и не должно быть библиотек Xray/HEV. Реальные VLESS/Reality, Hysteria2, TUIC, UDP и split tunneling требуют дополнительной проверки на устройстве.
