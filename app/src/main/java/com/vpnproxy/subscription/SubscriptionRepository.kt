@@ -1,8 +1,10 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
+import android.os.Build
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.vpnproxy.core.diagnostics.DeviceIdManager
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -30,7 +32,8 @@ import javax.inject.Singleton
 class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val parser: SubscriptionParser,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val deviceIdManager: DeviceIdManager
 ) {
     companion object {
         private const val TAG = "SubRepo"
@@ -39,7 +42,6 @@ class SubscriptionRepository @Inject constructor(
         private const val CACHE_FILE = "cached_configs.json"
         private const val BOOTSTRAP_ASSET = "default_servers.txt"
         const val BOOTSTRAP_TAG = "Bootstrap"
-
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
@@ -55,12 +57,15 @@ class SubscriptionRepository @Inject constructor(
         val id: String,
         val url: String,
         val name: String,
+        val tag: String = "",
         val lastUpdated: Long = 0L,
         val trafficUsed: Long = 0L,
         val trafficTotal: Long = 0L,
         val expiresAt: Long = 0L,
         val enabled: Boolean = true
-    )
+    ) {
+        fun displayTag(): String = tag.ifBlank { name }
+    }
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val listSerializer = ListSerializer(ProviderSubscription.serializer())
@@ -90,7 +95,6 @@ class SubscriptionRepository @Inject constructor(
     private val _lastRefreshUsedCache = MutableStateFlow(false)
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
-    /** true when active list comes only from assets/default_servers.txt */
     private val _usingBootstrap = MutableStateFlow(false)
     val usingBootstrap: StateFlow<Boolean> = _usingBootstrap.asStateFlow()
 
@@ -99,7 +103,6 @@ class SubscriptionRepository @Inject constructor(
     init {
         loadFromPrefs()
         ensureDefaultSubscription()
-        // Cold start: prefer cache, else bootstrap so UI is never empty offline
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
@@ -144,6 +147,7 @@ class SubscriptionRepository @Inject constructor(
                 id = DEFAULT_SUBSCRIPTION_ID,
                 url = DEFAULT_SUBSCRIPTION_URL,
                 name = DEFAULT_SUBSCRIPTION_NAME,
+                tag = DEFAULT_SUBSCRIPTION_NAME,
                 enabled = true
             )
             _subscriptions.value = _subscriptions.value + sub
@@ -152,7 +156,6 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    /** Priority: network → cache → assets/default_servers.txt */
     fun loadBootstrapConfigs(): List<ParsedConfig> {
         return try {
             val text = context.assets.open(BOOTSTRAP_ASSET).bufferedReader().use { it.readText() }
@@ -166,18 +169,27 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun addSubscription(url: String, name: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
         try {
             val id = java.util.UUID.randomUUID().toString()
-            val sub = ProviderSubscription(id = id, url = url, name = name)
+            val sub = ProviderSubscription(
+                id = id, url = url, name = name, tag = tag.ifBlank { name }
+            )
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
-            logCollector.info(TAG, "Subscription added: $name", mapOf("url" to url))
+            logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
             true
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
             false
         }
+    }
+
+    fun updateSubscriptionTag(id: String, tag: String) {
+        _subscriptions.value = _subscriptions.value.map {
+            if (it.id == id) it.copy(tag = tag.ifBlank { it.name }) else it
+        }
+        saveToPrefs()
     }
 
     fun removeSubscription(id: String) {
@@ -203,7 +215,6 @@ class SubscriptionRepository @Inject constructor(
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
-
                     val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                     _subscriptions.value = _subscriptions.value.map {
                         if (it.id == sub.id) updated else it
@@ -223,7 +234,6 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            // Last resort: embedded bootstrap servers
             if (allConfigsList.isEmpty()) {
                 val boot = loadBootstrapConfigs()
                 if (boot.isNotEmpty()) {
@@ -236,7 +246,6 @@ class SubscriptionRepository @Inject constructor(
                 _usingBootstrap.value = false
                 saveConfigsToCache(allConfigsList)
             } else if (allConfigsList.isNotEmpty()) {
-                // cache-only recovery
                 _usingBootstrap.value = false
             }
 
@@ -244,12 +253,6 @@ class SubscriptionRepository @Inject constructor(
                 "${it.address}|${it.port}|${it.uuid}"
             }
             saveToPrefs()
-            val sourceLabel = when {
-                _usingBootstrap.value -> "bootstrap assets"
-                _lastRefreshUsedCache.value -> "cached fallback"
-                else -> "fetched from network"
-            }
-            logCollector.info(TAG, "Total configs loaded: $totalConfigs ($sourceLabel)")
             totalConfigs
         }
     }
@@ -258,24 +261,47 @@ class SubscriptionRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             val sources = if (sub.url == PRIMARY_URL) FALLBACK_CHAIN else listOf(sub.url)
             var lastFailure: Exception? = null
-
             for (sourceUrl in sources) {
                 try {
-                    val request = Request.Builder()
+                    val hwid = deviceIdManager.getHwid()
+                    val cacheKey = sourceUrl.hashCode().toUInt().toString(16)
+                    val bodyKey = "subscription_body_$cacheKey"
+                    val etagKey = "subscription_etag_$cacheKey"
+                    val cachedBody = encryptedPrefs.getString(bodyKey, null)
+                    val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                    val requestBuilder = Request.Builder()
                         .url(sourceUrl)
-                        .header("User-Agent", "VPNProxy/1.0")
-                        .build()
-
-                    httpClient.newCall(request).execute().use { response ->
+                        .header("User-Agent", "v2rayNG/1.8.5")
+                        .header("x-hwid", hwid)
+                        .header("x-device-os", "android")
+                        .header("x-ver-os", Build.VERSION.RELEASE ?: "")
+                        .header("x-device-model", Build.MODEL ?: "")
+                    if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
+                        requestBuilder.header("If-None-Match", cachedEtag)
+                    }
+                    httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                        if (response.code == 304) {
+                            if (cachedBody.isNullOrBlank()) {
+                                throw IOException("HTTP 304 received without a cached subscription body")
+                            }
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
+                            return@withContext cachedBody to sourceUrl
+                        }
                         if (!response.isSuccessful) {
+                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
                             throw IOException("HTTP ${response.code}")
                         }
-                        response.header("subscription-userinfo")?.let { info ->
-                            parseUserInfo(info, sub.id)
+                        response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
+                        val body = response.body?.string() ?: throw IOException("Empty response body")
+                        if (body.isBlank()) {
+                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
+                            throw IOException("Empty response body")
                         }
-                        val body = response.body?.string()
-                            ?: throw IOException("Empty response body")
-                        if (body.isBlank()) throw IOException("Empty response body")
+                        val newEtag = response.header("ETag")
+                        val editor = encryptedPrefs.edit().putString(bodyKey, body)
+                        if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
+                        else editor.remove(etagKey)
+                        editor.apply()
                         logCollector.info(TAG, "Subscription source OK: $sourceUrl")
                         return@withContext body to sourceUrl
                     }
@@ -286,7 +312,6 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-
             throw IOException("All sources failed", lastFailure)
         }
 
@@ -306,7 +331,6 @@ class SubscriptionRepository @Inject constructor(
             val download = parts["download"] ?: 0L
             val total = parts["total"] ?: 0L
             val expire = parts["expire"] ?: 0L
-
             _subscriptions.value = _subscriptions.value.map {
                 if (it.id == subId) it.copy(
                     trafficUsed = upload + download,
@@ -314,7 +338,7 @@ class SubscriptionRepository @Inject constructor(
                     expiresAt = expire * 1000
                 ) else it
             }
-        } catch (_: Exception) { /* ignore */ }
+        } catch (_: Exception) { }
     }
 
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value.distinctBy {
@@ -346,47 +370,21 @@ class SubscriptionRepository @Inject constructor(
         val providerTag: String = ""
     ) {
         fun toParsedConfig() = ParsedConfig(
-            uuid = uuid,
-            address = address,
-            port = port,
-            transport = transport,
-            security = security,
-            sni = sni,
-            path = path,
-            host = host,
-            mode = mode,
-            fingerprint = fingerprint,
-            publicKey = publicKey,
-            shortId = shortId,
-            flow = flow,
-            name = name,
-            providerTag = providerTag
+            uuid = uuid, address = address, port = port, transport = transport, security = security,
+            sni = sni, path = path, host = host, mode = mode, fingerprint = fingerprint,
+            publicKey = publicKey, shortId = shortId, flow = flow, name = name, providerTag = providerTag
         )
-
         companion object {
             fun from(c: ParsedConfig) = CachedConfig(
-                uuid = c.uuid,
-                address = c.address,
-                port = c.port,
-                transport = c.transport,
-                security = c.security,
-                sni = c.sni,
-                path = c.path,
-                host = c.host,
-                mode = c.mode,
-                fingerprint = c.fingerprint,
-                publicKey = c.publicKey,
-                shortId = c.shortId,
-                flow = c.flow,
-                name = c.name,
-                providerTag = c.providerTag
+                uuid = c.uuid, address = c.address, port = c.port, transport = c.transport, security = c.security,
+                sni = c.sni, path = c.path, host = c.host, mode = c.mode, fingerprint = c.fingerprint,
+                publicKey = c.publicKey, shortId = c.shortId, flow = c.flow, name = c.name, providerTag = c.providerTag
             )
         }
     }
 
     private fun saveConfigsToCache(configs: List<ParsedConfig>) {
         try {
-            // Never persist pure bootstrap as cache (would hide real offline state)
             if (configs.all { it.providerTag == BOOTSTRAP_TAG }) return
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)

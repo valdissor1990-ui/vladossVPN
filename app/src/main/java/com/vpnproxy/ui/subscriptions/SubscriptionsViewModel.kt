@@ -36,17 +36,22 @@ class SubscriptionsViewModel @Inject constructor(
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
 
-    fun addSubscription(url: String, name: String) {
+    fun addSubscription(url: String, name: String, tag: String = "") {
         if (url.isBlank()) {
             _message.value = "URL не может быть пустым"
             return
         }
         viewModelScope.launch {
             val displayName = name.ifBlank { "Provider ${subscriptions.value.size + 1}" }
-            val ok = repository.addSubscription(url, displayName)
+            val ok = repository.addSubscription(url, displayName, tag)
             _message.value = if (ok) "Подписка добавлена" else "Ошибка добавления"
             if (ok) refreshAll()
         }
+    }
+
+    fun updateTag(id: String, tag: String) {
+        repository.updateSubscriptionTag(id, tag)
+        _message.value = "Тег обновлён"
     }
 
     fun removeSubscription(id: String) {

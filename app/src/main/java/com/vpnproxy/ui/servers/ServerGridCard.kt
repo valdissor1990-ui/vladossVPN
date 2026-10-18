@@ -17,6 +17,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,9 +36,20 @@ fun ServerGridCard(
     onDetailsClick: () -> Unit = {}
 ) {
     val c = server.config
+    val context = LocalContext.current
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
-    val protocol = c.transport.uppercase().ifBlank { "VLESS" }
+    val transportKey = c.transport.lowercase()
+    val protocol = when (transportKey) {
+        "hysteria2", "hy2" -> "HY2"
+        "tuic" -> "TUIC"
+        else -> c.transport.uppercase().ifBlank { "VLESS" }
+    }
+    val protocolColor = when (protocol) {
+        "HY2" -> Color(0xFFFF9800)
+        "TUIC" -> Color(0xFFFFC107)
+        else -> MaterialTheme.colorScheme.primary
+    }
     val scoreLabel = scoreOverride ?: "—"
     val score = scoreLabel.removeSuffix("ms").trim().toDoubleOrNull()
     val scoreColor = scoreColorOverride ?: when {
@@ -47,7 +60,17 @@ fun ServerGridCard(
     }
 
     Card(
-        onClick = onClick,
+        onClick = {
+            if (c.isUnsupportedProtocol) {
+                Toast.makeText(
+                    context,
+                    "Протокол Hysteria2/TUIC требует ядра Sing-box и пока не поддерживается для подключения",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                onClick()
+            }
+        },
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -80,13 +103,14 @@ fun ServerGridCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = MaterialTheme.shapes.small,
-                    color = MaterialTheme.colorScheme.primaryContainer
+                    color = protocolColor.copy(alpha = 0.25f)
                 ) {
                     Text(
                         text = protocol,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        color = protocolColor
                     )
                 }
                 Spacer(Modifier.weight(1f))

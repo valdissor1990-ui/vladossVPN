@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -142,19 +146,40 @@ fun ServerListContent(
     val deepProbeRunning by viewModel.deepProbeRunning.collectAsStateWithLifecycle()
     val deepProbeResults by viewModel.deepProbeResults.collectAsStateWithLifecycle()
     val deepProbeError by viewModel.deepProbeError.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var query by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("Все") }
     var detailsServer by remember { mutableStateOf<ScoredServer?>(null) }
     val targetNames = remember {
         (PingTargets.ALL + PingTargets.forRegion(PingRegion.EU))
             .associate { it.id to it.displayName }
     }
 
-    val filtered = remember(servers, query) {
-        if (query.isBlank()) servers
-        else servers.filter {
-            it.config.name.contains(query, ignoreCase = true) ||
-                it.config.address.contains(query, ignoreCase = true) ||
-                it.config.providerTag.contains(query, ignoreCase = true)
+    val filterOptions = remember(servers) {
+        listOf("Все", "VLESS", "HY2", "TUIC") +
+            servers.map { it.config.providerTag.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sorted()
+                .filterNot { it in setOf("Все", "VLESS", "HY2", "TUIC") }
+    }
+
+    val filtered = remember(servers, query, selectedFilter) {
+        servers.filter { server ->
+            val config = server.config
+            val transport = config.transport.lowercase()
+            val matchesFilter = when (selectedFilter) {
+                "Все" -> true
+                "HY2" -> transport in setOf("hysteria2", "hy2")
+                "TUIC" -> transport == "tuic"
+                "VLESS" -> transport !in setOf("hysteria2", "hy2", "tuic")
+                else -> config.providerTag.equals(selectedFilter, ignoreCase = true)
+            }
+            val matchesQuery = query.isBlank() ||
+                config.name.contains(query, ignoreCase = true) ||
+                config.address.contains(query, ignoreCase = true) ||
+                config.providerTag.contains(query, ignoreCase = true)
+            matchesFilter && matchesQuery
         }
     }
 
@@ -185,6 +210,22 @@ fun ServerListContent(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             singleLine = true
         )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            filterOptions.forEach { filter ->
+                FilterChip(
+                    selected = selectedFilter == filter,
+                    onClick = { selectedFilter = filter },
+                    label = { Text(filter) }
+                )
+            }
+        }
 
         Row(
             modifier = Modifier
@@ -269,7 +310,17 @@ fun ServerListContent(
 
                     ServerGridCard(
                         server = scoredServer,
-                        onClick = { onServerSelected(scoredServer) },
+                        onClick = {
+                            if (scoredServer.config.isUnsupportedProtocol) {
+                                Toast.makeText(
+                                    context,
+                                    "Протокол Hysteria2/TUIC требует ядра Sing-box и пока не поддерживается для подключения",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                onServerSelected(scoredServer)
+                            }
+                        },
                         scoreOverride = scoreLabel,
                         scoreColorOverride = scoreColor,
                         onDetailsClick = { detailsServer = scoredServer }

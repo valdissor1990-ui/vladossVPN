@@ -5,15 +5,17 @@ import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
 import org.yaml.snakeyaml.Yaml
+import java.net.URI
+import java.net.URLDecoder
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Парсер подписок. Поддерживает:
- * 1. base64-encoded список vless:// ссылок
+ * 1. base64-encoded список vless:// / hysteria2:// / tuic:// ссылок
  * 2. JSON-массив Xray/sing-box конфигов
  * 3. Clash YAML
- * 4. Обычный текст с vless:// построчно
+ * 4. Обычный текст с vless:// / hysteria2:// / tuic:// построчно
  */
 @Singleton
 class SubscriptionParser @Inject constructor(
@@ -25,31 +27,40 @@ class SubscriptionParser @Inject constructor(
         val uuid: String,
         val address: String,
         val port: Int,
-        val transport: String,      // xhttp, ws, raw, grpc
-        val security: String,       // reality, tls, none
+        val transport: String,
+        val security: String,
         val sni: String?,
         val path: String?,
         val host: String?,
-        val mode: String?,          // stream-one, auto
-        val fingerprint: String?,   // firefox, chrome
-        val publicKey: String?,     // pbk
-        val shortId: String?,       // sid
-        val flow: String?,          // xtls-rprx-vision (только TCP)
+        val mode: String?,
+        val fingerprint: String?,
+        val publicKey: String?,
+        val shortId: String?,
+        val flow: String?,
         val name: String,
         val providerTag: String = ""
     ) {
-        /** Валидация обязательных полей. */
         fun isValid(): Boolean {
             if (uuid.isBlank() || address.isBlank()) return false
             if (port !in 1..65535) return false
-            // XHTTP mode defaults to stream-one when omitted.
-            // Reality: pbk обязателен, shortId может быть пустым "" (валидный кейс).
+            if (transport in setOf("hysteria2", "hy2", "tuic")) return true
             if (security == "reality" && publicKey.isNullOrBlank()) return false
             return true
         }
 
-        /** Генерация полного outbound-конфига Xray. */
+        fun requiresSingBox(): Boolean =
+            transport.equals("hysteria2", ignoreCase = true) ||
+                transport.equals("hy2", ignoreCase = true) ||
+                transport.equals("tuic", ignoreCase = true)
+
+        /** True for protocols that cannot be launched by the bundled Xray core. */
+        val isUnsupportedProtocol: Boolean
+            get() = requiresSingBox()
+
         fun toXrayOutbound(): JsonObject {
+            require(!isUnsupportedProtocol) {
+                "Hysteria2/TUIC requires Sing-box and cannot be converted to an Xray outbound"
+            }
             val user = buildJsonObject {
                 put("id", uuid)
                 put("encryption", "none")
@@ -100,33 +111,26 @@ class SubscriptionParser @Inject constructor(
         }
     }
 
-    /**
-     * Основной метод парсинга. Автоопределяет формат.
-     */
     fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) return emptyList()
 
-        // 1. Попытка base64
         val decoded = tryBase64Decode(trimmed)
-        if (decoded != null && decoded.contains("vless://")) {
+        if (decoded != null && (decoded.contains("vless://") || decoded.contains("hysteria2://") || decoded.contains("hy2://") || decoded.contains("tuic://"))) {
             return parseVlessLines(decoded, providerTag)
         }
 
-        // 2. Попытка JSON
         if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
             val jsonResult = tryParseJson(trimmed, providerTag)
             if (jsonResult.isNotEmpty()) return jsonResult
         }
 
-        // 3. Попытка Clash YAML
         if (trimmed.contains("proxies:") || trimmed.contains("proxy-groups:")) {
             val yamlResult = tryParseClashYaml(trimmed, providerTag)
             if (yamlResult.isNotEmpty()) return yamlResult
         }
 
-        // 4. Обычный текст с vless://
-        if (trimmed.contains("vless://")) {
+        if (trimmed.contains("vless://") || trimmed.contains("hysteria2://") || trimmed.contains("hy2://") || trimmed.contains("tuic://")) {
             return parseVlessLines(trimmed, providerTag)
         }
 
@@ -143,25 +147,97 @@ class SubscriptionParser @Inject constructor(
 
     private fun parseVlessLines(text: String, providerTag: String): List<ParsedConfig> {
         return text.lines()
-            .filter { it.trim().startsWith("vless://") }
-            .mapNotNull { parseVlessUri(it.trim(), providerTag) }
+            .map { it.trim() }
+            .filter { line ->
+                line.startsWith("vless://") ||
+                    line.startsWith("hysteria2://") ||
+                    line.startsWith("hy2://") ||
+                    line.startsWith("tuic://")
+            }
+            .mapNotNull { line ->
+                when {
+                    line.startsWith("vless://") -> parseVlessUri(line, providerTag)
+                    line.startsWith("hysteria2://") || line.startsWith("hy2://") ->
+                        parseHysteria2Uri(line, providerTag)
+                    line.startsWith("tuic://") -> parseTuicUri(line, providerTag)
+                    else -> null
+                }
+            }
+    }
+
+    fun parseHysteria2Uri(uri: String, providerTag: String = ""): ParsedConfig? {
+        return try {
+            val normalized = uri.replaceFirst("hy2://", "hysteria2://")
+            val parsed = URI(normalized)
+            val password = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
+            val address = parsed.host ?: return null
+            val port = parsed.port.takeIf { it > 0 } ?: 443
+            val params = parseUriQuery(parsed.rawQuery)
+            val sni = params["sni"] ?: params["peer"]
+            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
+            val config = ParsedConfig(
+                uuid = password, address = address, port = port,
+                transport = "hysteria2", security = "tls", sni = sni,
+                path = null, host = null, mode = null, fingerprint = null,
+                publicKey = null, shortId = null, flow = null,
+                name = name, providerTag = providerTag
+            )
+            config.takeIf { it.isValid() }
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Failed to parse hysteria2 URI", e)
+            null
+        }
+    }
+
+    fun parseTuicUri(uri: String, providerTag: String = ""): ParsedConfig? {
+        return try {
+            val parsed = URI(uri)
+            val userInfo = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
+            val uuid = userInfo.substringBefore(":").takeIf { it.isNotBlank() } ?: return null
+            val address = parsed.host ?: return null
+            val port = parsed.port.takeIf { it > 0 } ?: 443
+            val params = parseUriQuery(parsed.rawQuery)
+            val sni = params["sni"] ?: params["peer"]
+            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
+            val config = ParsedConfig(
+                uuid = uuid, address = address, port = port,
+                transport = "tuic", security = "tls", sni = sni,
+                path = null, host = null, mode = null, fingerprint = null,
+                publicKey = null, shortId = null, flow = null,
+                name = name, providerTag = providerTag
+            )
+            config.takeIf { it.isValid() }
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Failed to parse tuic URI", e)
+            null
+        }
     }
 
     /**
-     * Парсинг vless://uuid@host:port?type=xhttp&security=reality&fp=firefox&...
+     * Parse query components with java.net.URI so these protocol parsers also work
+     * in local JVM unit tests, where android.net.Uri methods are mocked.
      */
+    private fun parseUriQuery(rawQuery: String?): Map<String, String> =
+        rawQuery.orEmpty()
+            .split("&")
+            .filter { it.isNotBlank() }
+            .associate { part ->
+                val separator = part.indexOf('=')
+                val key = if (separator >= 0) part.substring(0, separator) else part
+                val value = if (separator >= 0) part.substring(separator + 1) else ""
+                decodeUriComponent(key) to decodeUriComponent(value)
+            }
+
+    private fun decodeUriComponent(value: String): String =
+        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
+
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
             val parsed = Uri.parse(uri)
             val uuid = parsed.userInfo ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
-
-            val params = parsed.queryParameterNames.associateWith {
-                parsed.getQueryParameter(it) ?: ""
-            }
-
-            // Порядок критичен: transport → lowercase → mode/flow с учётом transport.
+            val params = parsed.queryParameterNames.associateWith { parsed.getQueryParameter(it) ?: "" }
             val transport = (params["type"] ?: params["transport"] ?: "tcp").lowercase()
             val security = (params["security"] ?: "none").lowercase()
             val sni = params["sni"] ?: params["serverName"]
@@ -169,26 +245,15 @@ class SubscriptionParser @Inject constructor(
             val host = params["host"]
             val fingerprint = params["fp"] ?: params["fingerprint"]
             val publicKey = params["pbk"] ?: params["publicKey"]
-            val rawShortId = params["sid"] ?: params["shortId"]
-            val shortId = rawShortId ?: "" // Reality: пустой sid допустим.
+            val shortId = params["sid"] ?: params["shortId"] ?: ""
             val rawFlow = params["flow"]
             val rawMode = params["mode"]
-
             val mode: String? = when (transport) {
-                "xhttp" -> when (rawMode) {
-                    null, "", "auto" -> "stream-one"
-                    else -> rawMode
-                }
+                "xhttp" -> when (rawMode) { null, "", "auto" -> "stream-one"; else -> rawMode }
                 else -> rawMode
             }
-
-            // Vision несовместим с XHTTP; flow на этом транспорте всегда пустой.
-            val flow: String? = when (transport) {
-                "xhttp" -> ""
-                else -> rawFlow
-            }
+            val flow: String? = if (transport == "xhttp") "" else rawFlow
             val name = Uri.decode(parsed.fragment ?: "$address:$port")
-
             val config = ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = transport, security = security,
@@ -197,25 +262,8 @@ class SubscriptionParser @Inject constructor(
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag
             )
-
             if (!config.isValid()) {
-                val reasons = buildList {
-                    if (config.uuid.isBlank()) add("uuid empty")
-                    if (config.address.isBlank()) add("address empty")
-                    if (config.port !in 1..65535) add("port invalid=${config.port}")
-                    if (config.security == "reality" && config.publicKey.isNullOrBlank())
-                        add("reality missing pbk")
-                }
-                logCollector.warn(TAG, "Invalid config skipped", mapOf(
-                    "name" to name,
-                    "reasons" to reasons.joinToString(","),
-                    "transport" to config.transport,
-                    "security" to config.security,
-                    "flow" to (config.flow ?: "-"),
-                    "mode" to (config.mode ?: "-"),
-                    "pbk_len" to (config.publicKey?.length ?: 0),
-                    "sid_len" to (config.shortId?.length ?: 0)
-                ))
+                logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))
                 return null
             }
             config
@@ -229,13 +277,11 @@ class SubscriptionParser @Inject constructor(
         return try {
             val element = Json.parseToJsonElement(json)
             val configs = mutableListOf<ParsedConfig>()
-
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
                 }
                 is JsonObject -> {
-                    // Может быть { "outbounds": [...] } или одиночный конфиг
                     element["outbounds"]?.jsonArray?.forEach { item ->
                         if (item is JsonObject) extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
                     } ?: extractFromJsonObject(element, providerTag)?.let { configs.add(it) }
@@ -253,32 +299,26 @@ class SubscriptionParser @Inject constructor(
         return try {
             val protocol = obj["protocol"]?.jsonPrimitive?.content ?: return null
             if (protocol != "vless") return null
-
             val settings = obj["settings"]?.jsonObject ?: return null
             val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
             val address = vnext["address"]?.jsonPrimitive?.content ?: return null
             val port = vnext["port"]?.jsonPrimitive?.int ?: 443
             val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
             val uuid = user["id"]?.jsonPrimitive?.content ?: return null
-
             val stream = obj["streamSettings"]?.jsonObject
             val transport = stream?.get("method")?.jsonPrimitive?.content ?: "tcp"
             val security = stream?.get("security")?.jsonPrimitive?.content ?: "none"
-
             val reality = stream?.get("realitySettings")?.jsonObject
             val xhttp = stream?.get("xhttpSettings")?.jsonObject
             val tls = stream?.get("tlsSettings")?.jsonObject
-
             ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = transport, security = security,
-                sni = reality?.get("serverName")?.jsonPrimitive?.content
-                    ?: tls?.get("serverName")?.jsonPrimitive?.content,
+                sni = reality?.get("serverName")?.jsonPrimitive?.content ?: tls?.get("serverName")?.jsonPrimitive?.content,
                 path = xhttp?.get("path")?.jsonPrimitive?.content,
                 host = xhttp?.get("host")?.jsonPrimitive?.content,
                 mode = xhttp?.get("mode")?.jsonPrimitive?.content,
-                fingerprint = reality?.get("fingerprint")?.jsonPrimitive?.content
-                    ?: tls?.get("fingerprint")?.jsonPrimitive?.content,
+                fingerprint = reality?.get("fingerprint")?.jsonPrimitive?.content ?: tls?.get("fingerprint")?.jsonPrimitive?.content,
                 publicKey = reality?.get("publicKey")?.jsonPrimitive?.content,
                 shortId = reality?.get("shortId")?.jsonPrimitive?.content,
                 flow = user["flow"]?.jsonPrimitive?.content,
@@ -293,7 +333,6 @@ class SubscriptionParser @Inject constructor(
             val yaml = Yaml()
             val root = yaml.load<Map<String, Any>>(yamlText) ?: return emptyList()
             val proxies = root["proxies"] as? List<Map<String, Any>> ?: return emptyList()
-
             proxies.mapNotNull { proxy ->
                 try {
                     val type = proxy["type"] as? String ?: return@mapNotNull null
@@ -304,7 +343,6 @@ class SubscriptionParser @Inject constructor(
                     val uuid = proxy["uuid"] as? String ?: return@mapNotNull null
                     val network = proxy["network"] as? String ?: "tcp"
                     val tls = proxy["tls"] as? Boolean ?: false
-
                     ParsedConfig(
                         uuid = uuid, address = server, port = port,
                         transport = if (network == "ws") "ws" else "raw",
@@ -312,10 +350,8 @@ class SubscriptionParser @Inject constructor(
                         sni = proxy["servername"] as? String,
                         path = proxy["ws-path"] as? String,
                         host = proxy["ws-headers"]?.let { (it as? Map<String, String>)?.get("Host") },
-                        mode = null,
-                        fingerprint = proxy["client-fingerprint"] as? String,
-                        publicKey = null, shortId = null,
-                        flow = proxy["flow"] as? String,
+                        mode = null, fingerprint = proxy["client-fingerprint"] as? String,
+                        publicKey = null, shortId = null, flow = proxy["flow"] as? String,
                         name = name, providerTag = providerTag
                     ).takeIf { it.isValid() }
                 } catch (_: Exception) { null }
