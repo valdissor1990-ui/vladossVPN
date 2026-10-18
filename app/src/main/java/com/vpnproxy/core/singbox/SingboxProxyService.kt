@@ -170,10 +170,10 @@ class SingboxProxyService : Service() {
             }.toTypedArray()
             val created = invokeUnwrapped(newService, null, *args)
                 ?: error("libbox returned no service instance")
+            coreService = created
             invokeUnwrapped(created.javaClass.methods.firstOrNull {
                 it.name == "start" && it.parameterTypes.isEmpty()
             } ?: error("libbox service start() API not found"), created)
-            coreService = created
             var listenerReady = false
             for (attempt in 0 until 50) {
                 if (listenerReady) break
