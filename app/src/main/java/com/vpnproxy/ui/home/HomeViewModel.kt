@@ -50,7 +50,9 @@ class HomeViewModel @Inject constructor(
         val currentServerName: String = "—",
         val serverCount: Int = 0,
         val isBusy: Boolean = false,
-        val sessionStartedAt: Long? = null
+        val sessionStartedAt: Long? = null,
+        val usingBootstrap: Boolean = false,
+        val isRefreshingSubscription: Boolean = false
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -116,8 +118,6 @@ class HomeViewModel @Inject constructor(
                 if (_uiState.value.connectionState == ConnectionUiState.CONNECTING ||
                     _uiState.value.isBusy
                 ) {
-                    // The previous fallback attempt has received a terminal service error.
-                    // Release the gate before scheduling the next attempt.
                     isFallingBack.set(false)
                     tryNextServer()
                 } else {
@@ -147,6 +147,18 @@ class HomeViewModel @Inject constructor(
         }
 
         startPinging()
+
+        viewModelScope.launch {
+            subscriptionRepository.usingBootstrap.collect { boot ->
+                _uiState.value = _uiState.value.copy(usingBootstrap = boot)
+            }
+        }
+
+        viewModelScope.launch {
+            subscriptionRepository.allConfigs.collect { configs ->
+                _uiState.value = _uiState.value.copy(serverCount = configs.size)
+            }
+        }
     }
 
     private fun startPinging() {
@@ -162,23 +174,14 @@ class HomeViewModel @Inject constructor(
                     if (breakdown.isValid) {
                         val score = breakdown.compositeScore.toLong()
                         _googleRtt.value = score
-                        logCollector.debug(
-                            TAG,
-                            "Ping OK: ${score}ms via TCP (region=$region, ok=${breakdown.successCount}/${multi.results.size}, median=${breakdown.medianMs?.toInt()}ms)"
-                        )
                     } else {
                         _googleRtt.value = null
-                        logCollector.warn(
-                            TAG,
-                            "Ping failed: insufficient samples (${breakdown.successCount}/${multi.results.size}) region=$region"
-                        )
                     }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (t: Throwable) {
                     _googleRtt.value = null
                     _latencyBreakdown.value = null
-                    logCollector.warn(TAG, "Ping exception: ${t.message}")
                 }
                 delay(30_000)
             }
@@ -190,8 +193,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleConnection() {
-        val current = _uiState.value.connectionState
-        when (current) {
+        when (_uiState.value.connectionState) {
             ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> disconnect()
             ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> connect()
             ConnectionUiState.CONNECTING -> { }
@@ -211,7 +213,6 @@ class HomeViewModel @Inject constructor(
         connectTimeoutJob = viewModelScope.launch {
             delay(connectTimeoutMs)
             if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                logCollector.warn(TAG, "Connect timeout ${connectTimeoutMs}ms — forcing reset")
                 forceDisconnect()
             }
         }
@@ -222,7 +223,6 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING)
-
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
 
@@ -237,13 +237,14 @@ class HomeViewModel @Inject constructor(
                         emptyList()
                     }
                 }
-                if (configs.isEmpty() && !hasNetwork) {
-                    logCollector.warn(TAG, "No network — attempting cached configs")
+                if (configs.isEmpty()) {
                     configs = subscriptionRepository.getCachedConfigs()
+                    _uiState.value = _uiState.value.copy(
+                        usingBootstrap = subscriptionRepository.usingBootstrap.value
+                    )
                 }
 
                 if (configs.isEmpty()) {
-                    logCollector.warn(TAG, "No servers available for connection")
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
@@ -254,10 +255,8 @@ class HomeViewModel @Inject constructor(
                 }
 
                 _uiState.value = _uiState.value.copy(serverCount = configs.size)
-
                 val best = autoSwitcher.selectBest(configs)
                 if (best == null) {
-                    logCollector.warn(TAG, "No server passed health check")
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
@@ -290,7 +289,6 @@ class HomeViewModel @Inject constructor(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false
         )
-        logCollector.warn(TAG, "VPN permission denied by user")
     }
 
     fun disconnect() {
@@ -300,10 +298,9 @@ class HomeViewModel @Inject constructor(
         VpnProxyService.clearError()
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
-        val intent = Intent(context, VpnProxyService::class.java).apply {
+        safeStartService(Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
-        }
-        safeStartService(intent)
+        })
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             sessionStartedAt = null
@@ -317,10 +314,9 @@ class HomeViewModel @Inject constructor(
         VpnProxyService.clearError()
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
-        val intent = Intent(context, VpnProxyService::class.java).apply {
+        safeStartService(Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
-        }
-        safeStartService(intent)
+        })
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false,
@@ -328,59 +324,35 @@ class HomeViewModel @Inject constructor(
             currentRtt = 0L,
             sessionStartedAt = null
         )
-        logCollector.info(TAG, "Force disconnect")
     }
 
     fun switchServer() {
-        if (isFallingBack.get() || autoSwitcher.isSwitching()) {
-            logCollector.warn(TAG, "switchServer ignored — busy")
-            return
-        }
+        if (isFallingBack.get() || autoSwitcher.isSwitching()) return
         viewModelScope.launch {
             try {
-                logCollector.info(TAG, "Switch server requested")
-
                 val ranked = autoSwitcher.rankedServers.value
                 val configs = subscriptionRepository.getAllConfigs()
                 if (ranked.isEmpty() && configs.isEmpty()) {
-                    logCollector.warn(TAG, "Switch: no servers available")
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
                         isBusy = false
                     )
                     return@launch
                 }
-
-                if (ranked.isEmpty()) {
-                    logCollector.info(TAG, "Switch: ranking not ready, running selectBest")
-                    autoSwitcher.selectBest(configs)
-                }
-
+                if (ranked.isEmpty()) autoSwitcher.selectBest(configs)
                 _uiState.value = _uiState.value.copy(isBusy = true)
-
                 val next = autoSwitcher.switchToNext()
                 if (next == null) {
-                    logCollector.warn(TAG, "Switch: switchToNext returned null")
                     _uiState.value = _uiState.value.copy(isBusy = false)
                     return@launch
                 }
-
                 _uiState.value = _uiState.value.copy(
                     currentServerName = next.config.name,
                     currentRtt = next.latencyMs
                 )
-
-                val running = VpnProxyService.isRunning.value
-                val action = if (running) VpnProxyService.ACTION_RECONNECT
-                             else VpnProxyService.ACTION_START
-                val intent = Intent(context, VpnProxyService::class.java).apply {
-                    this.action = action
-                }
-                if (!safeStartService(intent)) {
-                    _uiState.value = _uiState.value.copy(isBusy = false)
-                    return@launch
-                }
-
+                val action = if (VpnProxyService.isRunning.value) VpnProxyService.ACTION_RECONNECT
+                else VpnProxyService.ACTION_START
+                safeStartService(Intent(context, VpnProxyService::class.java).apply { this.action = action })
                 delay(300)
                 _uiState.value = _uiState.value.copy(isBusy = false)
             } catch (c: CancellationException) {
@@ -393,35 +365,26 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun tryNextServer() {
-        if (!isFallingBack.compareAndSet(false, true)) {
-            logCollector.warn(TAG, "tryNextServer ignored — already falling back")
-            return
-        }
+        if (!isFallingBack.compareAndSet(false, true)) return
         viewModelScope.launch {
-            // Keep the fallback gate locked after requesting service start. It is released
-            // by a terminal service event (connected/error/timeout), not by startService().
             var awaitingServiceResult = false
             try {
                 if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) {
-                    logCollector.error(TAG, "Fallback exhausted after $MAX_FALLBACK_ATTEMPTS attempts")
                     fallbackAttempts = 0
                     attemptedServerKeys.clear()
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
                         isBusy = false
                     )
-                    val stopIntent = Intent(context, VpnProxyService::class.java).apply {
+                    safeStartService(Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
-                    }
-                    safeStartService(stopIntent)
+                    })
                     return@launch
                 }
-
                 if (autoSwitcher.rankedServers.value.isEmpty()) {
                     val configs = subscriptionRepository.getAllConfigs()
                     if (configs.isNotEmpty()) autoSwitcher.selectBest(configs)
                 }
-
                 var next: ScoringEngine.ScoredServer? = null
                 val rankedCount = autoSwitcher.rankedServers.value.size
                 for (i in 0 until rankedCount) {
@@ -433,36 +396,29 @@ class HomeViewModel @Inject constructor(
                         break
                     }
                 }
-
                 if (next == null) {
-                    logCollector.error(TAG, "Fallback exhausted: no unattempted servers remain")
                     fallbackAttempts = 0
                     attemptedServerKeys.clear()
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
                         isBusy = false
                     )
-                    val stopIntent = Intent(context, VpnProxyService::class.java).apply {
+                    safeStartService(Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
-                    }
-                    safeStartService(stopIntent)
+                    })
                     return@launch
                 }
-
                 fallbackAttempts++
-                logCollector.info(TAG, "Fallback attempt $fallbackAttempts → ${next.config.name}")
                 _uiState.value = _uiState.value.copy(
                     connectionState = ConnectionUiState.CONNECTING,
                     currentServerName = next.config.name,
                     currentRtt = next.latencyMs,
                     isBusy = true
                 )
-
                 connectTimeoutJob?.cancel()
                 connectTimeoutJob = viewModelScope.launch {
                     delay(connectTimeoutMs)
                     if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                        logCollector.warn(TAG, "Fallback connect timeout ${connectTimeoutMs}ms — forcing reset")
                         forceDisconnect()
                     }
                 }
@@ -478,8 +434,6 @@ class HomeViewModel @Inject constructor(
                     isBusy = false
                 )
             } finally {
-                // On a normal request, keep the gate until the service reports success/error.
-                // All terminal paths before requesting a start release it immediately.
                 if (!awaitingServiceResult) isFallingBack.set(false)
             }
         }
@@ -489,16 +443,9 @@ class HomeViewModel @Inject constructor(
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_START
         }
-        if (safeStartService(intent)) {
-            logCollector.info(TAG, "VPN service start requested")
-        } else {
+        if (!safeStartService(intent)) {
+            _uiState.value = _uiState.value.copy(isBusy = false)
             isFallingBack.set(false)
-            connectTimeoutJob?.cancel()
-            connectTimeoutJob = null
-            _uiState.value = _uiState.value.copy(
-                connectionState = ConnectionUiState.ERROR,
-                isBusy = false
-            )
         }
     }
 
@@ -518,21 +465,41 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun refreshSubscription() {
+        if (_uiState.value.isRefreshingSubscription) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
+            try {
+                val n = subscriptionRepository.refreshAll()
+                logCollector.info(
+                    TAG,
+                    "Manual subscription refresh: $n configs, bootstrap=${subscriptionRepository.usingBootstrap.value}"
+                )
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Manual subscription refresh failed", e)
+            } finally {
+                _uiState.value = _uiState.value.copy(
+                    isRefreshingSubscription = false,
+                    usingBootstrap = subscriptionRepository.usingBootstrap.value,
+                    serverCount = subscriptionRepository.getAllConfigs().size
+                )
+            }
+        }
+    }
+
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
         viewModelScope.launch {
             try {
-                if (!autoSwitcher.forceSelect(server)) {
-                    logCollector.warn(TAG, "Server selection ignored because another switch is in progress")
-                    return@launch
-                }
+                autoSwitcher.forceSelect(server)
                 _uiState.value = _uiState.value.copy(
                     currentServerName = server.config.name,
                     currentRtt = server.latencyMs
                 )
-                val running = VpnProxyService.isRunning.value
-                val action = if (running) VpnProxyService.ACTION_RECONNECT else VpnProxyService.ACTION_START
-                val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
-                safeStartService(intent)
+                val action = if (VpnProxyService.isRunning.value) VpnProxyService.ACTION_RECONNECT
+                else VpnProxyService.ACTION_START
+                safeStartService(Intent(context, VpnProxyService::class.java).apply { this.action = action })
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

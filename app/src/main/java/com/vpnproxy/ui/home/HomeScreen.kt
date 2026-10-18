@@ -10,7 +10,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -111,7 +113,55 @@ fun HomeScreen(
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(16.dp))
+
+                if (uiState.usingBootstrap) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF5C3A00).copy(alpha = 0.92f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB74D)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Нет сети. Используются встроенные серверы. Подключитесь к VPN для загрузки полного списка.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFFFE0B2),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(
+                                onClick = { viewModel.refreshSubscription() },
+                                enabled = !uiState.isRefreshingSubscription,
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = Color(0xFFFFB74D)
+                                )
+                            ) {
+                                if (uiState.isRefreshingSubscription) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color(0xFFFFB74D)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                    Spacer(Modifier.width(4.dp))
+                                }
+                                Text("Обновить")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
 
                 GlowPowerButton(
                     state = uiState.connectionState,
@@ -154,7 +204,11 @@ fun HomeScreen(
                                 color = OnDark
                             )
                             Text(
-                                text = "Нажмите, чтобы сменить",
+                                text = if (uiState.usingBootstrap) {
+                                    "Bootstrap · ${uiState.serverCount} серв. · нажмите, чтобы сменить"
+                                } else {
+                                    "Нажмите, чтобы сменить"
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = OnDarkSecondary
                             )
