@@ -76,6 +76,7 @@ class VpnProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        autoSwitcher.attachVpnService(this)
         logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
 
         networkReconnector = NetworkAwareReconnector(
@@ -152,8 +153,6 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "Starting VPN orchestrator…")
                 startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
 
-                // Restart the watchdog for this start attempt. During a network-triggered
-                // reconnect, allow a bounded extra 30 seconds for the debounce and Xray startup.
                 watchdogJob?.cancel()
                 watchdogJob = scope.launch {
                     delay(15_000)
@@ -175,7 +174,6 @@ class VpnProxyService : VpnService() {
                     }
                 }
 
-                // Never proceed if Xray could not confirm that the previous loop stopped.
                 if (!xrayCore.stop()) {
                     val reason = "Could not stop previous Xray loop; refusing to start a second one"
                     logCollector.error(TAG, reason)
@@ -185,7 +183,6 @@ class VpnProxyService : VpnService() {
                 }
 
                 val builder = Builder()
-                // Apply per-app policy before establish(); SplitTunnelManager always excludes this app.
                 splitTunnelManager.applyRules(builder, this@VpnProxyService)
                 val pfd = try {
                     tunnelManager.establishTun(builder)
@@ -270,7 +267,6 @@ class VpnProxyService : VpnService() {
                 stopServiceWithReason("startVpn failed", t)
             } finally {
                 startInProgress = false
-                // Every terminal start path (success, failure, or cancellation) releases the guard.
                 isReconnecting.set(false)
             }
         }
@@ -310,6 +306,7 @@ class VpnProxyService : VpnService() {
 
     override fun onDestroy() {
         Log.e(TAG, "Stopping VPN. Reason: onDestroy invoked")
+        autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
         watchdogJob?.cancel()
@@ -366,5 +363,16 @@ class VpnProxyService : VpnService() {
     private fun updateNotification(state: String) {
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(state))
+    }
+
+    /** Reconnects the existing VPN service after AutoSwitcher selected another server. */
+    fun reconnectAfterSlowServerSwitch() {
+        startService(Intent(this, VpnProxyService::class.java).setAction(ACTION_RECONNECT))
+    }
+
+    /** Updates the persistent VPN notification when repeated switches indicate an unstable network. */
+    fun showUnstableNetworkNotification() {
+        logCollector.warn(TAG, "Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
+        updateNotification("Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
     }
 }
