@@ -16,11 +16,14 @@ import android.os.Messenger
 import android.util.Log
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -171,6 +174,19 @@ class SingboxProxyService : Service() {
                 it.name == "start" && it.parameterTypes.isEmpty()
             } ?: error("libbox service start() API not found"), created)
             coreService = created
+            var listenerReady = false
+            repeat(50) {
+                if (listenerReady) return@repeat
+                try {
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT), 250)
+                    }
+                    listenerReady = true
+                } catch (_: Throwable) {
+                    delay(100)
+                }
+            }
+            if (!listenerReady) error("Sing-box did not bind 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
             lastError = null
             Log.i(TAG, "Sing-box proxy started on 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
             true
