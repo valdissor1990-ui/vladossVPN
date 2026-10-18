@@ -1,11 +1,11 @@
 # VPNProxy
 
-Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3** с VLESS/Reality (TCP, WS, gRPC, HTTPUpgrade), Hysteria2, TUIC и автоматическим выбором сервера.
+Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3** с VLESS/Reality (TCP, WS, gRPC, HTTPUpgrade, XHTTP через sing-box-lx), Hysteria2, TUIC и автоматическим выбором сервера.
 
 ## Возможности
 
 - **Протоколы:** VLESS + Reality (включая Vision flow и поддерживаемые upstream транспорты), Hysteria2 и TUIC
-- **Ограничение:** upstream libbox 1.14.3 не поддерживает XHTTP; такие URI не понижаются молча до TCP
+- **XHTTP:** используется sing-box-lx 1.14.3-lx.21; транспорт XHTTP работает совместно с TLS/Reality
 - **Единый процесс:** libbox запускается внутри процесса приложения; отдельного процесса `:singbox` нет
 - **TUN:** создаётся через `VpnService.Builder` из `PlatformInterface.openTun()`
 - **Split Tunneling:** режимы INCLUDE_SELECTED и EXCLUDE_SELECTED с исключением самого VPN-приложения

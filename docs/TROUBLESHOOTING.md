@@ -20,7 +20,7 @@ chmod +x scripts/download_libbox.sh
 
 ## VLESS/Reality не устанавливает соединение
 
-Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с сервером. Официальный libbox 1.14.3 не поддерживает XHTTP; builder выдаёт явную ошибку для `type=xhttp`.
+Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с сервером. Используется sing-box-lx 1.14.3-lx.21 с поддержкой XHTTP. Проверьте `transport.type=xhttp`, режим `auto`/ `packet-up`/ `stream-one`, а также поля `host`, `path` и `extra`.
 
 ## Hysteria2 / TUIC не передают трафик
 
