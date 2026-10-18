@@ -189,7 +189,7 @@ fun ServerListContent(
                         ?.roundToInt()
                         ?.toString() ?: "—"
                     val scoreValue = scoreLabel.toDoubleOrNull()
-                    val scoreColor = scoreValue?.let { rttColor(it.toLong()) }
+                    val scoreColor = scoreValue?.let { compositeScoreColor(it) }
                         ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
 
                     ServerGridCard(
@@ -231,7 +231,7 @@ fun ServerListContent(
                     androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                     Text(
                         text = score?.let { "${it} ms" } ?: "Недостаточно данных",
-                        color = score?.let { rttColor(it.toLong()) }
+                        color = score?.let { compositeScoreColor(it.toDouble()) }
                             ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         fontFamily = FontFamily.Monospace
                     )
@@ -287,6 +287,12 @@ fun ServerListContent(
             }
         }
     }
+}
+
+private fun compositeScoreColor(score: Double): Color = when {
+    score < 100.0 -> Color(0xFF43A047)
+    score <= 300.0 -> Color(0xFFF9A825)
+    else -> Color(0xFFE53935)
 }
 
 private fun rttColor(rtt: Long): Color = when {
