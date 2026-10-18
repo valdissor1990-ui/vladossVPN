@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
 
 import com.vpnproxy.core.tunnel.TunnelManager
+import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
@@ -70,7 +71,7 @@ class AutoSwitcher @Inject constructor(
     private var consecutiveErrors = 0
     private var baselineRtt = 0L
     private var previousRtt: Long? = null
-    @Volatile private var vpnService: VpnService? = null
+    @Volatile private var vpnService: VpnProxyService? = null
     @Volatile private var state = AutoSwitchState.MONITORING
     private var cooldownUntilMs = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
@@ -85,12 +86,12 @@ class AutoSwitcher @Inject constructor(
     fun currentState(): AutoSwitchState = state
 
     /** Tracks the existing VPN service only for its active lifecycle. */
-    fun attachVpnService(service: VpnService) {
+    fun attachVpnService(service: VpnProxyService) {
         vpnService = service
         logCollector.info(TAG, "VpnService attached for protected direct probes")
     }
 
-    fun detachVpnService(service: VpnService) {
+    fun detachVpnService(service: VpnProxyService) {
         if (vpnService === service) vpnService = null
     }
 
