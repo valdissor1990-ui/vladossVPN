@@ -91,8 +91,19 @@ class SingBoxPlatform(
 
         // Apply saved INCLUDE_SELECTED / EXCLUDE_SELECTED policy in the same builder
         // that establishes the TUN. The VPN app is always excluded from per-app routing.
-        splitTunnelManager?.let { manager -> runBlocking { manager.applyRules(builder, context) } }
-        applyOptionPackageRules(builder, options)
+        val includes = mutableSetOf<String>()
+        val excludes = mutableSetOf<String>()
+        val includeIterator = options.includePackage
+        while (includeIterator.hasNext()) includes += includeIterator.next()
+        val excludeIterator = options.excludePackage
+        while (excludeIterator.hasNext()) excludes += excludeIterator.next()
+        if (splitTunnelManager != null) {
+            runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes) }
+        } else if (includes.isNotEmpty()) {
+            includes.filterNot { it in excludes || it == context.packageName }.forEach { builder.addAllowedApplication(it) }
+        } else {
+            (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
+        }
 
         val pfd = builder.establish() ?: error("VpnService.Builder.establish() returned null")
         tunDescriptor = pfd
