@@ -19,7 +19,7 @@ class KillSwitch @Inject constructor() {
             if (enabled) {
                 builder.addRoute("0.0.0.0", 0)
                 builder.addRoute("::", 0)
-                builder.addDnsServer(TunnelManager.DNS_SERVER)
+                builder.addDnsServer("1.1.1.1")
                 builder.setUnderlyingNetworks(null)
                 builder.setBlocking(true)
                 Log.i(TAG, "Kill Switch APPLIED: full IPv4/IPv6 route, DNS via tunnel")

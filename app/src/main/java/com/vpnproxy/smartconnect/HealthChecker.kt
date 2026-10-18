@@ -145,7 +145,7 @@ class HealthChecker @Inject constructor(
             }
 
             try {
-                action(client)
+                return action(client)
             } finally {
                 if (manageSingbox) SingboxProxyClient.stop(context)
             }

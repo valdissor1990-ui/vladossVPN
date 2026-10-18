@@ -121,7 +121,6 @@ class SingBoxPlatform(
     override fun includeAllNetworks(): Boolean = false
     override fun usePlatformShell(): Boolean = unsupported("usePlatformShell", false)
     override fun usePlatformBridge(): Boolean = unsupported("usePlatformBridge", false)
-    override fun usePlatformAutoRedirect(): Boolean = unsupported("usePlatformAutoRedirect", false)
 
     override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int,
         destinationAddress: String, destinationPort: Int): ConnectionOwner =
@@ -142,10 +141,10 @@ class SingBoxPlatform(
     override fun lookupSFTPServer(): String = unsupported("lookupSFTPServer", "")
     override fun tailscaleHostname(): String = unsupported("tailscaleHostname", "")
     override fun createBridge(options: BridgeOptions?): BridgeSession = unsupported("createBridge")
-    override fun createAutoRedirect(options: ByteArray?, handler: AutoRedirectHandler?): AutoRedirectSession =
-        unsupported("createAutoRedirect")
     override fun lookupUser(username: String?): PlatformUser = unsupported("lookupUser")
     override fun registerMyInterface(name: String?) = unsupported("registerMyInterface")
+    override fun sendNotification(notification: Notification) = unsupported("sendNotification")
+    override fun cancelNotification(identifier: String, typeID: Int) = unsupported("cancelNotification")
 
     private fun <T> unsupported(method: String, fallback: T): T {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
