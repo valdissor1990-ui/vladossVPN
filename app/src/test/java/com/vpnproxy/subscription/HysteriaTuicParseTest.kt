@@ -20,6 +20,7 @@ class HysteriaTuicParseTest {
         assertEquals(8443, cfg.port)
         assertEquals("secretpass", cfg.uuid)
         assertEquals("hy2.example.com", cfg.sni)
+        assertEquals("secretpass", cfg.password)
         assertTrue(cfg.requiresSingBox())
         assertTrue(cfg.isUnsupportedProtocol)
     }
@@ -33,6 +34,7 @@ class HysteriaTuicParseTest {
         assertEquals("tuic", cfg!!.transport)
         assertEquals("tuic.example.com", cfg.address)
         assertEquals("11111111-1111-1111-1111-111111111111", cfg.uuid)
+        assertEquals("pass", cfg.password)
         assertTrue(cfg.requiresSingBox())
         assertTrue(cfg.isUnsupportedProtocol)
     }
@@ -46,6 +48,7 @@ class HysteriaTuicParseTest {
         assertEquals("secret:pass", cfg!!.uuid)
         assertEquals("hysteria2", cfg.transport)
         assertEquals("Alias", cfg.name)
+        assertEquals("secret:pass", cfg.password)
     }
 
     @Test
