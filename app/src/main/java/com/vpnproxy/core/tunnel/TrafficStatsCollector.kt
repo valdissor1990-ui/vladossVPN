@@ -14,7 +14,7 @@ import javax.inject.Singleton
  * Сборщик статистики трафика.
  *
  * Использует TrafficStats.getUidRxBytes(Process.myUid()) — трафик конкретно
- * нашего приложения, а не всего устройства. Xray/HEV native stats не опрашиваются.
+ * нашего приложения, а не всего устройства. Используются только UID-level счётчики Android.
  */
 @Singleton
 class TrafficStatsCollector @Inject constructor() {
@@ -67,15 +67,13 @@ class TrafficStatsCollector @Inject constructor() {
         sessionRx += dRx; sessionTx += dTx
         totalRx += dRx; totalTx += dTx
 
-        // Xray/HEV stats are not used: libv2ray exposes no Java stats API,
-        // and the HEV TProxyGetStats() format is undocumented and AAR-version-dependent.
-        // Per-app TrafficStats counters are the source of truth.
+        // libbox does not expose per-connection counters through this platform API;
+        // Android UID-level TrafficStats counters remain the source of truth.
         _traffic.value = TrafficSnapshot(
             downloadMbps = (dRx * 8.0 / 1_000_000.0 / elapsed).toFloat(),
             uploadMbps = (dTx * 8.0 / 1_000_000.0 / elapsed).toFloat(),
             sessionRx = sessionRx, sessionTx = sessionTx,
             totalRx = totalRx, totalTx = totalTx,
-            xrayUplink = 0L, xrayDownlink = 0L,
             timestamp = now
         )
     }
@@ -95,10 +93,6 @@ class TrafficStatsCollector @Inject constructor() {
         val sessionTx: Long = 0L,
         val totalRx: Long = 0L,
         val totalTx: Long = 0L,
-        @Deprecated("Not populated — libv2ray has no stats API")
-        val xrayUplink: Long = 0L,
-        @Deprecated("Not populated — libv2ray has no stats API")
-        val xrayDownlink: Long = 0L,
         val timestamp: Long = 0L
     )
 }

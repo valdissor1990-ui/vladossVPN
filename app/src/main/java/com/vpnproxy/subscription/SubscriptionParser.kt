@@ -13,7 +13,7 @@ import javax.inject.Singleton
 /**
  * Парсер подписок. Поддерживает:
  * 1. base64-encoded список vless:// / hysteria2:// / tuic:// ссылок
- * 2. JSON-массив Xray/sing-box конфигов
+ * 2. JSON-массив legacy / Sing-box конфигов
  * 3. Clash YAML
  * 4. Обычный текст с vless:// / hysteria2:// / tuic:// построчно
  */
@@ -60,62 +60,7 @@ class SubscriptionParser @Inject constructor(
                 transport.equals("hy2", ignoreCase = true) ||
                 transport.equals("tuic", ignoreCase = true)
 
-        /** True for protocols that cannot be launched by the bundled Xray core. */
-        val isUnsupportedProtocol: Boolean
-            get() = requiresSingBox()
 
-        fun toXrayOutbound(): JsonObject {
-            require(!isUnsupportedProtocol) {
-                "Hysteria2/TUIC requires Sing-box and cannot be converted to an Xray outbound"
-            }
-            val user = buildJsonObject {
-                put("id", uuid)
-                put("encryption", "none")
-                put("flow", flow ?: "")
-            }
-            val vnext = buildJsonObject {
-                put("address", address)
-                put("port", port)
-                putJsonArray("users") { add(user) }
-            }
-            val streamSettings = buildJsonObject {
-                put("method", transport)
-                when (transport) {
-                    "xhttp" -> putJsonObject("xhttpSettings") {
-                        put("path", path ?: "/")
-                        put("mode", mode ?: "stream-one")
-                        host?.let { put("host", it) }
-                    }
-                    "ws" -> putJsonObject("wsSettings") {
-                        put("path", path ?: "/")
-                        host?.let { put("headers", buildJsonObject { put("Host", it) }) }
-                    }
-                    "grpc" -> putJsonObject("grpcSettings") {
-                        put("serviceName", path ?: "")
-                    }
-                }
-                put("security", security)
-                when (security) {
-                    "reality" -> putJsonObject("realitySettings") {
-                        put("serverName", sni ?: "")
-                        put("fingerprint", fingerprint ?: "firefox")
-                        put("publicKey", publicKey ?: "")
-                        put("shortId", shortId ?: "")
-                    }
-                    "tls" -> putJsonObject("tlsSettings") {
-                        put("serverName", sni ?: "")
-                        put("fingerprint", fingerprint ?: "firefox")
-                    }
-                }
-            }
-            return buildJsonObject {
-                put("protocol", "vless")
-                put("settings", buildJsonObject {
-                    putJsonArray("vnext") { add(vnext) }
-                })
-                put("streamSettings", streamSettings)
-            }
-        }
     }
 
     fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
