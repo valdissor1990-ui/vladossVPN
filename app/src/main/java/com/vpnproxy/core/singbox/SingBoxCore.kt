@@ -1,0 +1,126 @@
+package com.vpnproxy.core.singbox
+
+import android.content.Context
+import android.util.Log
+import io.nekohasekai.libbox.CommandServer
+import io.nekohasekai.libbox.CommandServerHandler
+import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.Notification
+import io.nekohasekai.libbox.OverrideOptions
+import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.libbox.SystemProxyStatus
+import org.json.JSONObject
+import java.util.Locale
+
+/**
+ * Owns the libbox 1.14.3 CommandServer in the application's main process.
+ * No Android Service or secondary process is created for the core.
+ */
+class SingBoxCore(
+    private val context: Context,
+    private val platform: SingBoxPlatform
+) {
+    companion object {
+        private const val TAG = "SingBoxCore"
+        @Volatile private var setupComplete = false
+
+        @Synchronized
+        private fun setup(context: Context) {
+            if (setupComplete) return
+            val working = context.getExternalFilesDir(null) ?: context.filesDir
+            val options = SetupOptions().apply {
+                basePath = context.filesDir.absolutePath
+                workingPath = working.absolutePath
+                tempPath = context.cacheDir.absolutePath
+                logMaxLines = 3000
+                debug = false
+                appVersion = runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
+                }.getOrDefault("1")
+                appMarketingVersion = runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1"
+                }.getOrDefault("1")
+                platformMetadata = JSONObject().apply {
+                    put("os", "Android")
+                    put("sdk", android.os.Build.VERSION.SDK_INT)
+                    put("manufacturer", android.os.Build.MANUFACTURER)
+                    put("model", android.os.Build.MODEL)
+                }.toString()
+            }
+            Libbox.setLocale(Locale.getDefault().toLanguageTag())
+            Libbox.setup(options)
+            setupComplete = true
+        }
+    }
+
+    @Volatile private var commandServer: CommandServer? = null
+    @Volatile private var activeConfig: String? = null
+
+    private val handler = object : CommandServerHandler {
+        override fun serviceStop() {
+            Log.w(TAG, "libbox requested service stop")
+            stop()
+        }
+
+        override fun serviceReload() {
+            val config = activeConfig ?: return
+            Log.i(TAG, "libbox requested service reload")
+            runCatching { start(config) }
+                .onFailure { Log.e(TAG, "Reload requested by libbox failed", it) }
+        }
+
+        override fun getSystemProxyStatus(): SystemProxyStatus? = null
+        override fun setSystemProxyEnabled(isEnabled: Boolean) {
+            Log.w(TAG, "unsupported CommandServerHandler method: setSystemProxyEnabled")
+        }
+        override fun triggerNativeCrash() {
+            Log.w(TAG, "unsupported CommandServerHandler method: triggerNativeCrash")
+        }
+        override fun writeDebugMessage(message: String?) {
+            Log.d(TAG, message.orEmpty())
+        }
+        override fun connectSSHAgent(): Int {
+            Log.w(TAG, "unsupported CommandServerHandler method: connectSSHAgent")
+            return -1
+        }
+    }
+
+    @Synchronized
+    fun start(configJson: String) {
+        require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
+        stopInternal()
+        setup(context)
+        val server = CommandServer(handler, platform)
+        try {
+            server.start()
+            server.startOrReloadService(configJson, OverrideOptions())
+            commandServer = server
+            activeConfig = configJson
+            Log.i(TAG, "libbox 1.14.3 started in the app process")
+        } catch (t: Throwable) {
+            runCatching { server.closeService() }
+            runCatching { server.close() }
+            platform.closeTun()
+            throw IllegalStateException("Unable to start libbox 1.14.3: ${t.message}", t)
+        }
+    }
+
+    @Synchronized
+    fun stop() {
+        stopInternal()
+    }
+
+    @Synchronized
+    private fun stopInternal() {
+        val server = commandServer
+        commandServer = null
+        activeConfig = null
+        if (server != null) {
+            runCatching { server.closeService() }
+                .onFailure { Log.w(TAG, "closeService failed", it) }
+            runCatching { server.close() }
+                .onFailure { Log.w(TAG, "CommandServer.close failed", it) }
+        }
+        platform.closeTun()
+    }
+}
