@@ -126,15 +126,21 @@ class SingBoxPlatform(
         destinationAddress: String, destinationPort: Int): ConnectionOwner =
         unsupported("findConnectionOwner")
 
-    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported("startDefaultInterfaceMonitor")
-    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported("closeDefaultInterfaceMonitor")
-    override fun getInterfaces(): NetworkInterfaceIterator = unsupported("getInterfaces")
-    override fun clearDNSCache() = unsupported("clearDNSCache")
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupportedUnit("startDefaultInterfaceMonitor")
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupportedUnit("closeDefaultInterfaceMonitor")
+    override fun getInterfaces(): NetworkInterfaceIterator {
+        unsupportedUnit("getInterfaces")
+        return object : NetworkInterfaceIterator {
+            override fun hasNext(): Boolean = false
+            override fun next(): io.nekohasekai.libbox.NetworkInterface = error("no platform interfaces exposed")
+        }
+    }
+    override fun clearDNSCache() = unsupportedUnit("clearDNSCache")
     override fun readWIFIState(): WIFIState? = unsupportedNullable("readWIFIState")
     override fun localDNSTransport(): LocalDNSTransport? = unsupportedNullable("localDNSTransport")
-    override fun startNeighborMonitor(listener: NeighborUpdateListener?) = unsupported("startNeighborMonitor")
-    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = unsupported("closeNeighborMonitor")
-    override fun checkPlatformShell() = unsupported("checkPlatformShell")
+    override fun startNeighborMonitor(listener: NeighborUpdateListener?) = unsupportedUnit("startNeighborMonitor")
+    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = unsupportedUnit("closeNeighborMonitor")
+    override fun checkPlatformShell() = unsupportedUnit("checkPlatformShell")
     override fun openShellSession(user: PlatformUser?, command: String?, environ: StringIterator?, term: String?,
         rows: Int, cols: Int): ShellSession = unsupported("openShellSession")
     override fun readSystemSSHHostKey(): String = unsupported("readSystemSSHHostKey", "")
@@ -142,13 +148,16 @@ class SingBoxPlatform(
     override fun tailscaleHostname(): String = unsupported("tailscaleHostname", "")
     override fun createBridge(options: BridgeOptions?): BridgeSession = unsupported("createBridge")
     override fun lookupUser(username: String?): PlatformUser = unsupported("lookupUser")
-    override fun registerMyInterface(name: String?) = unsupported("registerMyInterface")
-    override fun sendNotification(notification: Notification) = unsupported("sendNotification")
-    override fun cancelNotification(identifier: String, typeID: Int) = unsupported("cancelNotification")
+    override fun registerMyInterface(name: String?) = unsupportedUnit("registerMyInterface")
+    override fun sendNotification(notification: Notification) = unsupportedUnit("sendNotification")
+    override fun cancelNotification(identifier: String, typeID: Int) = unsupportedUnit("cancelNotification")
 
     private fun <T> unsupported(method: String, fallback: T): T {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
         return fallback
+    }
+    private fun unsupportedUnit(method: String) {
+        Log.w(TAG, "unsupported PlatformInterface method: $method")
     }
     private fun <T> unsupportedNullable(method: String): T? {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
