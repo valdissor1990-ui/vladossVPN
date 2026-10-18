@@ -166,6 +166,9 @@ class NetworkAwareReconnector(
             lastLostAt = 0L
             return
         }
+        // Consume the loss marker after the first recovery callback, even when recovery
+        // took longer than BLINK_MS; otherwise identical callbacks would never deduplicate.
+        lastLostAt = 0L
 
         // Network recovered during debounce window — cancel pending restart
         if (isVpnActive() && !isBusy() && hasUsableUnderlyingNetwork()) {
