@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 
 @Composable
@@ -37,7 +38,7 @@ fun ServerGridCard(
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
     val protocol = c.transport.uppercase().ifBlank { "VLESS" }
     val scoreLabel = scoreOverride ?: "—"
-    val score = scoreLabel.toDoubleOrNull()
+    val score = scoreLabel.removeSuffix("ms").trim().toDoubleOrNull()
     val scoreColor = scoreColorOverride ?: when {
         score == null -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
         score < 100.0 -> Color(0xFF43A047)
@@ -90,7 +91,7 @@ fun ServerGridCard(
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    text = if (score == null) "—" else "${score.toInt()} ms",
+                    text = if (score == null) "—" else "${score.roundToInt()} ms",
                     color = scoreColor,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
