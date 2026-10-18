@@ -300,18 +300,17 @@ class DeepProbeEngine @Inject constructor(
         return Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port))).use { socket ->
             socket.soTimeout = REQUEST_TIMEOUT_MS.toInt()
             socket.connect(InetSocketAddress("1.1.1.1", 53), CONNECT_TIMEOUT_MS)
-            DataOutputStream(socket.getOutputStream()).use { output ->
-                output.writeShort(query.size)
-                output.write(query)
-                output.flush()
-                val input = DataInputStream(socket.getInputStream())
-                val responseLength = input.readUnsignedShort()
-                if (responseLength < 12) return@use false
-                val response = ByteArray(responseLength)
-                input.readFully(response)
-                val flags = ((response[2].toInt() and 0xff) shl 8) or (response[3].toInt() and 0xff)
-                (flags and 0x8000) != 0 && (flags and 0x000f) == 0
-            }
+            val output = DataOutputStream(socket.getOutputStream())
+            output.writeShort(query.size)
+            output.write(query)
+            output.flush()
+            val input = DataInputStream(socket.getInputStream())
+            val responseLength = input.readUnsignedShort()
+            if (responseLength < 12) return@use false
+            val response = ByteArray(responseLength)
+            input.readFully(response)
+            val flags = ((response[2].toInt() and 0xff) shl 8) or (response[3].toInt() and 0xff)
+            (flags and 0x8000) != 0 && (flags and 0x000f) == 0
         }
     }
 
