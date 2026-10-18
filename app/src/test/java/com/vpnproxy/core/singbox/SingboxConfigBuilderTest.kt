@@ -81,4 +81,33 @@ class SingboxConfigBuilderTest {
         assertEquals("proxy-1", rules[1].jsonObject["outbound"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun vlessRealityMapsUriFieldsToSingBoxOutbound() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "reality.example.org",
+            port = 443,
+            transport = "tcp",
+            security = "reality",
+            sni = "www.example.org",
+            path = null, host = null, mode = null,
+            fingerprint = "chrome",
+            publicKey = "public-key",
+            shortId = "a1b2",
+            flow = "xtls-rprx-vision",
+            name = "reality"
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        assertEquals("vless", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals(config.uuid, outbound["uuid"]!!.jsonPrimitive.content)
+        assertEquals("xtls-rprx-vision", outbound["flow"]!!.jsonPrimitive.content)
+        val tls = outbound["tls"]!!.jsonObject
+        assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)
+        assertEquals("chrome", tls["utls"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content)
+        assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
+        assertEquals("a1b2", tls["reality"]!!.jsonObject["short_id"]!!.jsonPrimitive.content)
+    }
+
 }
