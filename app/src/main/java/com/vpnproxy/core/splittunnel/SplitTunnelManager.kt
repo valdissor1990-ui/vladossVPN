@@ -48,7 +48,7 @@ class SplitTunnelManager @Inject constructor(
                 if (optionIncludes.isNotEmpty()) {
                     // Android permits either an allow-list or a deny-list on a VPN builder,
                     // never both. Explicit Sing-box includes therefore select allow-list mode.
-                    addAllowed(builder, includes)
+                    addAllowed(builder, (optionIncludes - optionExcludes) - context.packageName)
                 } else {
                     addDisallowed(builder, excludes)
                 }
