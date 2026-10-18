@@ -1,8 +1,11 @@
 package com.vpnproxy.smartconnect
 
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.vpnproxy.core.xray.XrayCore
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
+import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.HealthChecker.LatencyResult
@@ -24,6 +27,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.min
@@ -36,7 +40,8 @@ import kotlin.math.min
 class DeepProbeEngine @Inject constructor(
     private val healthChecker: HealthChecker,
     private val xrayCore: XrayCore,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    @ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "DeepProbe"
@@ -114,16 +119,39 @@ class DeepProbeEngine @Inject constructor(
         }
 
         try {
-            val candidates = fastFilter(configs).take(TOP_COUNT)
+            val singboxConfigs = configs.filter { it.requiresSingBox() }
+            val regularLimit = (TOP_COUNT - minOf(2, singboxConfigs.size)).coerceAtLeast(0)
+            val regularCandidates = fastFilter(configs.filterNot { it.requiresSingBox() }).take(regularLimit)
+            val selectedSingbox = singboxConfigs.take((TOP_COUNT - regularCandidates.size).coerceAtLeast(0))
+            val candidates = regularCandidates + selectedSingbox.map {
+                FastCandidate(it, Long.MAX_VALUE / 2)
+            }
             check(candidates.isNotEmpty()) { "Не удалось найти доступные серверы для глубокого анализа" }
 
-            // All ServerSockets are closed before Xray starts. Ports are distinct and never use 10808.
-            val ports = allocatePorts(candidates.size)
-            val configJson = buildMultiServerConfig(candidates, ports)
-            logCollector.info(TAG, "Starting one bare Xray instance for ${candidates.size} servers; ports=${ports.joinToString()}")
+            val singboxCandidates = candidates.filter { it.config.requiresSingBox() }
+            // Reserve separate ephemeral ports for Xray's local SOCKS listeners and Sing-box's upstream listeners.
+            val allocatedPorts = allocatePorts(candidates.size + singboxCandidates.size)
+            val ports = allocatedPorts.take(candidates.size)
+            val singboxPorts = allocatedPorts.drop(candidates.size)
+            val singboxPortByConfig = singboxCandidates.mapIndexed { index, candidate ->
+                candidate.config to singboxPorts[index]
+            }.toMap()
+            var singboxStartAttempted = false
             var startAttempted = false
             try {
                 check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+                if (singboxCandidates.isNotEmpty()) {
+                    singboxStartAttempted = true
+                    check(SingboxProxyClient.start(
+                        context,
+                        SingboxConfigBuilder.buildMulti(
+                            singboxCandidates.map { it.config },
+                            singboxPorts
+                        )
+                    )) { "Не удалось запустить Sing-box для глубокого анализа" }
+                }
+                val configJson = buildMultiServerConfig(candidates, ports, singboxPortByConfig)
+                logCollector.info(TAG, "Starting one Xray instance for ${candidates.size} servers; Sing-box candidates=${singboxCandidates.size}")
                 startAttempted = true
                 val started = xrayCore.start(configJson, tunFd = 0)
                 check(started) { "Не удалось запустить Xray для глубокого анализа" }
@@ -137,11 +165,11 @@ class DeepProbeEngine @Inject constructor(
                 logCollector.info(TAG, "Deep probe complete: ${scored.size} servers scored")
                 return scored
             } finally {
-                // Exactly one explicit stop call after the single temporary Xray start attempt.
                 if (startAttempted) {
                     val stopped = xrayCore.stop()
                     logCollector.info(TAG, "Deep-probe Xray stopped=$stopped")
                 }
+                if (singboxStartAttempted) SingboxProxyClient.stop(context)
             }
         } finally {
             xrayCore.releaseDeepProbeLease()
@@ -173,13 +201,17 @@ class DeepProbeEngine @Inject constructor(
             attempts++
             // Port 0 asks the OS for an available ephemeral port (normally >= 32768).
             val port = ServerSocket(0).use { it.localPort }
-            if (port >= SOCKS_PORT_BASE && port != 10808 && port !in ports) ports += port
+            if (port >= SOCKS_PORT_BASE && port != 10808 && port != SingboxConfigBuilder.PROXY_PORT && port !in ports) ports += port
         }
         check(ports.size == count) { "Не удалось выделить свободные SOCKS-порты от $SOCKS_PORT_BASE" }
         return ports.toList()
     }
 
-    private fun buildMultiServerConfig(candidates: List<FastCandidate>, ports: List<Int>): String {
+    private fun buildMultiServerConfig(
+        candidates: List<FastCandidate>,
+        ports: List<Int>,
+        singboxPortByConfig: Map<ParsedConfig, Int>
+    ): String {
         val inbounds = JSONArray()
         val outbounds = JSONArray()
         val rules = JSONArray()
@@ -193,8 +225,18 @@ class DeepProbeEngine @Inject constructor(
                 put("protocol", "socks")
                 put("settings", JSONObject().put("auth", "noauth").put("udp", false))
             })
-            val outbound = JSONObject(candidate.config.toXrayOutbound().toString())
-                .put("tag", outboundTag)
+            val outbound = if (candidate.config.requiresSingBox()) {
+                val upstreamPort = singboxPortByConfig[candidate.config]
+                    ?: error("Missing Sing-box port for ${candidate.config.name}")
+                JSONObject()
+                    .put("tag", outboundTag)
+                    .put("protocol", "socks")
+                    .put("settings", JSONObject().put("servers", JSONArray().put(
+                        JSONObject().put("address", "127.0.0.1").put("port", upstreamPort)
+                    )))
+            } else {
+                JSONObject(candidate.config.toXrayOutbound().toString()).put("tag", outboundTag)
+            }
             outbounds.put(outbound)
             rules.put(JSONObject().apply {
                 put("type", "field")
