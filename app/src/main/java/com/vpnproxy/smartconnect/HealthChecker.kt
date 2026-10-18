@@ -68,23 +68,14 @@ class HealthChecker @Inject constructor(
     private suspend fun testSingleLatency(config: ParsedConfig): LatencyResult =
         withContext(Dispatchers.IO) {
             try {
-                if (config.requiresSingBox()) {
-                    return@withContext withSingboxClient(config) { client ->
-                        val startedAt = System.nanoTime()
-                        val request = Request.Builder().url(LATENCY_TEST_URL).head().build()
-                        client.newCall(request).execute().use { response ->
-                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-                            LatencyResult(config, elapsed, success = response.code in 200..399)
-                        }
+                withSingboxClient(config) { client ->
+                    val startedAt = System.nanoTime()
+                    val request = Request.Builder().url(LATENCY_TEST_URL).head().build()
+                    client.newCall(request).execute().use { response ->
+                        val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                        LatencyResult(config, elapsed, success = response.code in 200..399)
                     }
                 }
-
-                val startedAt = System.currentTimeMillis()
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(config.address, config.port), LATENCY_TIMEOUT_MS)
-                }
-                val elapsed = System.currentTimeMillis() - startedAt
-                LatencyResult(config, elapsed, success = elapsed < LATENCY_TIMEOUT_MS)
             } catch (_: Exception) {
                 LatencyResult(config, Long.MAX_VALUE, success = false)
             }
@@ -114,7 +105,7 @@ class HealthChecker @Inject constructor(
                         SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
                     }
                 }
-                if (config.requiresSingBox()) withSingboxClient(config, action) else action(httpClient)
+                withSingboxClient(config, action)
             } catch (_: Exception) {
                 SpeedResult(config, 0f, success = false)
             }
