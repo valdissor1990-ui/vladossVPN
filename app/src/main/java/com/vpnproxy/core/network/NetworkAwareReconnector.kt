@@ -20,7 +20,8 @@ class NetworkAwareReconnector(
     private val isVpnActive: () -> Boolean,
     /** true пока VPN стартует или идёт switch/reconnect — callback молчит. */
     private val isBusy: () -> Boolean = { false },
-    private val onReconnectRequested: () -> Unit
+    private val onReconnectRequested: () -> Unit,
+    private val onReconnectStateChanged: (Boolean) -> Unit = {}
 ) {
     companion object {
         private const val TAG = "NetworkAwareReconnector"
@@ -39,20 +40,28 @@ class NetworkAwareReconnector(
     private val pendingRestart = Runnable {
         if (!isVpnActive()) {
             logCollector.debug(TAG, "Debounced restart skipped — VPN not active")
+            onReconnectStateChanged(false)
             return@Runnable
         }
         if (isBusy()) {
             logCollector.debug(TAG, "Debounced restart skipped — VPN busy")
+            onReconnectStateChanged(false)
             return@Runnable
         }
         val now = System.currentTimeMillis()
         if (now - lastReconnectAt < COOLDOWN_MS) {
-            logCollector.debug(TAG, "Cooldownoldown active, skip restart")
+            logCollector.debug(TAG, "Cooldown active, skip restart")
+            onReconnectStateChanged(false)
             return@Runnable
         }
         lastReconnectAt = now
         logCollector.info(TAG, "Network changed → reconnect after ${DEBOUNCE_MS}ms debounce")
-        onReconnectRequested()
+        try {
+            onReconnectRequested()
+        } catch (t: Throwable) {
+            onReconnectStateChanged(false)
+            logCollector.error(TAG, "Reconnect request failed", t)
+        }
     }
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
@@ -127,6 +136,7 @@ class NetworkAwareReconnector(
 
     fun stop() {
         mainHandler.removeCallbacks(pendingRestart)
+        onReconnectStateChanged(false)
         if (!registered) return
         try {
             cm.unregisterNetworkCallback(callback)
@@ -139,6 +149,7 @@ class NetworkAwareReconnector(
 
     private fun scheduleRestart() {
         mainHandler.removeCallbacks(pendingRestart)
+        onReconnectStateChanged(true)
         logCollector.info(TAG, "Network changed, restarting tunnel in ${DEBOUNCE_MS}ms…")
         mainHandler.postDelayed(pendingRestart, DEBOUNCE_MS)
     }

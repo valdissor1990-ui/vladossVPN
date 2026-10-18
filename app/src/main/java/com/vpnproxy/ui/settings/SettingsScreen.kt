@@ -1,5 +1,6 @@
 package com.vpnproxy.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,7 +31,13 @@ fun SettingsScreen(
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
     var showIntervalDialog by remember { mutableStateOf(false) }
+    var showSplitTunnelScreen by remember { mutableStateOf(false) }
     val intervals = listOf(1, 3, 6, 12, 24)
+
+    if (showSplitTunnelScreen) {
+        SplitTunnelScreen(onBack = { showSplitTunnelScreen = false })
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -57,6 +64,18 @@ fun SettingsScreen(
                     Text("Блокировать трафик при разрыве туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 Switch(checked = killSwitch, onCheckedChange = { viewModel.setKillSwitch(it) })
+            }
+
+            Text("СЕТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showSplitTunnelScreen = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Обход VPN", style = MaterialTheme.typography.bodyLarge)
+                    Text("Выбрать приложения для туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                TextButton(onClick = { showSplitTunnelScreen = true }) { Text("Настроить") }
             }
 
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))

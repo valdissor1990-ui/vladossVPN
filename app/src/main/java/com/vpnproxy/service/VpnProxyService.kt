@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
 import com.vpnproxy.core.network.NetworkAwareReconnector
+import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.xray.XrayCore
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import java.util.concurrent.atomic.AtomicBoolean
 
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
@@ -54,6 +56,7 @@ class VpnProxyService : VpnService() {
     }
 
     @Inject lateinit var tunnelManager: TunnelManager
+    @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var xrayCore: XrayCore
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
@@ -63,6 +66,8 @@ class VpnProxyService : VpnService() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
+    private var watchdogJob: Job? = null
+    private val isReconnecting = AtomicBoolean(false)
 
     @Volatile
     private var startInProgress = false
@@ -79,6 +84,7 @@ class VpnProxyService : VpnService() {
             isBusy = { startInProgress || autoSwitcher.isSwitching() },
             onReconnectRequested = {
                 if (startInProgress || autoSwitcher.isSwitching()) {
+                    isReconnecting.set(false)
                     logCollector.debug(TAG, "Network reconnect skipped — busy")
                     return@NetworkAwareReconnector
                 }
@@ -88,8 +94,13 @@ class VpnProxyService : VpnService() {
                 try {
                     startService(intent)
                 } catch (t: Throwable) {
+                    isReconnecting.set(false)
                     logCollector.error(TAG, "Network reconnect start failed", t)
                 }
+            },
+            onReconnectStateChanged = { reconnecting ->
+                isReconnecting.set(reconnecting)
+                logCollector.debug(TAG, "Network reconnect state=$reconnecting")
             }
         ).also { it.start() }
     }
@@ -99,6 +110,7 @@ class VpnProxyService : VpnService() {
             ACTION_STOP -> stopVpn()
             ACTION_RECONNECT -> scope.launch {
                 if (startInProgress) {
+                    isReconnecting.set(false)
                     logCollector.debug(TAG, "RECONNECT skipped — startInProgress")
                     return@launch
                 }
@@ -139,10 +151,24 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "Starting VPN orchestrator…")
                 startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
 
-                scope.launch {
+                // Restart the watchdog for this start attempt. During a network-triggered
+                // reconnect, allow a bounded extra 30 seconds for the debounce and Xray startup.
+                watchdogJob?.cancel()
+                watchdogJob = scope.launch {
                     delay(15_000)
+                    var graceWaitedMs = 0L
+                    while (WatchdogReconnectPolicy.shouldWaitForReconnect(
+                        vpnRunning = _isRunning.value,
+                        reconnecting = isReconnecting.get(),
+                        graceWaitedMs = graceWaitedMs
+                    )) {
+                        logCollector.debug(TAG, "Watchdog: reconnect in progress; extending timeout")
+                        delay(5_000)
+                        graceWaitedMs += 5_000L
+                    }
                     if (!_isRunning.value) {
-                        logCollector.warn(TAG, "Watchdog: VPN not running after 15s — stopping")
+                        val elapsedSeconds = 15 + graceWaitedMs / 1_000
+                        logCollector.warn(TAG, "Watchdog: VPN not running after ${elapsedSeconds}s — stopping")
                         stopVpnInternal()
                         stopSelf()
                     }
@@ -157,7 +183,10 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
-                val pfd = tunnelManager.establishTun(Builder())
+                val builder = Builder()
+                // Apply per-app policy before establish(); SplitTunnelManager always excludes this app.
+                splitTunnelManager.applyRules(builder, this@VpnProxyService)
+                val pfd = tunnelManager.establishTun(builder)
                 if (pfd == null) {
                     val reason = "TUN establishment failed"
                     logCollector.error(TAG, reason)
@@ -218,6 +247,7 @@ class VpnProxyService : VpnService() {
                 autoSwitcher.startMonitoring()
 
                 _isRunning.value = true
+                isReconnecting.set(false)
                 updateNotification(getString(R.string.state_connected))
                 logCollector.info(TAG, "VPN started successfully")
             } catch (c: kotlinx.coroutines.CancellationException) {
@@ -228,6 +258,8 @@ class VpnProxyService : VpnService() {
                 stopSelf()
             } finally {
                 startInProgress = false
+                // Every terminal start path (success, failure, or cancellation) releases the guard.
+                isReconnecting.set(false)
             }
         }
     }
@@ -258,6 +290,9 @@ class VpnProxyService : VpnService() {
     override fun onDestroy() {
         networkReconnector?.stop()
         networkReconnector = null
+        watchdogJob?.cancel()
+        watchdogJob = null
+        isReconnecting.set(false)
         scope.launch { stopVpnInternal() }
         scope.cancel()
         super.onDestroy()
