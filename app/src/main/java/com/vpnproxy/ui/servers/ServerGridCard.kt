@@ -17,8 +17,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import android.widget.Toast
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -36,7 +34,6 @@ fun ServerGridCard(
     onDetailsClick: () -> Unit = {}
 ) {
     val c = server.config
-    val context = LocalContext.current
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
     val transportKey = c.transport.lowercase()
@@ -60,17 +57,7 @@ fun ServerGridCard(
     }
 
     Card(
-        onClick = {
-            if (c.isUnsupportedProtocol) {
-                Toast.makeText(
-                    context,
-                    "Протокол Hysteria2/TUIC требует ядра Sing-box и пока не поддерживается для подключения",
-                    Toast.LENGTH_LONG
-                ).show()
-            } else {
-                onClick()
-            }
-        },
+        onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
