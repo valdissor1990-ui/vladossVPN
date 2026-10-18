@@ -45,6 +45,7 @@ class SingboxProxyService : Service() {
     private val starting = AtomicBoolean(false)
     @Volatile private var coreService: Any? = null
     @Volatile private var lastError: String? = null
+    @Volatile private var libboxSetupDone = false
 
     private val messenger = Messenger(Handler(Looper.getMainLooper()) { message ->
         when (message.what) {
@@ -130,24 +131,27 @@ class SingboxProxyService : Service() {
             val base = filesDir.absolutePath
             val working = getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath
             val temp = cacheDir.absolutePath
-            val setup = libbox.methods.firstOrNull { it.name == "setup" }
-                ?: error("libbox setup API not found")
-            val setupArgs = setup.parameterTypes.mapIndexed { index, type ->
-                when {
-                    type == String::class.java -> when (index) {
-                        0 -> base
-                        1 -> working
-                        2 -> temp
-                        else -> "warn"
+            if (!libboxSetupDone) {
+                val setup = libbox.methods.firstOrNull { it.name == "setup" }
+                    ?: error("libbox setup API not found")
+                val setupArgs = setup.parameterTypes.mapIndexed { index, type ->
+                    when {
+                        type == String::class.java -> when (index) {
+                            0 -> base
+                            1 -> working
+                            2 -> temp
+                            else -> "warn"
+                        }
+                        type == Int::class.javaPrimitiveType || type == Int::class.javaObjectType ->
+                            if (index == setup.parameterTypes.lastIndex) 1000 else 0
+                        type == Long::class.javaPrimitiveType || type == Long::class.javaObjectType -> 1000L
+                        type == Boolean::class.javaPrimitiveType || type == Boolean::class.javaObjectType -> false
+                        else -> null
                     }
-                    type == Int::class.javaPrimitiveType || type == Int::class.javaObjectType ->
-                        if (index == setup.parameterTypes.lastIndex) 1000 else 0
-                    type == Long::class.javaPrimitiveType || type == Long::class.javaObjectType -> 1000L
-                    type == Boolean::class.javaPrimitiveType || type == Boolean::class.javaObjectType -> false
-                    else -> null
-                }
-            }.toTypedArray()
-            setup.invoke(null, *setupArgs)
+                }.toTypedArray()
+                setup.invoke(null, *setupArgs)
+                libboxSetupDone = true
+            }
 
             val newService = libbox.methods.firstOrNull { method ->
                 method.name == "newService" && method.parameterTypes.size == 2 &&
@@ -305,9 +309,9 @@ object SingboxProxyClient {
 
     fun stop(context: Context) {
         try {
-            context.applicationContext.startService(
+            // stopService does not create a new :singbox process for VLESS-only sessions.
+            context.applicationContext.stopService(
                 Intent(context.applicationContext, SingboxProxyService::class.java)
-                    .setAction(SingboxProxyService.ACTION_STOP)
             )
         } catch (t: Throwable) {
             Log.w("SingboxProxyClient", "Unable to request sing-box shutdown", t)
