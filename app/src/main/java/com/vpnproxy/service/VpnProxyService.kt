@@ -157,7 +157,11 @@ class VpnProxyService : VpnService() {
                 watchdogJob = scope.launch {
                     delay(15_000)
                     var graceWaitedMs = 0L
-                    while (!_isRunning.value && isReconnecting.get() && graceWaitedMs < 30_000L) {
+                    while (WatchdogReconnectPolicy.shouldWaitForReconnect(
+                        vpnRunning = _isRunning.value,
+                        reconnecting = isReconnecting.get(),
+                        graceWaitedMs = graceWaitedMs
+                    )) {
                         logCollector.debug(TAG, "Watchdog: reconnect in progress; extending timeout")
                         delay(5_000)
                         graceWaitedMs += 5_000L
