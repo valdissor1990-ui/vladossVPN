@@ -308,6 +308,7 @@ class VpnProxyService : VpnService() {
 
     private fun stopServiceWithReason(reason: String, throwable: Throwable? = null) {
         Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
+        SingboxProxyClient.stop(this)
         stopSelf()
     }
 
@@ -340,7 +341,7 @@ class VpnProxyService : VpnService() {
         watchdogJob?.cancel()
         watchdogJob = null
         isReconnecting.set(false)
-        scope.launch { stopVpnInternal() }
+        kotlinx.coroutines.runBlocking { stopVpnInternal("onDestroy invoked") }
         scope.cancel()
         super.onDestroy()
     }
