@@ -201,8 +201,6 @@ class DeepProbeEngine @Inject constructor(
                 put("outboundTag", outboundTag)
             })
         }
-        outbounds.put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
-        outbounds.put(JSONObject().put("tag", "block").put("protocol", "blackhole"))
         return JSONObject().apply {
             put("log", JSONObject().put("loglevel", "warning"))
             put("inbounds", inbounds)
