@@ -37,6 +37,8 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val BOOTSTRAP_ASSET = "default_servers.txt"
+        const val BOOTSTRAP_TAG = "Bootstrap"
 
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
@@ -88,11 +90,31 @@ class SubscriptionRepository @Inject constructor(
     private val _lastRefreshUsedCache = MutableStateFlow(false)
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
+    /** true when active list comes only from assets/default_servers.txt */
+    private val _usingBootstrap = MutableStateFlow(false)
+    val usingBootstrap: StateFlow<Boolean> = _usingBootstrap.asStateFlow()
+
     private val refreshMutex = Mutex()
 
     init {
         loadFromPrefs()
         ensureDefaultSubscription()
+        // Cold start: prefer cache, else bootstrap so UI is never empty offline
+        val cached = loadConfigsFromCache()
+        if (cached.isNotEmpty()) {
+            _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
+                "${it.address}|${it.port}|${it.uuid}"
+            }
+            _usingBootstrap.value = false
+            logCollector.info(TAG, "Cold start from cache: ${_allConfigs.value.size}")
+        } else {
+            val boot = loadBootstrapConfigs()
+            if (boot.isNotEmpty()) {
+                _allConfigs.value = boot
+                _usingBootstrap.value = true
+                logCollector.info(TAG, "Cold start from bootstrap assets: ${boot.size}")
+            }
+        }
     }
 
     private fun loadFromPrefs() {
@@ -130,6 +152,20 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
+    /** Priority: network → cache → assets/default_servers.txt */
+    fun loadBootstrapConfigs(): List<ParsedConfig> {
+        return try {
+            val text = context.assets.open(BOOTSTRAP_ASSET).bufferedReader().use { it.readText() }
+            if (text.isBlank()) return emptyList()
+            val configs = parser.parse(text, providerTag = BOOTSTRAP_TAG)
+            logCollector.info(TAG, "Bootstrap configs loaded: ${configs.size}")
+            configs
+        } catch (e: Exception) {
+            logCollector.warn(TAG, "Bootstrap assets unavailable: ${e.message}")
+            emptyList()
+        }
+    }
+
     suspend fun addSubscription(url: String, name: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val id = java.util.UUID.randomUUID().toString()
@@ -159,12 +195,14 @@ class SubscriptionRepository @Inject constructor(
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
+            var anyNetworkSuccess = false
 
             for (sub in subs) {
                 try {
                     val configs = fetchAndParse(sub)
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
+                    anyNetworkSuccess = true
 
                     val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                     _subscriptions.value = _subscriptions.value.map {
@@ -185,17 +223,31 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            if (allConfigsList.isNotEmpty()) {
+            // Last resort: embedded bootstrap servers
+            if (allConfigsList.isEmpty()) {
+                val boot = loadBootstrapConfigs()
+                if (boot.isNotEmpty()) {
+                    allConfigsList.addAll(boot)
+                    totalConfigs = boot.size
+                    _usingBootstrap.value = true
+                    logCollector.info(TAG, "Fallback to bootstrap assets: ${boot.size}")
+                }
+            } else if (anyNetworkSuccess) {
+                _usingBootstrap.value = false
                 saveConfigsToCache(allConfigsList)
+            } else if (allConfigsList.isNotEmpty()) {
+                // cache-only recovery
+                _usingBootstrap.value = false
             }
+
             _allConfigs.value = allConfigsList.distinctBy {
                 "${it.address}|${it.port}|${it.uuid}"
             }
             saveToPrefs()
-            val sourceLabel = if (_lastRefreshUsedCache.value) {
-                "cached fallback applied"
-            } else {
-                "fetched from network"
+            val sourceLabel = when {
+                _usingBootstrap.value -> "bootstrap assets"
+                _lastRefreshUsedCache.value -> "cached fallback"
+                else -> "fetched from network"
             }
             logCollector.info(TAG, "Total configs loaded: $totalConfigs ($sourceLabel)")
             totalConfigs
@@ -269,8 +321,11 @@ class SubscriptionRepository @Inject constructor(
         "${it.address}|${it.port}|${it.uuid}"
     }
 
-    fun getCachedConfigs(): List<ParsedConfig> =
-        loadConfigsFromCache().map { it.toParsedConfig() }
+    fun getCachedConfigs(): List<ParsedConfig> {
+        val cached = loadConfigsFromCache().map { it.toParsedConfig() }
+        if (cached.isNotEmpty()) return cached
+        return loadBootstrapConfigs()
+    }
 
     @Serializable
     private data class CachedConfig(
@@ -331,6 +386,8 @@ class SubscriptionRepository @Inject constructor(
 
     private fun saveConfigsToCache(configs: List<ParsedConfig>) {
         try {
+            // Never persist pure bootstrap as cache (would hide real offline state)
+            if (configs.all { it.providerTag == BOOTSTRAP_TAG }) return
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
             File(context.filesDir, CACHE_FILE).writeText(jsonStr)
