@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import io.nekohasekai.libbox.*
+import io.nekohasekai.libbox.RoutePrefix
 import java.net.InetAddress
 import kotlinx.coroutines.runBlocking
 
@@ -157,6 +158,6 @@ class SingBoxPlatform(
         error("unsupported PlatformInterface method: $method")
     }
 
-    private fun IpCIDR.toIpPrefix(): IpPrefix =
+    private fun RoutePrefix.toIpPrefix(): IpPrefix =
         IpPrefix(InetAddress.getByName(address()), prefix())
 }
