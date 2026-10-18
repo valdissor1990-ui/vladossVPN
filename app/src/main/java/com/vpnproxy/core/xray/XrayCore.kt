@@ -303,7 +303,7 @@ class XrayCore @Inject constructor(
                 put("domainStrategy", "IPIfNonMatch")
                 val geositeFile = File(context.filesDir, "xray/geosite.dat")
                 val rules = JSONArray()
-                if (geositeFile.isFile && geositeFile.length() > 0L) {
+                if (!serverConfig.requiresSingBox() && geositeFile.isFile && geositeFile.length() > 0L) {
                     rules.put(JSONObject().apply {
                         put("type", "field")
                         put("domain", JSONArray().put("geosite:category-ads-all"))
@@ -315,8 +315,16 @@ class XrayCore @Inject constructor(
                         put("outboundTag", "direct")
                     })
                     Log.i(TAG, "Geo routing enabled")
-                } else {
+                } else if (!serverConfig.requiresSingBox()) {
                     Log.w(TAG, "geosite.dat unavailable; starting without geosite routing rules")
+                }
+                if (serverConfig.requiresSingBox()) {
+                    // Explicit catch-all: HY2/TUIC traffic must leave through the local Sing-box proxy.
+                    rules.put(JSONObject().apply {
+                        put("type", "field")
+                        put("network", "tcp,udp")
+                        put("outboundTag", "proxy")
+                    })
                 }
                 put("rules", rules)
             })
