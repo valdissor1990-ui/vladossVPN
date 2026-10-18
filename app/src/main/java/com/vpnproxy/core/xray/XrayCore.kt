@@ -52,6 +52,38 @@ class XrayCore @Inject constructor(
     @Volatile
     private var running = false
 
+    private val sessionLock = Any()
+    @Volatile private var deepProbeLease = false
+    @Volatile private var vpnStartupInProgress = false
+
+    /** Atomically reserves the singleton JNI core for a temporary deep-probe session. */
+    fun tryAcquireDeepProbeLease(): Boolean = synchronized(sessionLock) {
+        if (running || vpnStartupInProgress || deepProbeLease) false
+        else {
+            deepProbeLease = true
+            true
+        }
+    }
+
+    fun releaseDeepProbeLease() {
+        synchronized(sessionLock) { deepProbeLease = false }
+    }
+
+    /** Prevents a VPN start from racing with a deep-probe JNI session. */
+    fun beginVpnStartup(): Boolean = synchronized(sessionLock) {
+        if (deepProbeLease || vpnStartupInProgress) false
+        else {
+            vpnStartupInProgress = true
+            true
+        }
+    }
+
+    fun endVpnStartup() {
+        synchronized(sessionLock) { vpnStartupInProgress = false }
+    }
+
+    fun isDeepProbeActive(): Boolean = deepProbeLease
+
     private val callback = object : CoreCallbackHandler {
         override fun startup(): Long = 0L
         override fun shutdown(): Long = 0L
@@ -71,8 +103,6 @@ class XrayCore @Inject constructor(
         return try {
             val dir = File(context.filesDir, "xray").apply { mkdirs() }
             ensureGeoAssets(dir)
-            // AndroidLibXrayLite maps this path to XRAY_LOCATION_ASSET /
-            // xray.location.asset, where Xray looks for geosite.dat and geoip.dat.
             Libv2ray.initCoreEnv(dir.absolutePath, "")
             envReady = true
             Log.i(TAG, "initCoreEnv OK path=${dir.absolutePath}")
@@ -83,10 +113,6 @@ class XrayCore @Inject constructor(
         }
     }
 
-    /**
-     * Best-effort download of official Xray geo databases. VPN startup must not depend
-     * on network access to these optional routing databases.
-     */
     private fun ensureGeoAssets(dir: File) {
         downloadGeoAssetIfMissing(File(dir, "geosite.dat"), GEOSITE_URL)
         downloadGeoAssetIfMissing(File(dir, "geoip.dat"), GEOIP_URL)
@@ -131,9 +157,6 @@ class XrayCore @Inject constructor(
         }
     }
 
-    /**
-     * Останавливает предыдущий loop (если был), ждёт закрытия сокета, затем startLoop.
-     */
     suspend fun start(configJson: String, tunFd: Int = 0): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             var ctrl: CoreController? = null
@@ -141,7 +164,6 @@ class XrayCore @Inject constructor(
                 if (!initEnv()) return@withLock false
                 JSONObject(configJson)
 
-                // Всегда гасим предыдущий контроллер, чтобы освободить :10808
                 controller?.let { previous ->
                     try {
                         previous.stopLoop()
@@ -149,10 +171,8 @@ class XrayCore @Inject constructor(
                         running = false
                         Log.i(TAG, "pre-start stopLoop OK")
                     } catch (e: CancellationException) {
-                        // Keep the controller reference so a later stop can retry cleanup.
                         throw e
                     } catch (t: Throwable) {
-                        // Do not start a second core if the previous loop may still own :10808.
                         Log.e(TAG, "pre-start stopLoop failed; refusing to start another controller", t)
                         return@withLock false
                     }
@@ -168,8 +188,6 @@ class XrayCore @Inject constructor(
                 Log.i(TAG, "startLoop returned normally tunFd=$tunFd")
                 true
             } catch (e: CancellationException) {
-                // If cancellation happened before creating the new controller, preserve the
-                // previous controller/state; it may still own the SOCKS port.
                 if (ctrl != null) {
                     val cleanupSucceeded = try {
                         ctrl.stopLoop()
@@ -191,8 +209,6 @@ class XrayCore @Inject constructor(
                 val masked = maskConfigForLog(configJson)
                 Log.e(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
                 LogCollectorHolder.get()?.error(TAG, "startLoop failed tunFd=$tunFd\n$masked", t)
-                // Do not clear a pre-existing controller when failure happened before the
-                // new controller was created (for example, invalid JSON or init failure).
                 if (ctrl != null) {
                     val cleanupSucceeded = try {
                         ctrl.stopLoop()
@@ -240,10 +256,8 @@ class XrayCore @Inject constructor(
                 Log.i(TAG, "stopLoop OK")
                 true
             } catch (e: CancellationException) {
-                // Preserve state: stopLoop may have been interrupted before cleanup completed.
                 throw e
             } catch (t: Throwable) {
-                // Retain the controller so a subsequent stop/start can retry cleanup.
                 Log.e(TAG, "stopLoop failed; retaining controller for retry", t)
                 false
             }

@@ -144,6 +144,12 @@ class VpnProxyService : VpnService() {
                 "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
             return
         }
+        if (!xrayCore.beginVpnStartup()) {
+            val reason = "Xray занят глубоким анализом; повторите подключение после завершения"
+            _lastError.value = reason
+            logCollector.warn(TAG, reason)
+            return
+        }
         _lastError.value = null
         startInProgress = true
 
@@ -267,6 +273,7 @@ class VpnProxyService : VpnService() {
                 stopServiceWithReason("startVpn failed", t)
             } finally {
                 startInProgress = false
+                xrayCore.endVpnStartup()
                 isReconnecting.set(false)
             }
         }
