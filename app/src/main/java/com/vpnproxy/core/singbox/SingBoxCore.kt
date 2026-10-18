@@ -89,18 +89,28 @@ class SingBoxCore(
     fun start(configJson: String) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
         stopInternal()
-        setup(context)
-        val server = CommandServer(handler, platform)
+        var server: CommandServer? = null
         try {
-            server.start()
-            server.startOrReloadService(configJson, OverrideOptions())
-            commandServer = server
+            Log.i(TAG, "Initializing libbox 1.14.3")
+            setup(context)
+            val createdServer = CommandServer(handler, platform)
+            server = createdServer
+            createdServer.start()
+            Log.i(TAG, "CommandServer started; applying VPN configuration")
+            createdServer.startOrReloadService(configJson, OverrideOptions())
+            commandServer = createdServer
             activeConfig = configJson
             Log.i(TAG, "libbox 1.14.3 started in the app process")
         } catch (t: Throwable) {
-            runCatching { server.closeService() }
-            runCatching { server.close() }
-            platform.closeTun()
+            Log.e(TAG, "Failed to initialize/start libbox", t)
+            server?.let { created ->
+                runCatching { created.closeService() }
+                    .onFailure { Log.e(TAG, "CommandServer.closeService cleanup failed", it) }
+                runCatching { created.close() }
+                    .onFailure { Log.e(TAG, "CommandServer.close cleanup failed", it) }
+            }
+            runCatching { platform.closeTun() }
+                .onFailure { Log.e(TAG, "TUN cleanup after libbox startup failure failed", it) }
             throw IllegalStateException("Unable to start libbox 1.14.3: ${t.message}", t)
         }
     }
