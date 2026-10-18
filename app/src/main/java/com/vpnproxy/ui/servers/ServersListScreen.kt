@@ -311,15 +311,15 @@ fun ServerListContent(
                     ServerGridCard(
                         server = scoredServer,
                         onClick = {
-                            if (scoredServer.config.requiresSingBox()) {
-                                val protocol = if (scoredServer.config.transport.equals("tuic", ignoreCase = true)) "TUIC" else "HY2"
+                            if (scoredServer.config.isUnsupportedProtocol) {
                                 Toast.makeText(
                                     context,
-                                    "Для подключения $protocol используется sing-box",
-                                    Toast.LENGTH_SHORT
+                                    "Протокол Hysteria2/TUIC требует ядра Sing-box и пока не поддерживается для подключения",
+                                    Toast.LENGTH_LONG
                                 ).show()
+                            } else {
+                                onServerSelected(scoredServer)
                             }
-                            onServerSelected(scoredServer)
                         },
                         scoreOverride = scoreLabel,
                         scoreColorOverride = scoreColor,
