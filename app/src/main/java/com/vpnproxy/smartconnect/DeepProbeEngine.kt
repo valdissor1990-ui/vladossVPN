@@ -154,7 +154,7 @@ class DeepProbeEngine @Inject constructor(
                         speedMbps = speed,
                         jitterMs = jitter,
                         lossRate = failures.toDouble() / LATENCY_SAMPLES,
-                        healthOk = samples.isNotEmpty() && speedOk
+                        healthOk = samples.size >= 2 && speedOk
                     )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
