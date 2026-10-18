@@ -13,14 +13,8 @@ import javax.inject.Singleton
 /**
  * TUN + hev-socks5-tunnel.
  *
- * Реальный AAR org.amnezia.awg.hevtunnel.TProxyService — JNI API:
- *   TProxyStartService(configPath, tunFd): void
- *   TProxyStopService(): void
- *   TProxyGetStats(): long[]
- * Состояние запуска отслеживается на стороне Kotlin.
- *
- * TUN fd создаёт наш VpnProxyService через Builder.establish(), затем
- * передаётся в hev. Один VpnService в процессе — без конфликта.
+ * MTU 1400 — безопасный размер для мобильных сетей и UDP (Zello и т.п.).
+ * 8500 вызывал фрагментацию и потерю UDP-пакетов голоса.
  */
 @Singleton
 class TunnelManager @Inject constructor(
@@ -33,7 +27,8 @@ class TunnelManager @Inject constructor(
         const val SOCKS_PORT = 10808
         const val TUN_ADDRESS = "10.255.0.2"
         const val TUN_PREFIX = 30
-        const val TUN_MTU = 8500
+        /** Mobile-safe MTU; avoids UDP fragmentation on LTE/WiFi. */
+        const val TUN_MTU = 1400
         const val DNS_SERVER = "1.1.1.1"
     }
 
@@ -57,7 +52,7 @@ class TunnelManager @Inject constructor(
             builder.setUnderlyingNetworks(null)
 
             vpnInterface = builder.establish()
-            Log.i(TAG, "TUN established: ${vpnInterface != null} fd=${vpnInterface?.fd}")
+            Log.i(TAG, "TUN established: ${vpnInterface != null} fd=${vpnInterface?.fd} mtu=$TUN_MTU")
             vpnInterface
         } catch (e: Exception) {
             Log.e(TAG, "Failed to establish TUN", e)
@@ -122,6 +117,7 @@ class TunnelManager @Inject constructor(
 
     private fun buildHevConfig(): String {
         val logFile = File(context.filesDir, "hev.log").absolutePath
+        // udp: udp — explicit UDP relay via SOCKS5 for Zello and other UDP apps
         return """
             tunnel:
               mtu: $TUN_MTU
