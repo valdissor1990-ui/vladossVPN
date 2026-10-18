@@ -197,7 +197,7 @@ class AutoSwitcher @Inject constructor(
             try {
                 val socketProxy = if (protectFromVpn) Proxy.NO_PROXY else Proxy(
                     Proxy.Type.SOCKS,
-                    InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)
+                    InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
                 )
                 Socket(socketProxy).use { socket ->
                     if (protectFromVpn) {
