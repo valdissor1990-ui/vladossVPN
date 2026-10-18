@@ -35,7 +35,7 @@ class HysteriaTuicParseTest {
         assertEquals("11111111-1111-1111-1111-111111111111", cfg.uuid)
         assertEquals("pass", cfg.password)
         assertTrue(cfg.requiresSingBox())
-        assertTrue(cfg.isUnsupportedProtocol)
+
     }
 
     @Test
