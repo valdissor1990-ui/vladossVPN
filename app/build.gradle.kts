@@ -128,24 +128,14 @@ android {
             )
         }
         jniLibs {
-            // Критично для libv2ray + hev: оба содержат libgojni.so
-            pickFirsts += setOf(
-                "**/libgojni.so",
-                "**/libv2ray.so",
-                "**/libhev-socks5-tunnel.so"
-            )
             useLegacyPackaging = false
         }
     }
 }
 
 dependencies {
-    // Official libbox 1.14.3 release, downloaded and de-duplicated by scripts/download_xray.sh.
-    implementation(files("libs/libbox-stripped.aar"))
-
-    // Downloaded by scripts/download_xray.sh in CI
-    implementation(files("libs/libv2ray.aar"))
-    implementation(files("libs/hev-socks5-tunnel.aar"))
+    // Full official libbox 1.14.3 AAR, including Go bridge classes.
+    implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
     implementation("androidx.compose.ui:ui")

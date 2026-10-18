@@ -47,12 +47,7 @@
                 android:value="true" />
         </service>
 
-        <!-- Isolated Sing-box proxy process; never owns a TUN. -->
-        <service
-            android:name=".core.singbox.SingboxProxyService"
-            android:process=":singbox"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+
 
         <!-- Boot Receiver — автозапуск VPN -->
         <receiver
