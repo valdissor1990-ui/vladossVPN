@@ -61,4 +61,23 @@ class HysteriaTuicParseTest {
         assertTrue(configs.any { it.transport == "tuic" })
         assertTrue(configs.all { it.providerTag == "Test" })
     }
+    @Test
+    fun parsesVlessXhttpRealityUriAndExtraWithoutThrowing() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=reality&sni=www.example.org&fp=chrome&pbk=public-key&sid=a1b2" +
+                "&path=%2Fxhttp&host=www.example.org&mode=stream-one" +
+                "&extra=%7B%22x_padding_bytes%22%3A%22100-200%22%7D#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertEquals("xhttp", cfg!!.transport)
+        assertEquals("stream-one", cfg.mode)
+        assertEquals("/xhttp", cfg.path)
+        assertEquals("www.example.org", cfg.host)
+        assertEquals("public-key", cfg.publicKey)
+        assertEquals("a1b2", cfg.shortId)
+        assertTrue(cfg.requiresSingBox())
+        assertTrue(cfg.extra.orEmpty().contains("x_padding_bytes"))
+    }
+
 }

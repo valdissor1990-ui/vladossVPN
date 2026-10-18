@@ -134,4 +134,33 @@ class SingboxConfigBuilderTest {
         }
     }
 
+    @Test
+    fun xhttpRealityMapsTransportAndExtraFields() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "xhttp.example.org",
+            port = 443,
+            transport = "xhttp",
+            security = "reality",
+            sni = "www.example.org",
+            path = "/xhttp", host = "www.example.org", mode = "stream-one",
+            fingerprint = "chrome", publicKey = "public-key", shortId = "a1b2",
+            flow = "", name = "xhttp",
+            extra = """{"x_padding_bytes":"100-200","headers":{"X-Test":"yes"}}"""
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(SingboxConfigBuilder.build(config))
+            .jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        val transport = outbound["transport"]!!.jsonObject
+        assertEquals("xhttp", transport["type"]!!.jsonPrimitive.content)
+        assertEquals("www.example.org", transport["host"]!!.jsonPrimitive.content)
+        assertEquals("/xhttp", transport["path"]!!.jsonPrimitive.content)
+        assertEquals("stream-one", transport["mode"]!!.jsonPrimitive.content)
+        assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
+        assertEquals("yes", transport["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
+        val tls = outbound["tls"]!!.jsonObject
+        assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)
+        assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
+        assertEquals("a1b2", tls["reality"]!!.jsonObject["short_id"]!!.jsonPrimitive.content)
+    }
+
 }
