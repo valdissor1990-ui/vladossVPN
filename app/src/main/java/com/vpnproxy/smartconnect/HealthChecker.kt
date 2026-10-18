@@ -9,7 +9,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -129,33 +128,38 @@ class HealthChecker @Inject constructor(
     private suspend fun <T> withSingboxClient(
         config: ParsedConfig,
         action: (OkHttpClient) -> T
-    ): T = singboxProbeMutex.withLock {
-        val manageSingbox = !VpnProxyService.isRunning.value
-        if (manageSingbox) {
-            val started = SingboxProxyClient.start(context, SingboxConfigBuilder.build(config))
-            if (!started) {
-                SingboxProxyClient.stop(context)
-                error("Sing-box failed to start for health check")
-            }
-        }
-
-        val client = if (manageSingbox) {
-            OkHttpClient.Builder()
-                .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
-                .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .callTimeout(15, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(false)
-                .build()
-        } else {
-            // The active VPN route is the only safe probe while another server is connected.
-            httpClient
-        }
-
+    ): T {
+        singboxProbeMutex.lock()
         try {
-            action(client)
+            val manageSingbox = !VpnProxyService.isRunning.value
+            if (manageSingbox) {
+                val started = SingboxProxyClient.start(context, SingboxConfigBuilder.build(config))
+                if (!started) {
+                    SingboxProxyClient.stop(context)
+                    error("Sing-box failed to start for health check")
+                }
+            }
+
+            val client = if (manageSingbox) {
+                OkHttpClient.Builder()
+                    .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
+                    .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .callTimeout(15, TimeUnit.SECONDS)
+                    .retryOnConnectionFailure(false)
+                    .build()
+            } else {
+                // The active VPN route is the only safe probe while another server is connected.
+                httpClient
+            }
+
+            try {
+                action(client)
+            } finally {
+                if (manageSingbox) SingboxProxyClient.stop(context)
+            }
         } finally {
-            if (manageSingbox) SingboxProxyClient.stop(context)
+            singboxProbeMutex.unlock()
         }
     }
 }
