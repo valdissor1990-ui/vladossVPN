@@ -17,10 +17,14 @@ printf '%s  %s\n' "$LIBBOX_SHA256" "$LIBBOX_AAR" | sha256sum --check --status
 unzip -t "$LIBBOX_AAR" >/dev/null
 
 TMP_CLASSES="$(mktemp)"
-trap 'rm -f "$TMP_CLASSES"' EXIT
+TMP_CLASS_LIST="$(mktemp)"
+TMP_AAR_LIST="$(mktemp)"
+trap 'rm -f "$TMP_CLASSES" "$TMP_CLASS_LIST" "$TMP_AAR_LIST"' EXIT
 unzip -p "$LIBBOX_AAR" classes.jar > "$TMP_CLASSES"
-jar tf "$TMP_CLASSES" | grep -q '^io/nekohasekai/libbox/PlatformInterface.class$'
-jar tf "$TMP_CLASSES" | grep -q '^go/Seq.class$'
-unzip -l "$LIBBOX_AAR" | grep -q 'jni/arm64-v8a/libbox.so'
+jar tf "$TMP_CLASSES" > "$TMP_CLASS_LIST"
+grep -F -x 'io/nekohasekai/libbox/PlatformInterface.class' "$TMP_CLASS_LIST" >/dev/null
+grep -F -x 'go/Seq.class' "$TMP_CLASS_LIST" >/dev/null
+unzip -Z1 "$LIBBOX_AAR" > "$TMP_AAR_LIST"
+grep -F -x 'jni/arm64-v8a/libbox.so' "$TMP_AAR_LIST" >/dev/null
 
 echo "sing-box-lx ${LIBBOX_VERSION}: full AAR verified (SHA-256, XHTTP release, PlatformInterface, Go bridge, libbox.so)"
