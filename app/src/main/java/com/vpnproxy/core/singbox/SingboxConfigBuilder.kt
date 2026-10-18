@@ -126,12 +126,8 @@ object SingboxConfigBuilder {
         val isVless = config.transport.equals("vless", true) || (!isHy2 && !isTuic)
         require(isVless || isHy2 || isTuic) { "Unsupported Sing-box outbound: ${config.transport}" }
         if (isVless) {
-            val transport = config.transport.lowercase()
-            require(transport != "xhttp") {
-                "XHTTP is not supported by upstream libbox 1.14.3; refusing to silently downgrade it to TCP"
-            }
-            require(transport in setOf("", "tcp", "raw", "none", "vless", "ws", "grpc", "http", "httpupgrade", "quic")) {
-                "Unsupported VLESS transport for upstream libbox 1.14.3: ${config.transport}"
+            require(config.transport.lowercase() in setOf("", "tcp", "raw", "none", "vless", "ws", "grpc", "http", "httpupgrade", "quic", "xhttp")) {
+                "Unsupported VLESS transport for sing-box-lx 1.14.3: ${config.transport}"
             }
         }
 
@@ -180,6 +176,26 @@ object SingboxConfigBuilder {
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
+                "xhttp" -> put("transport", buildJsonObject {
+                    // sing-box-lx exposes XHTTP options as direct transport fields, not an "extra" wrapper.
+                    config.extra?.takeIf { it.isNotBlank() }?.let { rawExtra ->
+                        val extraObject = try {
+                            Json.parseToJsonElement(rawExtra) as? JsonObject
+                                ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
+                        } catch (e: IllegalArgumentException) {
+                            throw e
+                        } catch (e: Exception) {
+                            throw IllegalArgumentException("Invalid XHTTP extra JSON: \${e.message}", e)
+                        }
+                        extraObject.forEach { (key, value) ->
+                            if (key !in setOf("type", "host", "path", "mode")) put(key, value)
+                        }
+                    }
+                    put("type", "xhttp")
+                    config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
+                })
             }
 
             if (isHy2 || isTuic || config.security.equals("tls", true) || config.security.equals("reality", true)) {

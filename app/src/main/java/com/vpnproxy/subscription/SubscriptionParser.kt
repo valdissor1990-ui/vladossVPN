@@ -1,6 +1,5 @@
 package com.vpnproxy.subscription
 
-import android.net.Uri
 import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
@@ -45,7 +44,8 @@ class SubscriptionParser @Inject constructor(
         val obfsType: String? = null,
         val obfsPassword: String? = null,
         val pinSHA256: String? = null,
-        val congestionControl: String = "bbr"
+        val congestionControl: String = "bbr",
+        val extra: String? = null
     ) {
         fun isValid(): Boolean {
             if (uuid.isBlank() || address.isBlank()) return false
@@ -58,7 +58,8 @@ class SubscriptionParser @Inject constructor(
         fun requiresSingBox(): Boolean =
             transport.equals("hysteria2", ignoreCase = true) ||
                 transport.equals("hy2", ignoreCase = true) ||
-                transport.equals("tuic", ignoreCase = true)
+                transport.equals("tuic", ignoreCase = true) ||
+                transport.equals("xhttp", ignoreCase = true)
 
 
     }
@@ -203,11 +204,12 @@ class SubscriptionParser @Inject constructor(
 
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
-            val parsed = Uri.parse(uri)
-            val uuid = parsed.userInfo ?: return null
+            // java.net.URI keeps this parser usable in JVM unit tests and preserves encoded URI components.
+            val parsed = URI(uri)
+            val uuid = parsed.rawUserInfo?.takeIf { it.isNotBlank() }?.let(::decodeUriComponent) ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
-            val params = parsed.queryParameterNames.associateWith { parsed.getQueryParameter(it) ?: "" }
+            val params = parseUriQuery(parsed.rawQuery)
             val transport = (params["type"] ?: params["transport"] ?: "tcp").lowercase()
             val security = (params["security"] ?: "none").lowercase()
             val sni = params["sni"] ?: params["serverName"]
@@ -218,19 +220,17 @@ class SubscriptionParser @Inject constructor(
             val shortId = params["sid"] ?: params["shortId"] ?: ""
             val rawFlow = params["flow"]
             val rawMode = params["mode"]
-            val mode: String? = when (transport) {
-                "xhttp" -> when (rawMode) { null, "", "auto" -> "stream-one"; else -> rawMode }
-                else -> rawMode
-            }
-            val flow: String? = if (transport == "xhttp") "" else rawFlow
-            val name = Uri.decode(parsed.fragment ?: "$address:$port")
+            val mode = if (transport == "xhttp") rawMode?.takeIf { it.isNotBlank() } ?: "auto" else rawMode
+            val flow = if (transport == "xhttp") "" else rawFlow
+            val name = parsed.rawFragment?.let(::decodeUriComponent) ?: "$address:$port"
             val config = ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = transport, security = security,
                 sni = sni, path = path, host = host, mode = mode,
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
-                providerTag = providerTag
+                providerTag = providerTag,
+                extra = params["extra"]?.takeIf { it.isNotBlank() }
             )
             if (!config.isValid()) {
                 logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))
