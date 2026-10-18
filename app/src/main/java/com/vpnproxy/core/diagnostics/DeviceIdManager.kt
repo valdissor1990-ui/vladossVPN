@@ -35,11 +35,14 @@ class DeviceIdManager @Inject constructor(
     }
 
     /** Returns a stable UUID string for this install. */
+    @Synchronized
     fun getHwid(): String {
         val existing = prefs.getString(KEY_HWID, null)
         if (!existing.isNullOrBlank()) return existing
         val created = UUID.randomUUID().toString()
-        prefs.edit().putString(KEY_HWID, created).apply()
+        check(prefs.edit().putString(KEY_HWID, created).commit()) {
+            "Unable to persist HWID in EncryptedSharedPreferences"
+        }
         return created
     }
 }
