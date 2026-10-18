@@ -232,7 +232,15 @@ class SingboxProxyService : Service() {
             .build()
 
     override fun onDestroy() {
-        scope.launch { stopCore() }
+        val current = coreService
+        coreService = null
+        try {
+            current?.javaClass?.methods?.firstOrNull {
+                it.name == "close" && it.parameterTypes.isEmpty()
+            }?.invoke(current)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Error closing sing-box during service destruction", t)
+        }
         scope.cancel()
         super.onDestroy()
     }
