@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -291,14 +292,46 @@ fun ServerListContent(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
-                HorizontalDivider()
-                breakdown?.takeIf { it.isValid }?.let { bd ->
-                    Text("Composite: ${bd.compositeScore.roundToInt()}", style = MaterialTheme.typography.bodyMedium)
-                    bd.perTarget.forEach { (id, ms) ->
-                        val name = targetNames[id] ?: id
-                        Text("$name: ${ms} ms", style = MaterialTheme.typography.bodySmall)
+
+                val score = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Общая оценка", style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    Text(
+                        text = score?.let { "${it} ms" } ?: "Недостаточно данных",
+                        color = score?.let { compositeScoreColor(it.toDouble()) }
+                            ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                val targets = breakdown?.perTarget.orEmpty()
+                if (targets.isEmpty()) {
+                    Text(
+                        "Данные пинга пока недоступны.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                } else {
+                    targets.forEach { tr ->
+                        val name = targetNames[tr.targetId] ?: tr.targetId
+                        val rtt = tr.rttMs?.let { "${it} ms" } ?: "—"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(name, style = MaterialTheme.typography.bodySmall)
+                            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                            Text(rtt, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
+
                 Text(
                     text = "${server.config.address}:${server.config.port}",
                     style = MaterialTheme.typography.bodyMedium,
