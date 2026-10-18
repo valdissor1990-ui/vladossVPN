@@ -1,6 +1,5 @@
 package com.vpnproxy.smartconnect
 
-import android.net.VpnService
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetSocketAddress
