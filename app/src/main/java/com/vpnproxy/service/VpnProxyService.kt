@@ -17,6 +17,8 @@ import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.xray.XrayCore
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
+import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -215,6 +217,24 @@ class VpnProxyService : VpnService() {
                     return@launch
                 }
 
+                if (parsed.requiresSingBox()) {
+                    val singboxStarted = SingboxProxyClient.start(
+                        this@VpnProxyService,
+                        SingboxConfigBuilder.build(parsed)
+                    )
+                    if (!singboxStarted) {
+                        val reason = "Sing-box failed to start for ${parsed.transport}; check libbox logs"
+                        _lastError.value = reason
+                        logCollector.error(TAG, reason)
+                        tunnelManager.tearDown()
+                        stopServiceWithReason(reason)
+                        return@launch
+                    }
+                    logCollector.info(TAG, "Sing-box proxy ready on 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
+                } else {
+                    SingboxProxyClient.stop(this@VpnProxyService)
+                }
+
                 if (!xrayCore.initEnv()) {
                     val reason = "initCoreEnv failed"
                     logCollector.error(TAG, reason)
@@ -300,6 +320,7 @@ class VpnProxyService : VpnService() {
             trafficCollector.stop()
             tunnelManager.stopHev()
             xrayCore.stop()
+            SingboxProxyClient.stop(this@VpnProxyService)
             tunnelManager.closeTun()
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
