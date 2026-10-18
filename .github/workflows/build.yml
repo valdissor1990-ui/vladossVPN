@@ -32,7 +32,7 @@ jobs:
           log-accepted-android-sdk-licenses: false
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
@@ -66,13 +66,13 @@ jobs:
         run: ./gradlew bundlePlayRelease --stacktrace
 
       - name: Upload APK artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: apk-direct
           path: app/build/outputs/apk/direct/release/*.apk
 
       - name: Upload AAB artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: aab-play
           path: app/build/outputs/bundle/playRelease/*.aab
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download APK artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: apk-direct
           path: release/

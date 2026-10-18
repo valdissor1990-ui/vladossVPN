@@ -12,6 +12,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 
 @Composable
@@ -27,28 +29,21 @@ fun ServerGridCard(
     server: ScoredServer,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    scoreOverride: String? = null
+    scoreOverride: String? = null,
+    scoreColorOverride: Color? = null,
+    onDetailsClick: () -> Unit = {}
 ) {
     val c = server.config
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
     val protocol = c.transport.uppercase().ifBlank { "VLESS" }
-    val pingLabel = scoreOverride ?: when {
-        server.latencyMs in 1..9998 -> "${server.latencyMs}ms"
-        else -> "—"
-    }
-    val pingColor = when {
-        pingLabel == "Slow" || pingLabel == "N/A" -> Color(0xFFE53935)
-        pingLabel.endsWith("ms") -> {
-            val ms = pingLabel.removeSuffix("ms").toLongOrNull() ?: 0L
-            when {
-                ms in 1 until 100 -> Color(0xFF43A047)
-                ms in 100 until 300 -> Color(0xFFF9A825)
-                ms >= 300 -> Color(0xFFE53935)
-                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            }
-        }
-        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    val scoreLabel = scoreOverride ?: "—"
+    val score = scoreLabel.removeSuffix("ms").trim().toDoubleOrNull()
+    val scoreColor = scoreColorOverride ?: when {
+        score == null -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+        score < 100.0 -> Color(0xFF43A047)
+        score <= 300.0 -> Color(0xFFF9A825)
+        else -> Color(0xFFE53935)
     }
 
     Card(
@@ -96,11 +91,18 @@ fun ServerGridCard(
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    text = pingLabel,
-                    color = pingColor,
+                    text = if (score == null) "—" else "${score.roundToInt()} ms",
+                    color = scoreColor,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
+                Spacer(Modifier.width(4.dp))
+                TextButton(
+                    onClick = onDetailsClick,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                ) {
+                    Text("ⓘ Детали", fontSize = 11.sp)
+                }
             }
         }
     }
