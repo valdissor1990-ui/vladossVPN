@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
@@ -131,8 +132,8 @@ class VpnProxyService : VpnService() {
 
     override fun onRevoke() {
         logCollector.warn(TAG, "onRevoke — VPN revoked by system")
-        scope.launch { stopVpnInternal() }
-        stopSelf()
+        scope.launch { stopVpnInternal("VPN permission revoked by system") }
+        stopServiceWithReason("VPN permission revoked by system")
         super.onRevoke()
     }
 
@@ -169,8 +170,8 @@ class VpnProxyService : VpnService() {
                     if (!_isRunning.value) {
                         val elapsedSeconds = 15 + graceWaitedMs / 1_000
                         logCollector.warn(TAG, "Watchdog: VPN not running after ${elapsedSeconds}s — stopping")
-                        stopVpnInternal()
-                        stopSelf()
+                        stopVpnInternal("watchdog timeout")
+                        stopServiceWithReason("watchdog timeout")
                     }
                 }
 
@@ -179,14 +180,19 @@ class VpnProxyService : VpnService() {
                     val reason = "Could not stop previous Xray loop; refusing to start a second one"
                     logCollector.error(TAG, reason)
                     _lastError.value = reason
-                    stopSelf()
+                    stopServiceWithReason(reason)
                     return@launch
                 }
 
                 val builder = Builder()
                 // Apply per-app policy before establish(); SplitTunnelManager always excludes this app.
                 splitTunnelManager.applyRules(builder, this@VpnProxyService)
-                val pfd = tunnelManager.establishTun(builder)
+                val pfd = try {
+                    tunnelManager.establishTun(builder)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Stopping VPN. Reason: establishTun threw", t)
+                    throw t
+                }
                 if (pfd == null) {
                     val reason = "TUN establishment failed"
                     logCollector.error(TAG, reason)
@@ -217,7 +223,12 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "libv2ray env initialized")
 
                 val xrayJson = xrayCore.buildClientConfig(parsed, TunnelManager.SOCKS_PORT)
-                val xrayOk = xrayCore.start(xrayJson, tunFd = 0)
+                val xrayOk = try {
+                    xrayCore.start(xrayJson, tunFd = 0)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Stopping VPN. Reason: startLoop threw for " + parsed.name, t)
+                    throw t
+                }
                 if (!xrayOk) {
                     val reason = "startLoop failed for ${parsed.name} (${parsed.transport}/${parsed.security})"
                     logCollector.error(TAG, reason)
@@ -253,9 +264,10 @@ class VpnProxyService : VpnService() {
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                Log.e(TAG, "Stopping VPN. Reason: startVpn failed", t)
                 logCollector.error(TAG, "Failed to start VPN", t)
-                stopVpnInternal()
-                stopSelf()
+                stopVpnInternal("startVpn failed", t)
+                stopServiceWithReason("startVpn failed", t)
             } finally {
                 startInProgress = false
                 // Every terminal start path (success, failure, or cancellation) releases the guard.
@@ -266,18 +278,27 @@ class VpnProxyService : VpnService() {
 
     private fun stopVpn() {
         scope.launch {
-            stopVpnInternal()
-            stopSelf()
+            stopVpnInternal("explicit ACTION_STOP")
+            stopServiceWithReason("explicit ACTION_STOP")
         }
     }
 
-    private suspend fun stopVpnInternal() {
+    private fun stopServiceWithReason(reason: String, throwable: Throwable? = null) {
+        Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
+        stopSelf()
+    }
+
+    private suspend fun stopVpnInternal(
+        reason: String = "stopVpnInternal requested",
+        throwable: Throwable? = null
+    ) {
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
             tunnelManager.stopHev()
             xrayCore.stop()
             tunnelManager.closeTun()
+            Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
             logCollector.info(TAG, "VPN stopped")
         } catch (c: kotlinx.coroutines.CancellationException) {
@@ -288,6 +309,7 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onDestroy() {
+        Log.e(TAG, "Stopping VPN. Reason: onDestroy invoked")
         networkReconnector?.stop()
         networkReconnector = null
         watchdogJob?.cancel()
