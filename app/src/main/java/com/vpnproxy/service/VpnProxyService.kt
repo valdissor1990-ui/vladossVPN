@@ -158,6 +158,11 @@ class VpnProxyService : VpnService() {
                 watchdogJob?.cancel()
                 watchdogJob = scope.launch {
                     delay(15_000)
+                    // Do not let a legacy watchdog tear down active Sing-box initialization.
+                    if (startInProgress) {
+                        logCollector.warn(TAG, "Watchdog: Sing-box startup still in progress after 15s; suppressing startup timeout")
+                        return@launch
+                    }
                     var graceWaitedMs = 0L
                     while (WatchdogReconnectPolicy.shouldWaitForReconnect(
                         vpnRunning = _isRunning.value,
@@ -188,7 +193,14 @@ class VpnProxyService : VpnService() {
 
                 logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
                 val core = singBoxCore ?: error("Sing-box core was not initialized")
-                core.start(SingboxConfigBuilder.buildVpn(parsed))
+                try {
+                    val configJson = SingboxConfigBuilder.buildVpn(parsed)
+                    Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
+                    core.start(configJson)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed to start Sing-box", t)
+                    throw t
+                }
 
                 trafficCollector.start()
                 trafficCollector.resetSession()
