@@ -39,6 +39,8 @@ class NetworkAwareReconnector(
     @Volatile private var lastReconnectAt = 0L
     @Volatile private var lastLostAt = 0L
     private val vpnNetworks = ConcurrentHashMap.newKeySet<Network>()
+    @Volatile private var lastAvailableNetwork: Network? = null
+    @Volatile private var lastAvailableSignature: String? = null
 
     private val pendingRestart = Runnable {
         if (!isVpnActive()) {
@@ -86,15 +88,21 @@ class NetworkAwareReconnector(
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            val caps = cm.getNetworkCapabilities(network)
-            if (caps == null) {
-                logCollector.debug(TAG, "onAvailable awaiting capabilities netId=${network.hashCode()}")
+            val caps = cm.getNetworkCapabilities(network) ?: return
+            // Filter the VPN interface before logging or any reconnect logic.
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                vpnNetworks.add(network)
                 return
             }
             handleAvailable(network, caps)
         }
 
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            // A VPN interface is never an underlying network candidate.
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                vpnNetworks.add(network)
+                return
+            }
             handleAvailable(network, caps)
         }
 
@@ -111,6 +119,10 @@ class NetworkAwareReconnector(
                 return
             }
             logCollector.info(TAG, "Underlying network lost netId=$netId vpn=${isVpnActive()}")
+            if (lastAvailableNetwork == network) {
+                lastAvailableNetwork = null
+                lastAvailableSignature = null
+            }
             lastLostAt = System.currentTimeMillis()
             if (isVpnActive()) scheduleRestart()
         }
@@ -118,9 +130,9 @@ class NetworkAwareReconnector(
 
     private fun handleAvailable(network: Network, caps: NetworkCapabilities) {
         val netId = network.hashCode()
+        // Defensive guard: never treat the VPN interface as the physical underlay.
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
             vpnNetworks.add(network)
-            logCollector.debug(TAG, "VPN transport ignored on available/capabilities netId=$netId")
             return
         }
         vpnNetworks.remove(network)
@@ -131,7 +143,18 @@ class NetworkAwareReconnector(
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
             else -> "OTHER"
         }
-
+        val signature = buildString {
+            append(transport)
+            append(':').append(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET))
+            append(':').append(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+            append(':').append(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))
+        }
+        val duplicate = lastAvailableNetwork == network &&
+            lastAvailableSignature == signature &&
+            lastLostAt == 0L
+        if (duplicate) return
+        lastAvailableNetwork = network
+        lastAvailableSignature = signature
         logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
 
         // Brief blink: network came back quickly — cancel pending tunnel restart (protect UDP/Zello)
@@ -143,6 +166,9 @@ class NetworkAwareReconnector(
             lastLostAt = 0L
             return
         }
+        // Consume the loss marker after the first recovery callback, even when recovery
+        // took longer than BLINK_MS; otherwise identical callbacks would never deduplicate.
+        lastLostAt = 0L
 
         // Network recovered during debounce window — cancel pending restart
         if (isVpnActive() && !isBusy() && hasUsableUnderlyingNetwork()) {

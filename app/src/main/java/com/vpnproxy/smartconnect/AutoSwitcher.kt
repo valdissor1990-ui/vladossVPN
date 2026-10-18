@@ -155,6 +155,13 @@ class AutoSwitcher @Inject constructor(
             }
             val nextIndex = (currentIndex + 1).coerceAtLeast(0) % ranked.size
             val next = ranked[nextIndex]
+            if (sameServer(current?.config, next.config)) {
+                _currentServer.value = next
+                baselineRtt = next.latencyMs
+                consecutiveErrors = 0
+                logCollector.info(TAG, "Manual switch skipped — already on ${next.config.name}; metrics refreshed")
+                return next
+            }
 
             _currentServer.value = next
             baselineRtt = next.latencyMs
@@ -172,12 +179,29 @@ class AutoSwitcher @Inject constructor(
         if (switching.get()) return
         val ranked = _rankedServers.value
         val best = ranked.firstOrNull() ?: return
+        val current = _currentServer.value
+        if (sameServer(current?.config, best.config)) {
+            // A transient RTT spike must not trigger a reconnect to the same endpoint.
+            _currentServer.value = best
+            baselineRtt = best.latencyMs
+            consecutiveErrors = 0
+            logCollector.info(TAG, "Auto re-select skipped — already on ${best.config.name}; metrics refreshed")
+            return
+        }
         _currentServer.value = best
         baselineRtt = best.latencyMs
         consecutiveErrors = 0
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
     }
+
+    private fun sameServer(
+        current: ParsedConfig?,
+        candidate: ParsedConfig
+    ): Boolean = current != null &&
+        current.address.equals(candidate.address, ignoreCase = true) &&
+        current.port == candidate.port &&
+        current.uuid == candidate.uuid
 
     fun clearSwitchEvent() {
         _switchEvents.value = null
