@@ -12,7 +12,7 @@ import com.vpnproxy.logging.LogCollector
 
 /**
  * Следит за сменой сети (WiFi → LTE и обратно).
- * Debounce 2s + cooldown 5s; игнорирует события во время старта/переключения VPN.
+ * Debounce 2s + cooldown 5s; игнорирует «мигание» сети <1s, чтобы не рвать UDP (Zello).
  */
 class NetworkAwareReconnector(
     context: Context,
@@ -27,6 +27,8 @@ class NetworkAwareReconnector(
         private const val TAG = "NetworkAwareReconnector"
         private const val DEBOUNCE_MS = 2_000L
         private const val COOLDOWN_MS = 5_000L
+        /** Brief onLost→recovery within this window cancels pending restart. */
+        private const val BLINK_MS = 1_000L
     }
 
     private val appContext = context.applicationContext
@@ -35,6 +37,7 @@ class NetworkAwareReconnector(
 
     @Volatile private var registered = false
     @Volatile private var lastReconnectAt = 0L
+    @Volatile private var lastLostAt = 0L
     private val vpnNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     private val pendingRestart = Runnable {
@@ -45,6 +48,12 @@ class NetworkAwareReconnector(
         }
         if (isBusy()) {
             logCollector.debug(TAG, "Debounced restart skipped — VPN busy")
+            onReconnectStateChanged(false)
+            return@Runnable
+        }
+        // If underlying network recovered before debounce fired, skip restart
+        if (hasUsableUnderlyingNetwork()) {
+            logCollector.info(TAG, "Debounced restart skipped — underlying network recovered (UDP-safe)")
             onReconnectStateChanged(false)
             return@Runnable
         }
@@ -64,11 +73,21 @@ class NetworkAwareReconnector(
         }
     }
 
+    private fun hasUsableUnderlyingNetwork(): Boolean {
+        return try {
+            val active = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(active) ?: return false
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val caps = cm.getNetworkCapabilities(network)
             if (caps == null) {
-                // Wait for onCapabilitiesChanged rather than guessing whether this is VPN.
                 logCollector.debug(TAG, "onAvailable awaiting capabilities netId=${network.hashCode()}")
                 return
             }
@@ -92,6 +111,7 @@ class NetworkAwareReconnector(
                 return
             }
             logCollector.info(TAG, "Underlying network lost netId=$netId vpn=${isVpnActive()}")
+            lastLostAt = System.currentTimeMillis()
             if (isVpnActive()) scheduleRestart()
         }
     }
@@ -112,10 +132,24 @@ class NetworkAwareReconnector(
             else -> "OTHER"
         }
 
-        // A NetworkRequest can report several simultaneously available transports.
-        // Do not restart merely because another physical network becomes visible;
-        // onLost below is the reliable transition signal for a disappearing network.
         logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
+
+        // Brief blink: network came back quickly — cancel pending tunnel restart (protect UDP/Zello)
+        val sinceLost = System.currentTimeMillis() - lastLostAt
+        if (lastLostAt > 0L && sinceLost < BLINK_MS) {
+            mainHandler.removeCallbacks(pendingRestart)
+            onReconnectStateChanged(false)
+            logCollector.info(TAG, "Network blink ${sinceLost}ms — cancel reconnect (UDP-safe)")
+            lastLostAt = 0L
+            return
+        }
+
+        // Network recovered during debounce window — cancel pending restart
+        if (isVpnActive() && !isBusy() && hasUsableUnderlyingNetwork()) {
+            mainHandler.removeCallbacks(pendingRestart)
+            onReconnectStateChanged(false)
+            logCollector.debug(TAG, "Underlying network recovered during debounce — skip restart")
+        }
     }
 
     fun start() {
