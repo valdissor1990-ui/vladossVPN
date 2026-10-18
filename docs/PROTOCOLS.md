@@ -1,52 +1,24 @@
 # Протоколы и конфигурация
 
-## VLESS + XHTTP + Reality (основной стек)
+## Поддерживаемые протоколы
 
-- **XHTTP** — HTTP-транспорт, скрывающий пост-хендшейк поведение (тайминги/размеры пакетов)
-- **Reality** — скрывает TLS-хендшейк, используя реальный сайт как маскировку
-- **mode = stream-one** — нормализуется парсером для совместимости XHTTP-подписок; проверяйте совместимость режима с версией сервера.
-- **flow = ""** на XHTTP — `xtls-rprx-vision` только на TCP
+- **VLESS + Reality:** UUID, SNI, fingerprint, public key (`pbk`), short ID (`sid`) и flow.
+- **VLESS transport:** TCP, WebSocket, gRPC, HTTP, HTTPUpgrade и QUIC — при условии совместимости транспорта с сервером и upstream libbox 1.14.3.
+- **Hysteria2:** пароль, TLS/SNI, ALPN и obfs Salamander.
+- **TUIC:** UUID, пароль, TLS/SNI, ALPN, `congestion_control` и `udp_relay_mode=native`.
 
-## Fallback: TCP + Reality + Vision
+## Ограничение XHTTP
 
-- Порт 8443 (отличный от 443)
-- `flow = "xtls-rprx-vision"`
-- Требуется для iOS (XHTTP+Reality сломан на Happ iOS)
+Официальный upstream Sing-box/libbox 1.14.3 не включает XHTTP в список V2Ray transports. Поэтому конфигурация с `type=xhttp` явно отклоняется с диагностикой, а не превращается в TCP и не создаёт ложное впечатление совместимости. Если XHTTP обязателен, нужен отдельный XHTTP-enabled core/fork; это уже не официальный неизменённый libbox 1.14.3.
 
-## Fingerprint
+## VLESS + Reality: поля URI
 
-- **firefox** — дефолт (TSPU 2026 меньше флагит)
-- **chrome** — поддержка обязательна (многие провайдеры выдают chrome)
+| URI parameter | Sing-box JSON |
+|---|---|
+| `pbk` | `tls.reality.public_key` |
+| `sid` | `tls.reality.short_id` |
+| `sni` | `tls.server_name` |
+| `fp` | `tls.utls.fingerprint` |
+| `flow` | outbound `flow` (например, `xtls-rprx-vision`) |
 
-## Пример JSON outbound
-
-```json
-{
-  "protocol": "vless",
-  "settings": {
-    "vnext": [{
-      "address": "SERVER_IP",
-      "port": 443,
-      "users": [{ "id": "UUID", "encryption": "none", "flow": "" }]
-    }]
-  },
-  "streamSettings": {
-    "method": "xhttp",
-    "xhttpSettings": { "path": "/yourpath", "mode": "stream-one" },
-    "security": "reality",
-    "realitySettings": {
-      "serverName": "www.microsoft.com",
-      "fingerprint": "firefox",
-      "publicKey": "PUBLIC_KEY",
-      "shortId": "SHORT_ID"
-    }
-  }
-}
-```
-
-## Важные ограничения
-
-1. Reality несовместим с CDN — только point-to-point
-2. auto mode запрещён — только stream-one
-3. flow: xtls-rprx-vision на XHTTP — критическая ошибка (error -1)
-4. Парсинг share-link: vless://uuid@host:port?type=xhttp&security=reality&fp=firefox&pbk=...&sid=...&sni=...&path=...&mode=stream-one#name
+Reality + Vision flow подходит для поддерживаемого TCP-сценария. Не задавайте Vision flow для транспорта, который его не поддерживает.

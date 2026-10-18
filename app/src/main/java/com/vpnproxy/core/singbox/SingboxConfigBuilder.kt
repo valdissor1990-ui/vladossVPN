@@ -125,6 +125,15 @@ object SingboxConfigBuilder {
         val isTuic = config.transport.equals("tuic", true)
         val isVless = config.transport.equals("vless", true) || (!isHy2 && !isTuic)
         require(isVless || isHy2 || isTuic) { "Unsupported Sing-box outbound: ${config.transport}" }
+        if (isVless) {
+            val transport = config.transport.lowercase()
+            require(transport != "xhttp") {
+                "XHTTP is not supported by upstream libbox 1.14.3; refusing to silently downgrade it to TCP"
+            }
+            require(transport in setOf("", "tcp", "raw", "none", "vless", "ws", "grpc", "http", "httpupgrade", "quic")) {
+                "Unsupported VLESS transport for upstream libbox 1.14.3: ${config.transport}"
+            }
+        }
 
         return buildJsonObject {
             put("type", when { isHy2 -> "hysteria2"; isTuic -> "tuic"; else -> "vless" })
@@ -146,19 +155,31 @@ object SingboxConfigBuilder {
                 }
             }
 
-            if (isVless && config.transport.equals("ws", true)) {
-                put("transport", buildJsonObject {
+            if (isVless) when (config.transport.lowercase()) {
+                "ws" -> put("transport", buildJsonObject {
                     put("type", "ws")
                     put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
                     config.host?.takeIf { it.isNotBlank() }?.let { host ->
                         put("headers", buildJsonObject { put("Host", host) })
                     }
                 })
-            } else if (isVless && config.transport.equals("grpc", true)) {
-                put("transport", buildJsonObject {
+                "grpc" -> put("transport", buildJsonObject {
                     put("type", "grpc")
                     put("service_name", config.path.orEmpty())
                 })
+                "http" -> put("transport", buildJsonObject {
+                    put("type", "http")
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    config.host?.takeIf { it.isNotBlank() }?.let { host ->
+                        put("host", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(host)) })
+                    }
+                })
+                "httpupgrade" -> put("transport", buildJsonObject {
+                    put("type", "httpupgrade")
+                    put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
+                    config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
+                })
+                "quic" -> put("transport", buildJsonObject { put("type", "quic") })
             }
 
             if (isHy2 || isTuic || config.security.equals("tls", true) || config.security.equals("reality", true)) {

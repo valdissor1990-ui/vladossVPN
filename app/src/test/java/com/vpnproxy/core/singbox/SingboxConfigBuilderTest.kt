@@ -113,4 +113,25 @@ class SingboxConfigBuilderTest {
         assertEquals("a1b2", tls["reality"]!!.jsonObject["short_id"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun xhttpIsRejectedInsteadOfSilentlyDowngradingToTcp() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "xhttp.example.org",
+            port = 443,
+            transport = "xhttp",
+            security = "reality",
+            sni = "www.example.org",
+            path = "/xhttp", host = "www.example.org", mode = "stream-one",
+            fingerprint = "chrome", publicKey = "public-key", shortId = "a1b2",
+            flow = "", name = "xhttp"
+        )
+        try {
+            SingboxConfigBuilder.build(config)
+            throw AssertionError("Expected unsupported XHTTP transport to be rejected")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message.orEmpty().contains("XHTTP is not supported"))
+        }
+    }
+
 }

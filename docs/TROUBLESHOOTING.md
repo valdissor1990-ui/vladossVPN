@@ -15,12 +15,12 @@ chmod +x scripts/download_libbox.sh
 
 1. Убедитесь, что Android выдал приложению VPN-разрешение.
 2. Проверьте журналы `VpnProxyService`, `SingBoxCore` и `SingBoxPlatform`.
-3. Проверьте валидность URI/подписки: адрес, порт, UUID или пароль, SNI и параметры TLS/Reality.
+3. Проверьте URI/подписку: адрес, порт, UUID или пароль, SNI и параметры TLS/Reality.
 4. Убедитесь, что `CommandServer.startOrReloadService()` не возвращает ошибку конфигурации.
 
 ## VLESS/Reality не устанавливает соединение
 
-Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с настройками сервера.
+Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с сервером. Официальный libbox 1.14.3 не поддерживает XHTTP; builder выдаёт явную ошибку для `type=xhttp`.
 
 ## Hysteria2 / TUIC не передают трафик
 
@@ -29,14 +29,10 @@ chmod +x scripts/download_libbox.sh
 ## Split tunneling работает не так, как ожидалось
 
 - **INCLUDE_SELECTED:** в VPN направляются только выбранные установленные приложения.
-- **EXCLUDE_SELECTED:** выбранные приложения обходят VPN, остальные приложения используют VPN.
-- Само VPN-приложение исключается из пользовательского списка, чтобы соединения управления не зацикливались.
-- Android не позволяет одновременно задать allow-list и deny-list на одном `VpnService.Builder`; противоречивые правила должны приводить к диагностируемой ошибке.
+- **EXCLUDE_SELECTED:** выбранные приложения обходят VPN, остальные используют VPN.
+- Само VPN-приложение исключается из пользовательского списка.
+- Android не позволяет одновременно задать allow-list и deny-list на одном `VpnService.Builder`; конфликтующие правила должны приводить к диагностируемой ошибке.
 
-## Deep Probe
+## Deep Probe и APK
 
-Deep Probe нельзя запускать одновременно с активным VPN. Он использует временный proxy-only Sing-box в том же процессе и должен останавливать его после завершения измерений.
-
-## Проверка APK
-
-После `./gradlew assembleDirectRelease` проверьте содержимое APK: в нём должен быть libbox для нужных ABI и не должно быть библиотек Xray/HEV. Реальные VLESS/Reality, Hysteria2, TUIC, UDP и split tunneling требуют дополнительной проверки на устройстве.
+Deep Probe нельзя запускать одновременно с активным VPN. Он использует временный proxy-only Sing-box в том же процессе. После `./gradlew assembleDirectRelease` CI проверяет отсутствие старых native cores и отдельного процесса `:singbox`. Реальные протоколы, UDP и split tunneling всё равно требуют проверки на Android-устройстве.
