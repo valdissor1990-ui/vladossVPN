@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -16,21 +15,17 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
+import com.vpnproxy.core.ping.PingRegion
 import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.smartconnect.DeepProbeEngine
@@ -106,25 +102,33 @@ class ServersListViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.configs.collect { configs ->
-                _servers.value = configs.map { ScoredServer(it, latencyMs = 0, score = 0.0) }
+            repository.allConfigs.collect { configs ->
+                if (configs.isNotEmpty() && autoSwitcher.rankedServers.value.isEmpty()) {
+                    autoSwitcher.selectBest(configs)
+                }
+                _servers.value = autoSwitcher.rankedServers.value
             }
         }
         viewModelScope.launch {
-            val bd = LatencyCalculator.measure(context, PingTargets.defaultTargets())
-            _breakdown.value = bd
+            autoSwitcher.rankedServers.collect { _servers.value = it }
         }
-    }
-
-    fun selectServer(server: ScoredServer) {
-        autoSwitcher.forceSelect(server)
+        viewModelScope.launch { repository.refreshAll() }
+        viewModelScope.launch {
+            runCatching {
+                val region = PingTargets.detectRegion(context)
+                val multi = pingService.pingAll(
+                    targets = PingTargets.forRegion(region),
+                    region = region
+                )
+                _breakdown.value = LatencyCalculator.compute(multi.results)
+            }
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServersListScreen(
-    onBack: () -> Unit,
+fun ServerListContent(
     onServerSelected: (ScoredServer) -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
@@ -135,6 +139,10 @@ fun ServersListScreen(
     val deepProbeError by viewModel.deepProbeError.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var detailsServer by remember { mutableStateOf<ScoredServer?>(null) }
+    val targetNames = remember {
+        (PingTargets.ALL + PingTargets.forRegion(PingRegion.EU))
+            .associate { it.id to it.displayName }
+    }
 
     val filtered = remember(servers, query) {
         if (query.isBlank()) servers
@@ -151,129 +159,116 @@ fun ServersListScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Серверы") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                    }
-                }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 24.dp)
+    ) {
+        Text(
+            text = "Серверы (${servers.size})",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Поиск по имени/хосту/провайдеру") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = { viewModel.runDeepProbe() },
+                enabled = !deepProbeRunning && servers.isNotEmpty()
+            ) {
+                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ")
+            }
+            if (deepProbeRunning) {
+                CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
+            }
+        }
+        deepProbeError?.let { error ->
+            Text(
+                text = error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            Text(
-                text = "Серверы (${servers.size})",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                placeholder = { Text("Поиск по имени/хосту/провайдеру") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                singleLine = true
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { viewModel.runDeepProbe() },
-                    enabled = !deepProbeRunning && servers.isNotEmpty()
-                ) {
-                    Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ")
-                }
-                if (deepProbeRunning) {
-                    CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
-                }
-            }
-            deepProbeError?.let { error ->
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            if (deepProbeResults.isNotEmpty()) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Text("Результаты глубокого анализа", style = MaterialTheme.typography.titleSmall)
-                    deepProbeResults.forEach { result ->
-                        Text(
-                            text = "${result.config.name}: score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
-                                "(lat ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, " +
-                                "speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
-                                "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, " +
-                                "loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-
-            if (filtered.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp),
-                    contentAlignment = Alignment.Center
-                ) {
+        if (deepProbeResults.isNotEmpty()) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text("Результаты глубокого анализа", style = MaterialTheme.typography.titleSmall)
+                deepProbeResults.forEach { result ->
                     Text(
-                        text = if (servers.isEmpty()) {
-                            "Список пуст. Обновите подписки."
-                        } else {
-                            "Ничего не найдено"
-                        },
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        text = "${result.config.name}: score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
+                            "(lat ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, " +
+                            "speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
+                            "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, " +
+                            "loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(vertical = 2.dp)
                     )
                 }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.heightIn(max = 520.dp)
-                ) {
-                    items(
-                        items = uniqueItems,
-                        key = {
-                            ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
-                        }
-                    ) { scoredServer ->
-                        val scoreLabel = breakdown
-                            ?.takeIf { it.isValid }
-                            ?.compositeScore
-                            ?.roundToInt()
-                            ?.toString() ?: "—"
-                        val scoreValue = scoreLabel.toDoubleOrNull()
-                        val scoreColor = scoreValue?.let { compositeScoreColor(it) }
-                            ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            }
+        }
 
-                        ServerGridCard(
-                            server = scoredServer,
-                            onClick = { onServerSelected(scoredServer) },
-                            scoreOverride = scoreLabel,
-                            scoreColorOverride = scoreColor,
-                            onDetailsClick = { detailsServer = scoredServer }
-                        )
+        if (filtered.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (servers.isEmpty()) {
+                        "Список пуст. Обновите подписки."
+                    } else {
+                        "Ничего не найдено"
+                    },
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.heightIn(max = 520.dp)
+            ) {
+                items(
+                    items = uniqueItems,
+                    key = {
+                        ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
                     }
+                ) { scoredServer ->
+                    val scoreLabel = breakdown
+                        ?.takeIf { it.isValid }
+                        ?.compositeScore
+                        ?.roundToInt()
+                        ?.toString() ?: "—"
+                    val scoreValue = scoreLabel.toDoubleOrNull()
+                    val scoreColor = scoreValue?.let { compositeScoreColor(it) }
+                        ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+
+                    ServerGridCard(
+                        server = scoredServer,
+                        onClick = { onServerSelected(scoredServer) },
+                        scoreOverride = scoreLabel,
+                        scoreColorOverride = scoreColor,
+                        onDetailsClick = { detailsServer = scoredServer }
+                    )
                 }
             }
         }
@@ -297,19 +292,17 @@ fun ServersListScreen(
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
                 HorizontalDivider()
+                breakdown?.takeIf { it.isValid }?.let { bd ->
+                    Text("Composite: ${bd.compositeScore.roundToInt()}", style = MaterialTheme.typography.bodyMedium)
+                    bd.perTarget.forEach { (id, ms) ->
+                        val name = targetNames[id] ?: id
+                        Text("$name: ${ms} ms", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Text(
                     text = "${server.config.address}:${server.config.port}",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 8.dp)
-                )
-                Text(
-                    text = "RTT: ${if (server.latencyMs > 0) "${server.latencyMs} ms" else "—"}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "Score: ${"%.1f".format(server.score)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(bottom = 12.dp)
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -319,7 +312,6 @@ fun ServersListScreen(
                         Text("Закрыть")
                     }
                     TextButton(onClick = {
-                        viewModel.selectServer(server)
                         onServerSelected(server)
                         detailsServer = null
                     }) {
