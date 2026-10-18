@@ -348,6 +348,11 @@ class VpnProxyService : VpnService() {
             .notify(NOTIFICATION_ID, buildNotification(state))
     }
 
+    /** Reconnects the existing VPN service after AutoSwitcher selected another server. */
+    fun reconnectAfterSlowServerSwitch() {
+        startService(Intent(this, VpnProxyService::class.java).setAction(ACTION_RECONNECT))
+    }
+
     /** Updates the persistent VPN notification when repeated switches indicate an unstable network. */
     fun showUnstableNetworkNotification() {
         logCollector.warn(TAG, "Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
