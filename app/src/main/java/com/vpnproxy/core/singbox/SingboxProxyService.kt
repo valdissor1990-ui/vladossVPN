@@ -48,6 +48,7 @@ class SingboxProxyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val starting = AtomicBoolean(false)
     @Volatile private var coreService: Any? = null
+    @Volatile private var activeConfig: String? = null
     @Volatile private var lastError: String? = null
     @Volatile private var libboxSetupDone = false
 
@@ -100,12 +101,13 @@ class SingboxProxyService : Service() {
             lastError = "Sing-box config is empty"
             return@withContext false
         }
-        if (coreService != null) return@withContext true
+        if (coreService != null && activeConfig == config) return@withContext true
         if (!starting.compareAndSet(false, true)) {
             lastError = "Sing-box is already starting"
             return@withContext false
         }
         try {
+            if (coreService != null && activeConfig != config) stopCore()
             val libbox = Class.forName("io.nekohasekai.libbox.Libbox")
             val platformType = Class.forName("io.nekohasekai.libbox.PlatformInterface")
             val platform = Proxy.newProxyInstance(
@@ -190,6 +192,7 @@ class SingboxProxyService : Service() {
                 }
             }
             if (!listenerReady) error("Sing-box did not bind 127.0.0.1:$readyPort")
+            activeConfig = config
             lastError = null
             Log.i(TAG, "Sing-box proxy started on 127.0.0.1:$readyPort")
             true
@@ -226,6 +229,7 @@ class SingboxProxyService : Service() {
     private suspend fun stopCore() = withContext(Dispatchers.IO) {
         val current = coreService
         coreService = null
+        activeConfig = null
         if (current != null) {
             try {
                 current.javaClass.methods.firstOrNull {
