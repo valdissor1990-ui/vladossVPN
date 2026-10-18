@@ -24,7 +24,6 @@ import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -117,12 +116,13 @@ class DeepProbeEngine @Inject constructor(
         val ports = allocatePorts(candidates.size)
         val configJson = buildMultiServerConfig(candidates, ports)
         logCollector.info(TAG, "Starting one bare Xray instance for ${candidates.size} servers; ports=${ports.joinToString()}")
-        var started = false
+        var startAttempted = false
         try {
             check(!VpnProxyService.isRunning.value && !xrayCore.isRunning()) {
                 "Отключите VPN для глубокого анализа"
             }
-            started = xrayCore.start(configJson, tunFd = 0)
+            startAttempted = true
+            val started = xrayCore.start(configJson, tunFd = 0)
             check(started) { "Не удалось запустить Xray для глубокого анализа" }
 
             val results = mutableListOf<ProbeMetrics>()
@@ -135,7 +135,7 @@ class DeepProbeEngine @Inject constructor(
             return scored
         } finally {
             // One and only one explicit stop call for the temporary Xray instance.
-            if (started || xrayCore.isRunning()) {
+            if (startAttempted) {
                 val stopped = xrayCore.stop()
                 logCollector.info(TAG, "Deep-probe Xray stopped=$stopped")
             }
