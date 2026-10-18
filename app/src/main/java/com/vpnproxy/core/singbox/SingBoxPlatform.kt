@@ -127,15 +127,15 @@ class SingBoxPlatform(
         destinationAddress: String, destinationPort: Int): ConnectionOwner =
         unsupported("findConnectionOwner")
 
-    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported<Unit>("startDefaultInterfaceMonitor")
-    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported<Unit>("closeDefaultInterfaceMonitor")
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported("startDefaultInterfaceMonitor")
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported("closeDefaultInterfaceMonitor")
     override fun getInterfaces(): NetworkInterfaceIterator = unsupported("getInterfaces")
-    override fun clearDNSCache() = unsupported<Unit>("clearDNSCache")
+    override fun clearDNSCache() = unsupported("clearDNSCache")
     override fun readWIFIState(): WIFIState? = unsupportedNullable("readWIFIState")
     override fun localDNSTransport(): LocalDNSTransport? = unsupportedNullable("localDNSTransport")
-    override fun startNeighborMonitor(listener: NeighborUpdateListener?) = unsupported<Unit>("startNeighborMonitor")
-    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = unsupported<Unit>("closeNeighborMonitor")
-    override fun checkPlatformShell() = unsupported<Unit>("checkPlatformShell")
+    override fun startNeighborMonitor(listener: NeighborUpdateListener?) = unsupported("startNeighborMonitor")
+    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = unsupported("closeNeighborMonitor")
+    override fun checkPlatformShell() = unsupported("checkPlatformShell")
     override fun openShellSession(user: PlatformUser?, command: String?, environ: StringIterator?, term: String?,
         rows: Int, cols: Int): ShellSession = unsupported("openShellSession")
     override fun readSystemSSHHostKey(): String = unsupported("readSystemSSHHostKey", "")
@@ -145,7 +145,7 @@ class SingBoxPlatform(
     override fun createAutoRedirect(options: ByteArray?, handler: AutoRedirectHandler?): AutoRedirectSession =
         unsupported("createAutoRedirect")
     override fun lookupUser(username: String?): PlatformUser = unsupported("lookupUser")
-    override fun registerMyInterface(name: String?) = unsupported<Unit>("registerMyInterface")
+    override fun registerMyInterface(name: String?) = unsupported("registerMyInterface")
 
     private fun <T> unsupported(method: String, fallback: T): T {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
