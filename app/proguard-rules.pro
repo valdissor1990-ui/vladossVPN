@@ -52,20 +52,6 @@
     native <methods>;
 }
 
-# --- AndroidLibXrayLite (libv2ray) ---
--keep class libv2ray.** { *; }
--keep class go.** { *; }
--dontwarn libv2ray.**
--dontwarn go.**
-
-# --- hev-socks5-tunnel AAR ---
--keep class hev.htproxy.** { *; }
--dontwarn hev.htproxy.**
-
-# --- App tunnel / xray wrappers ---
--keep class com.vpnproxy.core.xray.** { *; }
--keep class com.vpnproxy.core.tunnel.** { *; }
-
 # --- Update ---
 -keep class com.vpnproxy.update.** { *; }
 
@@ -98,38 +84,12 @@
     public static *** d(...);
 }
 
-# ═══════════════════════════════════════════════════════════════════
-# libv2ray (GoMobile) + hev-socks5-tunnel (JNI)
-# ═══════════════════════════════════════════════════════════════════
-
-# libv2ray — Java API
--keep class libv2ray.** { *; }
--keepclassmembers class libv2ray.** { *; }
--dontwarn libv2ray.**
-
-# Go runtime (обязательно — JNI ищет классы по именам)
+# --- Sing-box libbox JNI and Go bridge ---
+-keep class io.nekohasekai.libbox.** { *; }
+-keep interface io.nekohasekai.libbox.** { *; }
 -keep class go.** { *; }
 -keep class go.Seq { *; }
 -keep class go.Seq$* { *; }
 -keep class go.Universe { *; }
 -keepclassmembers class go.** { *; }
 -dontwarn go.**
-
-# hev-socks5-tunnel
--keep class hev.htproxy.** { *; }
--keepclassmembers class hev.htproxy.** { *; }
--dontwarn hev.htproxy.**
-
-# Нативные методы — обязательный keep для всех JNI
--keepclasseswithmembernames class * {
-    native <methods>;
-}
-
-# Callback-интерфейсы libv2ray
--keep interface libv2ray.CoreCallbackHandler { *; }
--keep class * implements libv2ray.CoreCallbackHandler { *; }
-
-# libbox is accessed reflectively by SingboxProxyService to tolerate generated API
-# differences between stable libbox releases. Keep the binding surface for R8.
--keep class io.nekohasekai.libbox.** { *; }
--keep interface io.nekohasekai.libbox.** { *; }

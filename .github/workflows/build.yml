@@ -40,15 +40,10 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Download Xray-core
+      - name: Download full libbox 1.14.3
         run: |
-          chmod +x scripts/download_xray.sh
-          ./scripts/download_xray.sh
-
-      - name: Verify pinned libv2ray API surface
-        run: |
-          unzip -p app/libs/libv2ray.aar classes.jar > /tmp/lv.jar
-          javap -classpath /tmp/lv.jar libv2ray.Libv2ray libv2ray.CoreController libv2ray.CoreCallbackHandler
+          chmod +x scripts/download_libbox.sh
+          ./scripts/download_libbox.sh
 
       - name: Bootstrap Gradle Wrapper JAR
         run: |
