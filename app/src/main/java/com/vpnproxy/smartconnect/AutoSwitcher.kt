@@ -4,11 +4,13 @@ import android.net.VpnService
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.Socket
 import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
 
+import com.vpnproxy.core.tunnel.TunnelManager
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
@@ -73,6 +75,7 @@ class AutoSwitcher @Inject constructor(
     private var cooldownUntilMs = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
     private val microProbeClient = OkHttpClient.Builder()
+        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)))
         .connectTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .readTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .callTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -210,7 +213,11 @@ class AutoSwitcher @Inject constructor(
         withContext(Dispatchers.IO) {
             val start = System.nanoTime()
             try {
-                Socket().use { socket ->
+                val socketProxy = if (protectFromVpn) Proxy.NO_PROXY else Proxy(
+                    Proxy.Type.SOCKS,
+                    InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)
+                )
+                Socket(socketProxy).use { socket ->
                     if (protectFromVpn) {
                         val service = vpnService
                         val protected = service?.protect(socket) == true
