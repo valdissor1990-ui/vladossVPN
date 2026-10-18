@@ -1,6 +1,5 @@
 package com.vpnproxy.smartconnect
 
-import android.util.Base64
 import android.util.Log
 import com.vpnproxy.core.xray.XrayCore
 import com.vpnproxy.logging.LogCollector
@@ -10,7 +9,6 @@ import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Cache
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,6 +18,9 @@ import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.Proxy
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -45,7 +46,6 @@ class DeepProbeEngine @Inject constructor(
         private const val CONNECT_TIMEOUT_MS = 2_000
         private const val REQUEST_TIMEOUT_MS = 3_000L
         private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=100000"
-        private const val DOH_URL = "https://cloudflare-dns.com/dns-query?dns="
 
         /** Pure scoring helper, also exercised by unit tests. Scores are always in [0, 1]. */
         fun scoreMetrics(metrics: List<ProbeMetrics>): List<ProbeMetrics> {
@@ -108,37 +108,42 @@ class DeepProbeEngine @Inject constructor(
             "Отключите VPN для глубокого анализа"
         }
         require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
+        check(xrayCore.tryAcquireDeepProbeLease()) {
+            "Отключите VPN для глубокого анализа"
+        }
 
-        val candidates = fastFilter(configs).take(TOP_COUNT)
-        check(candidates.isNotEmpty()) { "Не удалось найти доступные серверы для глубокого анализа" }
-
-        // All sockets are closed before Xray starts. Ports are distinct and never use 10808.
-        val ports = allocatePorts(candidates.size)
-        val configJson = buildMultiServerConfig(candidates, ports)
-        logCollector.info(TAG, "Starting one bare Xray instance for ${candidates.size} servers; ports=${ports.joinToString()}")
-        var startAttempted = false
         try {
-            check(!VpnProxyService.isRunning.value && !xrayCore.isRunning()) {
-                "Отключите VPN для глубокого анализа"
-            }
-            startAttempted = true
-            val started = xrayCore.start(configJson, tunFd = 0)
-            check(started) { "Не удалось запустить Xray для глубокого анализа" }
+            val candidates = fastFilter(configs).take(TOP_COUNT)
+            check(candidates.isNotEmpty()) { "Не удалось найти доступные серверы для глубокого анализа" }
 
-            val results = mutableListOf<ProbeMetrics>()
-            // Deliberately sequential: one server's latency/download/DoH completes before next.
-            candidates.forEachIndexed { index, candidate ->
-                results += probeOne(candidate, ports[index])
+            // All ServerSockets are closed before Xray starts. Ports are distinct and never use 10808.
+            val ports = allocatePorts(candidates.size)
+            val configJson = buildMultiServerConfig(candidates, ports)
+            logCollector.info(TAG, "Starting one bare Xray instance for ${candidates.size} servers; ports=${ports.joinToString()}")
+            var startAttempted = false
+            try {
+                check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+                startAttempted = true
+                val started = xrayCore.start(configJson, tunFd = 0)
+                check(started) { "Не удалось запустить Xray для глубокого анализа" }
+
+                val results = mutableListOf<ProbeMetrics>()
+                // Deliberately sequential: each server's measurements finish before the next begins.
+                candidates.forEachIndexed { index, candidate ->
+                    results += probeOne(candidate, ports[index])
+                }
+                val scored = scoreMetrics(results)
+                logCollector.info(TAG, "Deep probe complete: ${scored.size} servers scored")
+                return scored
+            } finally {
+                // Exactly one explicit stop call after the single temporary Xray start attempt.
+                if (startAttempted) {
+                    val stopped = xrayCore.stop()
+                    logCollector.info(TAG, "Deep-probe Xray stopped=$stopped")
+                }
             }
-            val scored = scoreMetrics(results)
-            logCollector.info(TAG, "Deep probe complete: ${scored.size} servers scored")
-            return scored
         } finally {
-            // One and only one explicit stop call for the temporary Xray instance.
-            if (startAttempted) {
-                val stopped = xrayCore.stop()
-                logCollector.info(TAG, "Deep-probe Xray stopped=$stopped")
-            }
+            xrayCore.releaseDeepProbeLease()
         }
     }
 
@@ -227,7 +232,7 @@ class DeepProbeEngine @Inject constructor(
             val client = OkHttpClient.Builder()
                 .proxy(java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
                 .connectionPool(ConnectionPool(0, 1, TimeUnit.NANOSECONDS))
-                .cache(null as Cache?)
+                .cache(null)
                 .connectTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .readTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .callTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -264,18 +269,11 @@ class DeepProbeEngine @Inject constructor(
             }
 
             val healthOk = try {
-                val query = Base64.encodeToString(buildDnsQuery("example.com"), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                val request = Request.Builder().url(DOH_URL + query)
-                    .header("Accept", "application/dns-message")
-                    .header("Cache-Control", "no-cache")
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    response.isSuccessful && (response.body?.bytes()?.isNotEmpty() == true)
-                }
+                probeDnsOverTcp(port)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "DoH probe failed for ${candidate.config.name}", e)
+                Log.w(TAG, "DNS health probe to 1.1.1.1:53 failed for ${candidate.config.name}", e)
                 false
             } finally {
                 client.connectionPool.evictAll()
@@ -295,6 +293,27 @@ class DeepProbeEngine @Inject constructor(
                 healthOk = healthOk
             )
         }
+
+    /** DNS-over-TCP health query through this server's local SOCKS inbound. */
+    private fun probeDnsOverTcp(port: Int): Boolean {
+        val query = buildDnsQuery("example.com")
+        return Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port))).use { socket ->
+            socket.soTimeout = REQUEST_TIMEOUT_MS.toInt()
+            socket.connect(InetSocketAddress("1.1.1.1", 53), CONNECT_TIMEOUT_MS)
+            DataOutputStream(socket.getOutputStream()).use { output ->
+                output.writeShort(query.size)
+                output.write(query)
+                output.flush()
+                val input = DataInputStream(socket.getInputStream())
+                val responseLength = input.readUnsignedShort()
+                if (responseLength < 12) return@use false
+                val response = ByteArray(responseLength)
+                input.readFully(response)
+                val flags = ((response[2].toInt() and 0xff) shl 8) or (response[3].toInt() and 0xff)
+                (flags and 0x8000) != 0 && (flags and 0x000f) == 0
+            }
+        }
+    }
 
     private fun buildDnsQuery(domain: String): ByteArray {
         val output = ByteArrayOutputStream()
