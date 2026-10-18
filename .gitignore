@@ -28,7 +28,7 @@ release.keystore.b64
 # Логи
 *.log
 
-# Native (downloaded by scripts/download_xray.sh in CI)
+# Native (downloaded and verified by scripts/download_libbox.sh in CI)
 /app/src/main/jniLibs/**/*.so
 /app/libs/*.aar
 /app/libs/*.jar

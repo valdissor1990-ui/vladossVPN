@@ -134,7 +134,7 @@ android {
 }
 
 dependencies {
-    // Full official libbox 1.14.3 AAR, including Go bridge classes.
+    // Full sing-box-lx 1.14.3-lx.21 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
