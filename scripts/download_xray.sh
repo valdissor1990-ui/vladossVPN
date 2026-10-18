@@ -128,7 +128,7 @@ if [ ! -s "$LIBBOX_STRIPPED_AAR" ]; then
   exit 1
 fi
 unzip -p "$LIBBOX_STRIPPED_AAR" classes.jar > "$TMP_LIBBOX_DIR/libbox-classes.jar"
-if jar tf "$TMP_LIBBOX_DIR/libbox-classes.jar" | grep -q '^go/Seq.class
+if jar tf "$TMP_LIBBOX_DIR/libbox-classes.jar" | grep -q '^go/Seq.class$'; then
   echo "❌ Duplicate Go bridge classes remain in libbox AAR"
   exit 1
 fi
