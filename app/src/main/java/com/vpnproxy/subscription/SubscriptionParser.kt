@@ -5,6 +5,8 @@ import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
 import org.yaml.snakeyaml.Yaml
+import java.net.URI
+import java.net.URLDecoder
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -157,12 +159,13 @@ class SubscriptionParser @Inject constructor(
     fun parseHysteria2Uri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
             val normalized = uri.replaceFirst("hy2://", "hysteria2://")
-            val parsed = Uri.parse(normalized)
-            val password = parsed.userInfo ?: return null
+            val parsed = URI(normalized)
+            val password = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
-            val sni = parsed.getQueryParameter("sni") ?: parsed.getQueryParameter("peer")
-            val name = Uri.decode(parsed.fragment ?: "$address:$port")
+            val params = parseUriQuery(parsed.rawQuery)
+            val sni = params["sni"] ?: params["peer"]
+            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
             val config = ParsedConfig(
                 uuid = password, address = address, port = port,
                 transport = "hysteria2", security = "tls", sni = sni,
@@ -170,7 +173,7 @@ class SubscriptionParser @Inject constructor(
                 publicKey = null, shortId = null, flow = null,
                 name = name, providerTag = providerTag
             )
-            if (!config.isValid()) null else config
+            config.takeIf { it.isValid() }
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to parse hysteria2 URI", e)
             null
@@ -179,13 +182,14 @@ class SubscriptionParser @Inject constructor(
 
     fun parseTuicUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
-            val parsed = Uri.parse(uri)
-            val userInfo = parsed.userInfo ?: return null
-            val uuid = userInfo.substringBefore(":")
+            val parsed = URI(uri)
+            val userInfo = parsed.userInfo?.takeIf { it.isNotBlank() } ?: return null
+            val uuid = userInfo.substringBefore(":").takeIf { it.isNotBlank() } ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
-            val sni = parsed.getQueryParameter("sni") ?: parsed.getQueryParameter("peer")
-            val name = Uri.decode(parsed.fragment ?: "$address:$port")
+            val params = parseUriQuery(parsed.rawQuery)
+            val sni = params["sni"] ?: params["peer"]
+            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
             val config = ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = "tuic", security = "tls", sni = sni,
@@ -193,12 +197,30 @@ class SubscriptionParser @Inject constructor(
                 publicKey = null, shortId = null, flow = null,
                 name = name, providerTag = providerTag
             )
-            if (!config.isValid()) null else config
+            config.takeIf { it.isValid() }
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to parse tuic URI", e)
             null
         }
     }
+
+    /**
+     * Parse query components with java.net.URI so these protocol parsers also work
+     * in local JVM unit tests, where android.net.Uri methods are mocked.
+     */
+    private fun parseUriQuery(rawQuery: String?): Map<String, String> =
+        rawQuery.orEmpty()
+            .split("&")
+            .filter { it.isNotBlank() }
+            .associate { part ->
+                val separator = part.indexOf('=')
+                val key = if (separator >= 0) part.substring(0, separator) else part
+                val value = if (separator >= 0) part.substring(separator + 1) else ""
+                decodeUriComponent(key) to decodeUriComponent(value)
+            }
+
+    private fun decodeUriComponent(value: String): String =
+        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
 
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
