@@ -1,5 +1,6 @@
 package com.vpnproxy.core.singbox
 
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.IpPrefix
 import android.net.VpnService
@@ -17,8 +18,9 @@ import kotlinx.coroutines.runBlocking
  * The VPN service owns the TUN descriptor; libbox receives only its fd.
  */
 class SingBoxPlatform(
-    private val vpnService: VpnService,
-    private val splitTunnelManager: SplitTunnelManager
+    private val context: Context,
+    private val vpnService: VpnService? = null,
+    private val splitTunnelManager: SplitTunnelManager? = null
 ) : PlatformInterface {
     companion object { private const val TAG = "SingBoxPlatform" }
 
@@ -27,13 +29,19 @@ class SingBoxPlatform(
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
     override fun autoDetectInterfaceControl(fd: Int) {
-        check(vpnService.protect(fd)) { "VpnService.protect($fd) failed" }
+        val service = vpnService
+        if (service == null) {
+            Log.d(TAG, "No active VPN service for fd=$fd; probe mode has no TUN to bypass")
+            return
+        }
+        check(service.protect(fd)) { "VpnService.protect($fd) failed" }
     }
 
     override fun openTun(options: TunOptions): Int {
-        check(VpnService.prepare(vpnService) == null) { "VPN permission is missing" }
+        val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
+        check(VpnService.prepare(context) == null) { "VPN permission is missing" }
         tunDescriptor?.close()
-        val builder = vpnService.Builder()
+        val builder = service.Builder()
             .setSession("VPNProxy · Sing-box")
             .setMtu(1400)
 
@@ -83,7 +91,7 @@ class SingBoxPlatform(
 
         // Apply saved INCLUDE_SELECTED / EXCLUDE_SELECTED policy in the same builder
         // that establishes the TUN. The VPN app is always excluded from per-app routing.
-        runBlocking { splitTunnelManager.applyRules(builder, vpnService) }
+        splitTunnelManager?.let { manager -> runBlocking { manager.applyRules(builder, context) } }
         applyOptionPackageRules(builder, options)
 
         val pfd = builder.establish() ?: error("VpnService.Builder.establish() returned null")
@@ -99,8 +107,8 @@ class SingBoxPlatform(
         while (includeIterator.hasNext()) includes += includeIterator.next()
         val excludeIterator = options.excludePackage
         while (excludeIterator.hasNext()) excludes += excludeIterator.next()
-        includes -= vpnService.packageName
-        excludes += vpnService.packageName
+        includes -= context.packageName
+        excludes += context.packageName
         // These lists are Sing-box's own TunOptions routing directives. Invalid package
         // names are logged and skipped, rather than aborting VPN startup.
         includes.filterNot { it in excludes }.forEach { packageName ->
@@ -127,31 +135,35 @@ class SingBoxPlatform(
 
     override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int,
         destinationAddress: String, destinationPort: Int): ConnectionOwner =
-        unsupported("findConnectionOwner", null as ConnectionOwner)
+        unsupported("findConnectionOwner")
 
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported<Unit>("startDefaultInterfaceMonitor")
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupported<Unit>("closeDefaultInterfaceMonitor")
-    override fun getInterfaces(): NetworkInterfaceIterator = unsupported("getInterfaces", null as NetworkInterfaceIterator)
+    override fun getInterfaces(): NetworkInterfaceIterator = unsupported("getInterfaces")
     override fun clearDNSCache() = unsupported<Unit>("clearDNSCache")
-    override fun readWIFIState(): WIFIState? = unsupported("readWIFIState", null)
-    override fun localDNSTransport(): LocalDNSTransport? = unsupported("localDNSTransport", null)
+    override fun readWIFIState(): WIFIState? = unsupportedNullable("readWIFIState")
+    override fun localDNSTransport(): LocalDNSTransport? = unsupportedNullable("localDNSTransport")
     override fun startNeighborMonitor(listener: NeighborUpdateListener?) = unsupported<Unit>("startNeighborMonitor")
     override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = unsupported<Unit>("closeNeighborMonitor")
     override fun checkPlatformShell() = unsupported<Unit>("checkPlatformShell")
     override fun openShellSession(user: PlatformUser?, command: String?, environ: StringIterator?, term: String?,
-        rows: Int, cols: Int): ShellSession = unsupported("openShellSession", null as ShellSession)
+        rows: Int, cols: Int): ShellSession = unsupported("openShellSession")
     override fun readSystemSSHHostKey(): String = unsupported("readSystemSSHHostKey", "")
     override fun lookupSFTPServer(): String = unsupported("lookupSFTPServer", "")
     override fun tailscaleHostname(): String = unsupported("tailscaleHostname", "")
-    override fun createBridge(options: BridgeOptions?): BridgeSession = unsupported("createBridge", null as BridgeSession)
+    override fun createBridge(options: BridgeOptions?): BridgeSession = unsupported("createBridge")
     override fun createAutoRedirect(options: ByteArray?, handler: AutoRedirectHandler?): AutoRedirectSession =
-        unsupported("createAutoRedirect", null as AutoRedirectSession)
-    override fun lookupUser(username: String?): PlatformUser = unsupported("lookupUser", null as PlatformUser)
+        unsupported("createAutoRedirect")
+    override fun lookupUser(username: String?): PlatformUser = unsupported("lookupUser")
     override fun registerMyInterface(name: String?) = unsupported<Unit>("registerMyInterface")
 
     private fun <T> unsupported(method: String, fallback: T): T {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
         return fallback
+    }
+    private fun <T> unsupportedNullable(method: String): T? {
+        Log.w(TAG, "unsupported PlatformInterface method: $method")
+        return null
     }
     private fun unsupported(method: String): Nothing {
         Log.w(TAG, "unsupported PlatformInterface method: $method")
