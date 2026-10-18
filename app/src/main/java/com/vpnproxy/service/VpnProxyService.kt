@@ -197,7 +197,7 @@ class VpnProxyService : VpnService() {
                     val reason = "TUN establishment failed"
                     logCollector.error(TAG, reason)
                     _lastError.value = reason
-                    stopSelf()
+                    stopServiceWithReason(reason)
                     return@launch
                 }
 
@@ -208,7 +208,7 @@ class VpnProxyService : VpnService() {
                     logCollector.warn(TAG, reason)
                     _lastError.value = reason
                     tunnelManager.tearDown()
-                    stopSelf()
+                    stopServiceWithReason(reason)
                     return@launch
                 }
 
@@ -248,7 +248,7 @@ class VpnProxyService : VpnService() {
                     _lastError.value = reason
                     xrayCore.stop()
                     tunnelManager.tearDown()
-                    stopSelf()
+                    stopServiceWithReason(reason)
                     return@launch
                 }
                 logCollector.info(TAG, "TProxyStartService requested/ok")
