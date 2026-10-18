@@ -63,4 +63,22 @@ class SingboxConfigBuilderTest {
         assertEquals("cubic", outbound["congestion_control"]!!.jsonPrimitive.content)
         assertTrue(outbound["tls"]!!.jsonObject["alpn"]!!.jsonArray.isNotEmpty())
     }
+    @Test
+    fun multiServerConfigPinsEachInboundToItsOwnOutbound() {
+        val hy2 = config("hysteria2", "hy2-secret")
+        val tuic = config("tuic", "tuic-secret")
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.buildMulti(listOf(hy2, tuic), listOf(12001, 12002))
+        ).jsonObject
+        val inbounds = root["inbounds"]!!.jsonArray
+        val outbounds = root["outbounds"]!!.jsonArray
+        val rules = root["route"]!!.jsonObject["rules"]!!.jsonArray
+        assertEquals(2, inbounds.size)
+        assertEquals(3, outbounds.size)
+        assertEquals(12001, inbounds[0].jsonObject["listen_port"]!!.jsonPrimitive.int)
+        assertEquals(12002, inbounds[1].jsonObject["listen_port"]!!.jsonPrimitive.int)
+        assertEquals("proxy-0", rules[0].jsonObject["outbound"]!!.jsonPrimitive.content)
+        assertEquals("proxy-1", rules[1].jsonObject["outbound"]!!.jsonPrimitive.content)
+    }
+
 }
