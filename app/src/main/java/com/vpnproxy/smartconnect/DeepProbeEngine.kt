@@ -1,5 +1,6 @@
 package com.vpnproxy.smartconnect
 
+import android.util.Base64
 import android.util.Log
 import com.vpnproxy.core.xray.XrayCore
 import com.vpnproxy.logging.LogCollector
@@ -46,6 +47,7 @@ class DeepProbeEngine @Inject constructor(
         private const val CONNECT_TIMEOUT_MS = 2_000
         private const val REQUEST_TIMEOUT_MS = 3_000L
         private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=100000"
+        private const val DOH_URL = "https://cloudflare-dns.com/dns-query?dns="
 
         /** Pure scoring helper, also exercised by unit tests. Scores are always in [0, 1]. */
         fun scoreMetrics(metrics: List<ProbeMetrics>): List<ProbeMetrics> {
@@ -266,17 +268,26 @@ class DeepProbeEngine @Inject constructor(
                 Log.w(TAG, "Download probe failed for ${candidate.config.name}", e)
             }
 
-            val healthOk = try {
+            val dnsTcpOk = try {
                 probeDnsOverTcp(port)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "DNS health probe to 1.1.1.1:53 failed for ${candidate.config.name}", e)
+                Log.w(TAG, "DNS-over-TCP probe to 1.1.1.1:53 failed for ${candidate.config.name}", e)
+                false
+            }
+            val dohOk = try {
+                probeDoh(client)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "DoH probe failed for ${candidate.config.name}", e)
                 false
             } finally {
                 client.connectionPool.evictAll()
                 client.dispatcher.executorService.shutdown()
             }
+            val healthOk = dnsTcpOk && dohOk
 
             logCollector.info(
                 TAG,
@@ -291,6 +302,22 @@ class DeepProbeEngine @Inject constructor(
                 healthOk = healthOk
             )
         }
+
+    /** RFC 8484 DNS-over-HTTPS request through the same per-server SOCKS proxy. */
+    private fun probeDoh(client: OkHttpClient): Boolean {
+        val encoded = Base64.encodeToString(
+            buildDnsQuery("example.com"),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+        val request = Request.Builder()
+            .url(DOH_URL + encoded)
+            .header("Accept", "application/dns-message")
+            .header("Cache-Control", "no-cache")
+            .build()
+        return client.newCall(request).execute().use { response ->
+            response.isSuccessful && (response.body?.bytes()?.size ?: 0) >= 12
+        }
+    }
 
     /** DNS-over-TCP health query through this server's local SOCKS inbound. */
     private fun probeDnsOverTcp(port: Int): Boolean {
