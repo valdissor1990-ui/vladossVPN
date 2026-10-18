@@ -274,16 +274,16 @@ class SubscriptionRepository @Inject constructor(
                         .build()
                     httpClient.newCall(request).execute().use { response ->
                         if (!response.isSuccessful) {
-                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}, HWID sent: $hwid")
+                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
                             throw IOException("HTTP ${response.code}")
                         }
                         response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
                         val body = response.body?.string() ?: throw IOException("Empty response body")
                         if (body.isBlank()) {
-                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}, HWID sent: $hwid (empty body)")
+                            logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
                             throw IOException("Empty response body")
                         }
-                        logCollector.info(TAG, "Subscription source OK: $sourceUrl hwid=$hwid")
+                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
                         return@withContext body to sourceUrl
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
