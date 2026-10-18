@@ -122,7 +122,7 @@ fun HomeScreen(
                             containerColor = Color(0xFF5C3A00).copy(alpha = 0.92f)
                         )
                     ) {
-                        Column(Modifier = Modifier.padding(12.dp)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     Icons.Default.Warning,
