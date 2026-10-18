@@ -1,6 +1,7 @@
 package com.vpnproxy.ui.servers
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +51,7 @@ import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.ping.PingTargets
+import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ServerMetrics
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
@@ -65,7 +69,8 @@ class ServersListViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: SubscriptionRepository,
     private val autoSwitcher: AutoSwitcher,
-    private val pingService: PingService
+    private val pingService: PingService,
+    private val deepProbeEngine: DeepProbeEngine
 ) : ViewModel() {
 
     private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
@@ -73,6 +78,37 @@ class ServersListViewModel @Inject constructor(
 
     private val _breakdown = MutableStateFlow<LatencyBreakdown?>(null)
     val breakdown: StateFlow<LatencyBreakdown?> = _breakdown.asStateFlow()
+
+    private val _deepProbeRunning = MutableStateFlow(false)
+    val deepProbeRunning: StateFlow<Boolean> = _deepProbeRunning.asStateFlow()
+
+    private val _deepProbeResults = MutableStateFlow<List<DeepProbeEngine.ProbeMetrics>>(emptyList())
+    val deepProbeResults: StateFlow<List<DeepProbeEngine.ProbeMetrics>> = _deepProbeResults.asStateFlow()
+
+    private val _deepProbeError = MutableStateFlow<String?>(null)
+    val deepProbeError: StateFlow<String?> = _deepProbeError.asStateFlow()
+
+    fun runDeepProbe() {
+        if (_deepProbeRunning.value) return
+        viewModelScope.launch {
+            _deepProbeRunning.value = true
+            _deepProbeError.value = null
+            try {
+                val configs = repository.getAllConfigs()
+                val results = deepProbeEngine.run(configs)
+                _deepProbeResults.value = results
+                Toast.makeText(context, "Глубокий анализ завершен", Toast.LENGTH_SHORT).show()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val message = e.message ?: "Ошибка глубокого анализа"
+                _deepProbeError.value = message
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            } finally {
+                _deepProbeRunning.value = false
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -108,6 +144,9 @@ fun ServerListContent(
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
     val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
+    val deepProbeRunning by viewModel.deepProbeRunning.collectAsStateWithLifecycle()
+    val deepProbeResults by viewModel.deepProbeResults.collectAsStateWithLifecycle()
+    val deepProbeError by viewModel.deepProbeError.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var expandedKey by remember { mutableStateOf<String?>(null) }
 
@@ -147,6 +186,44 @@ fun ServerListContent(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             singleLine = true
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = { viewModel.runDeepProbe() },
+                enabled = !deepProbeRunning && servers.isNotEmpty()
+            ) {
+                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ")
+            }
+            if (deepProbeRunning) CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
+        }
+        deepProbeError?.let { error ->
+            Text(
+                text = error,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                fontSize = 12.sp
+            )
+        }
+        if (deepProbeResults.isNotEmpty()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text("Результаты глубокого анализа", style = MaterialTheme.typography.titleSmall)
+                deepProbeResults.forEach { result ->
+                    Text(
+                        text = "${result.config.name}: Score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
+                            "(latency ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, " +
+                            "speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
+                            "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, " +
+                            "loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+            }
+        }
 
         if (filtered.isEmpty()) {
             Box(
