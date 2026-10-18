@@ -13,6 +13,9 @@ ASSETS_DIR="$PROJECT_DIR/app/src/main/assets"
 LIBV2RAY_URL="https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.10.10/libv2ray.aar"
 # Maven Central (verified 200 OK). GitHub release URL returned 404.
 HEV_URL="https://repo1.maven.org/maven2/com/zaneschepke/hevtunnel/1.0.1/hevtunnel-1.0.1.aar"
+# Official stable libbox release. Its Go bridge classes duplicate those in libv2ray.aar.
+LIBBOX_VERSION="1.14.3"
+LIBBOX_URL="https://github.com/singbox-android/libbox/releases/download/${LIBBOX_VERSION}/libbox.aar"
 
 mkdir -p "$LIBS_DIR" "$ASSETS_DIR"
 
@@ -39,7 +42,7 @@ echo "=== [3/4] Stripping duplicate Go runtime from hev-socks5-tunnel.aar ==="
 # → checkDuplicateClasses падает. Удаляем go.* из hev (libv2ray первый в classpath).
 HEV_AAR="$LIBS_DIR/hev-socks5-tunnel.aar"
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR" "${TMP_LIBBOX_DIR:-}"' EXIT
 
 # AAR — это zip
 unzip -q "$HEV_AAR" -d "$TMP_DIR"
@@ -97,4 +100,38 @@ if [ "$FAIL" -eq 1 ]; then
   exit 1
 fi
 
-echo "✅ All native libs ready"
+echo "=== [5/5] Downloading and preparing official libbox ${LIBBOX_VERSION} ==="
+LIBBOX_AAR="$LIBS_DIR/libbox.aar"
+LIBBOX_STRIPPED_AAR="$LIBS_DIR/libbox-stripped.aar"
+rm -f "$LIBBOX_AAR" "$LIBBOX_STRIPPED_AAR"
+curl -fSL --retry 3 "$LIBBOX_URL" -o "$LIBBOX_AAR"
+
+TMP_LIBBOX_DIR="$(mktemp -d)"
+unzip -q "$LIBBOX_AAR" -d "$TMP_LIBBOX_DIR"
+if [ ! -f "$TMP_LIBBOX_DIR/classes.jar" ]; then
+  echo "❌ libbox AAR does not contain classes.jar"
+  exit 1
+fi
+
+mkdir -p "$TMP_LIBBOX_DIR/classes_extracted"
+( cd "$TMP_LIBBOX_DIR/classes_extracted" && unzip -q ../classes.jar )
+# Reuse the Go bridge shipped by libv2ray. Duplicate go.Seq/go.Universe classes
+# make AGP fail duplicate-class checks; keep libbox native .so files intact.
+rm -rf "$TMP_LIBBOX_DIR/classes_extracted/go"
+( cd "$TMP_LIBBOX_DIR/classes_extracted" && jar cf ../classes-new.jar . && mv ../classes-new.jar ../classes.jar )
+rm -rf "$TMP_LIBBOX_DIR/classes_extracted"
+( cd "$TMP_LIBBOX_DIR" && zip -qr "$LIBBOX_STRIPPED_AAR" . )
+rm -f "$LIBBOX_AAR"
+
+if [ ! -s "$LIBBOX_STRIPPED_AAR" ]; then
+  echo "❌ Failed to prepare libbox-stripped.aar"
+  exit 1
+fi
+unzip -p "$LIBBOX_STRIPPED_AAR" classes.jar > "$TMP_LIBBOX_DIR/libbox-classes.jar"
+if jar tf "$TMP_LIBBOX_DIR/libbox-classes.jar" | grep -q '^go/Seq.class
+; then
+  echo "❌ Duplicate Go bridge classes remain in libbox AAR"
+  exit 1
+fi
+echo "   ✅ libbox ${LIBBOX_VERSION} prepared with duplicate Go bridge classes removed"
+echo "   ✅ All native libraries ready"
