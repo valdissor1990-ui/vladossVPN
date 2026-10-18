@@ -217,7 +217,7 @@ class VpnProxyService : VpnService() {
                     logCollector.error(TAG, reason)
                     _lastError.value = reason
                     tunnelManager.tearDown()
-                    stopSelf()
+                    stopServiceWithReason(reason)
                     return@launch
                 }
                 logCollector.info(TAG, "libv2ray env initialized")
