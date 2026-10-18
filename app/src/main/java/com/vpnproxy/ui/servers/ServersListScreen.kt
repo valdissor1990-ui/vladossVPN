@@ -1,7 +1,6 @@
 package com.vpnproxy.ui.servers
 
 import android.content.Context
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +17,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -46,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
+import com.vpnproxy.core.ping.PingRegion
 import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -59,6 +59,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @HiltViewModel
 class ServersListViewModel @Inject constructor(
@@ -109,7 +110,11 @@ fun ServerListContent(
     val servers by viewModel.servers.collectAsStateWithLifecycle()
     val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
-    var expandedKey by remember { mutableStateOf<String?>(null) }
+    var detailsServer by remember { mutableStateOf<ScoredServer?>(null) }
+    val targetNames = remember {
+        (PingTargets.ALL + PingTargets.forRegion(PingRegion.EU))
+            .associate { it.id to it.displayName }
+    }
 
     val filtered = remember(servers, query) {
         if (query.isBlank()) servers
@@ -178,74 +183,105 @@ fun ServerListContent(
                         ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
                     }
                 ) { scoredServer ->
-                    val key = ServerMetrics.serverKey(
-                        scoredServer.config.address,
-                        scoredServer.config.port,
-                        scoredServer.config.uuid
-                    )
-                    val expanded = expandedKey == key
-                    val scoreMs = breakdown?.compositeScore?.toLong()
-                        ?: scoredServer.latencyMs.takeIf { it > 0 }
-                    val scoreLabel = when {
-                        breakdown != null && !breakdown!!.isValid -> "Slow"
-                        scoreMs != null && scoreMs > 0 -> "${scoreMs}ms"
-                        else -> "—"
-                    }
+                    val scoreLabel = breakdown
+                        ?.takeIf { it.isValid }
+                        ?.compositeScore
+                        ?.roundToInt()
+                        ?.toString() ?: "—"
+                    val scoreValue = scoreLabel.toDoubleOrNull()
+                    val scoreColor = scoreValue?.let { rttColor(it.toLong()) }
+                        ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
 
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                expandedKey = if (expanded) null else key
-                            },
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Column {
-                            ServerGridCard(
-                                server = scoredServer,
-                                scoreOverride = scoreLabel,
-                                onClick = {
-                                    expandedKey = if (expanded) null else key
-                                }
-                            )
-                            if (expanded) {
-                                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                                    val targets = breakdown?.perTarget.orEmpty()
-                                    if (targets.isEmpty()) {
-                                        Text(
-                                            text = "Ping targets: waiting…",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                        )
-                                    } else {
-                                        targets.forEach { t ->
-                                            val label = when {
-                                                t.success && t.rttMs != null -> "${t.targetId}: ${t.rttMs}ms"
-                                                else -> "${t.targetId}: fail"
-                                            }
-                                            val c = if (t.success && t.rttMs != null) rttColor(t.rttMs) else Color(0xFFE53935)
-                                            Text(
-                                                text = label,
-                                                fontSize = 10.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                color = c,
-                                                modifier = Modifier.padding(vertical = 1.dp)
-                                            )
-                                        }
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        TextButton(onClick = { onServerSelected(scoredServer) }) {
-                                            Text("Подключить", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
+                    ServerGridCard(
+                        server = scoredServer,
+                        onClick = { onServerSelected(scoredServer) },
+                        scoreOverride = scoreLabel,
+                        scoreColorOverride = scoreColor,
+                        onDetailsClick = { detailsServer = scoredServer }
+                    )
+                }
+            }
+        }
+    }
+
+    detailsServer?.let { server ->
+        ModalBottomSheet(onDismissRequest = { detailsServer = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Детали пинга",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    text = server.config.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                )
+
+                val score = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Общая оценка", style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    Text(
+                        text = score?.let { "${it} ms" } ?: "Недостаточно данных",
+                        color = score?.let { rttColor(it.toLong()) }
+                            ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                val targets = breakdown?.perTarget.orEmpty()
+                if (targets.isEmpty()) {
+                    Text(
+                        "Данные пинга пока недоступны.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                } else {
+                    targets.forEach { target ->
+                        val name = targetNames[target.targetId] ?: target.targetId
+                        val label = if (target.success && target.rttMs != null) {
+                            "$name: ${target.rttMs} ms"
+                        } else {
+                            "$name: недоступен"
                         }
+                        val color = if (target.success && target.rttMs != null) {
+                            rttColor(target.rttMs)
+                        } else {
+                            Color(0xFFE53935)
+                        }
+                        Text(
+                            text = label,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = color,
+                            modifier = Modifier.padding(vertical = 3.dp)
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp, bottom = 20.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { detailsServer = null }) {
+                        Text("Закрыть")
+                    }
+                    TextButton(onClick = {
+                        detailsServer = null
+                        onServerSelected(server)
+                    }) {
+                        Text("Подключить")
                     }
                 }
             }
@@ -253,11 +289,9 @@ fun ServerListContent(
     }
 }
 
-@Composable
 private fun rttColor(rtt: Long): Color = when {
-    rtt <= 0L -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-    rtt < 100 -> Color(0xFF43A047)
-    rtt < 300 -> Color(0xFFF9A825)
+    rtt < 100L -> Color(0xFF43A047)
+    rtt < 300L -> Color(0xFFF9A825)
     else -> Color(0xFFE53935)
 }
 
