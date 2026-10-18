@@ -49,9 +49,18 @@ class SubscriptionParser @Inject constructor(
         }
 
         fun requiresSingBox(): Boolean =
-            transport in setOf("hysteria2", "hy2", "tuic")
+            transport.equals("hysteria2", ignoreCase = true) ||
+                transport.equals("hy2", ignoreCase = true) ||
+                transport.equals("tuic", ignoreCase = true)
+
+        /** True for protocols that cannot be launched by the bundled Xray core. */
+        val isUnsupportedProtocol: Boolean
+            get() = requiresSingBox()
 
         fun toXrayOutbound(): JsonObject {
+            require(!isUnsupportedProtocol) {
+                "Hysteria2/TUIC requires Sing-box and cannot be converted to an Xray outbound"
+            }
             val user = buildJsonObject {
                 put("id", uuid)
                 put("encryption", "none")
