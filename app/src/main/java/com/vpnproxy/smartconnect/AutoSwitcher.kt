@@ -1,7 +1,6 @@
 package com.vpnproxy.smartconnect
 
 import android.net.VpnService
-import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetSocketAddress
@@ -31,9 +30,9 @@ import javax.inject.Singleton
 /**
  * Автосвитчер: следит за здоровьем текущего сервера и переключается при деградации.
  */
-@Singleton
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
 
+@Singleton
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
@@ -141,6 +140,7 @@ class AutoSwitcher @Inject constructor(
                         "RTT=${measuredRtt}ms, jitter=${jitter}ms"
                     )
                     validateSlowServer(current.config, measuredRtt, jitter)
+                    return
                 }
             }
 
@@ -266,7 +266,7 @@ class AutoSwitcher @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logCollector.warn(TAG, "Micro-probe timed out/failed; treating server as overloaded", e)
+            logCollector.error(TAG, "Micro-probe timed out/failed; treating server as overloaded", e)
             performSlowServerSwitch("micro-probe failed: ${e.message}")
         }
     }
