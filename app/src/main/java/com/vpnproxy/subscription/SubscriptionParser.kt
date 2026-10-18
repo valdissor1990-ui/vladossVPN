@@ -236,7 +236,7 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun String?.isTruthy(): Boolean =
-        this?.lowercase() in setOf("1", "true", "yes", "on")
+        this?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } == true
 
     /**
      * Parse query components with java.net.URI so these protocol parsers also work
