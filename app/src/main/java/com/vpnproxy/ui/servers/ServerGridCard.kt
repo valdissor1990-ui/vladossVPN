@@ -42,7 +42,7 @@ fun ServerGridCard(
     val scoreColor = scoreColorOverride ?: when {
         score == null -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
         score < 100.0 -> Color(0xFF43A047)
-        score < 300.0 -> Color(0xFFF9A825)
+        score <= 300.0 -> Color(0xFFF9A825)
         else -> Color(0xFFE53935)
     }
 
