@@ -9,7 +9,7 @@ import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
 
-import com.vpnproxy.core.tunnel.TunnelManager
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
@@ -75,7 +75,7 @@ class AutoSwitcher @Inject constructor(
     private var cooldownUntilMs = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
     private val microProbeClient = OkHttpClient.Builder()
-        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)))
+        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
         .connectTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .readTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .callTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)

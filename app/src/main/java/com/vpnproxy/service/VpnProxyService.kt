@@ -14,11 +14,10 @@ import com.vpnproxy.MainActivity
 import com.vpnproxy.R
 import com.vpnproxy.core.network.NetworkAwareReconnector
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
-import com.vpnproxy.core.tunnel.TunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
-import com.vpnproxy.core.xray.XrayCore
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
-import com.vpnproxy.core.singbox.SingboxProxyClient
+import com.vpnproxy.core.singbox.SingBoxCore
+import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -58,13 +57,13 @@ class VpnProxyService : VpnService() {
         }
     }
 
-    @Inject lateinit var tunnelManager: TunnelManager
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
-    @Inject lateinit var xrayCore: XrayCore
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+
+    private var singBoxCore: SingBoxCore? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
@@ -79,7 +78,8 @@ class VpnProxyService : VpnService() {
         super.onCreate()
         createNotificationChannel()
         autoSwitcher.attachVpnService(this)
-        logCollector.info(TAG, "Service created, xrayAvailable=${xrayCore.isAvailable()}")
+        singBoxCore = SingBoxCore(this, SingBoxPlatform(this, splitTunnelManager))
+        logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
 
         networkReconnector = NetworkAwareReconnector(
             context = this,
@@ -146,12 +146,6 @@ class VpnProxyService : VpnService() {
                 "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
             return
         }
-        if (!xrayCore.beginVpnStartup()) {
-            val reason = "Xray занят глубоким анализом; повторите подключение после завершения"
-            _lastError.value = reason
-            logCollector.warn(TAG, reason)
-            return
-        }
         _lastError.value = null
         startInProgress = true
 
@@ -182,99 +176,19 @@ class VpnProxyService : VpnService() {
                     }
                 }
 
-                if (!xrayCore.stop()) {
-                    val reason = "Could not stop previous Xray loop; refusing to start a second one"
-                    logCollector.error(TAG, reason)
-                    _lastError.value = reason
-                    stopServiceWithReason(reason)
-                    return@launch
-                }
-
-                val builder = Builder()
-                splitTunnelManager.applyRules(builder, this@VpnProxyService)
-                val pfd = try {
-                    tunnelManager.establishTun(builder)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Stopping VPN. Reason: establishTun threw", t)
-                    throw t
-                }
-                if (pfd == null) {
-                    val reason = "TUN establishment failed"
-                    logCollector.error(TAG, reason)
-                    _lastError.value = reason
-                    stopServiceWithReason(reason)
-                    return@launch
-                }
-
                 val parsed = autoSwitcher.currentServer.value?.config
                     ?: subscriptionRepository.getAllConfigs().firstOrNull()
                 if (parsed == null) {
                     val reason = "No server selected — open Subscriptions first"
                     logCollector.warn(TAG, reason)
                     _lastError.value = reason
-                    tunnelManager.tearDown()
                     stopServiceWithReason(reason)
                     return@launch
                 }
 
-                if (parsed.requiresSingBox()) {
-                    val singboxStarted = SingboxProxyClient.start(
-                        this@VpnProxyService,
-                        SingboxConfigBuilder.build(parsed)
-                    )
-                    if (!singboxStarted) {
-                        val reason = "Sing-box failed to start for ${parsed.transport}; check libbox logs"
-                        _lastError.value = reason
-                        logCollector.error(TAG, reason)
-                        tunnelManager.tearDown()
-                        stopServiceWithReason(reason)
-                        return@launch
-                    }
-                    logCollector.info(TAG, "Sing-box proxy ready on 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
-                } else {
-                    SingboxProxyClient.stop(this@VpnProxyService)
-                }
-
-                if (!xrayCore.initEnv()) {
-                    val reason = "initCoreEnv failed"
-                    logCollector.error(TAG, reason)
-                    _lastError.value = reason
-                    tunnelManager.tearDown()
-                    stopServiceWithReason(reason)
-                    return@launch
-                }
-                logCollector.info(TAG, "libv2ray env initialized")
-
-                val xrayJson = xrayCore.buildClientConfig(parsed, TunnelManager.SOCKS_PORT)
-                val xrayOk = try {
-                    xrayCore.start(xrayJson, tunFd = 0)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Stopping VPN. Reason: startLoop threw for " + parsed.name, t)
-                    throw t
-                }
-                if (!xrayOk) {
-                    val reason = "startLoop failed for ${parsed.name} (${parsed.transport}/${parsed.security})"
-                    logCollector.error(TAG, reason)
-                    startInProgress = false
-                    xrayCore.stop()
-                    tunnelManager.tearDown()
-                    updateNotification("Connection failed; trying next server…")
-                    _lastError.value = reason
-                    return@launch
-                }
-                logCollector.info(TAG, "Xray startLoop OK, SOCKS 127.0.0.1:${TunnelManager.SOCKS_PORT}")
-
-                val hevOk = tunnelManager.startHev(pfd.fd)
-                if (!hevOk) {
-                    val reason = "TProxyStartService failed"
-                    logCollector.error(TAG, reason)
-                    _lastError.value = reason
-                    xrayCore.stop()
-                    tunnelManager.tearDown()
-                    stopServiceWithReason(reason)
-                    return@launch
-                }
-                logCollector.info(TAG, "TProxyStartService requested/ok")
+                logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
+                val core = singBoxCore ?: error("Sing-box core was not initialized")
+                core.start(SingboxConfigBuilder.buildVpn(parsed))
 
                 trafficCollector.start()
                 trafficCollector.resetSession()
@@ -283,7 +197,7 @@ class VpnProxyService : VpnService() {
                 _isRunning.value = true
                 isReconnecting.set(false)
                 updateNotification(getString(R.string.state_connected))
-                logCollector.info(TAG, "VPN started successfully")
+                logCollector.info(TAG, "Sing-box VPN started successfully")
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -293,7 +207,7 @@ class VpnProxyService : VpnService() {
                 stopServiceWithReason("startVpn failed", t)
             } finally {
                 startInProgress = false
-                xrayCore.endVpnStartup()
+
                 isReconnecting.set(false)
             }
         }
@@ -308,7 +222,7 @@ class VpnProxyService : VpnService() {
 
     private fun stopServiceWithReason(reason: String, throwable: Throwable? = null) {
         Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
-        SingboxProxyClient.stop(this)
+        singBoxCore?.stop()
         stopSelf()
     }
 
@@ -319,10 +233,8 @@ class VpnProxyService : VpnService() {
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
-            tunnelManager.stopHev()
-            xrayCore.stop()
-            SingboxProxyClient.stop(this@VpnProxyService)
-            tunnelManager.closeTun()
+            singBoxCore?.stop()
+
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
             logCollector.info(TAG, "VPN stopped")
@@ -343,6 +255,7 @@ class VpnProxyService : VpnService() {
         isReconnecting.set(false)
         kotlinx.coroutines.runBlocking { stopVpnInternal("onDestroy invoked") }
         scope.cancel()
+        singBoxCore = null
         super.onDestroy()
     }
 

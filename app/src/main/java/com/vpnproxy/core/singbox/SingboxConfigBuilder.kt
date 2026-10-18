@@ -28,6 +28,65 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
+    /** Full VPN configuration. The libbox platform callback creates the Android TUN. */
+    fun buildVpn(config: ParsedConfig): String = buildJsonObject {
+        put("log", buildJsonObject { put("level", "warn") })
+        put("dns", buildJsonObject {
+            put("servers", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "tls")
+                    put("tag", "remote-dns")
+                    put("server", "1.1.1.1")
+                    put("server_port", 853)
+                    put("detour", "proxy")
+                })
+            })
+            put("final", "remote-dns")
+            put("strategy", "prefer_ipv4")
+        })
+        put("inbounds", buildJsonArray {
+            add(buildJsonObject {
+                put("type", "tun")
+                put("tag", "tun-in")
+                put("interface_name", "vpnproxy0")
+                put("address", buildJsonArray {
+                    add(kotlinx.serialization.json.JsonPrimitive("172.19.0.1/30"))
+                    add(kotlinx.serialization.json.JsonPrimitive("fdfe:dcba:9876::1/126"))
+                })
+                put("mtu", 1400)
+                put("auto_route", true)
+                put("strict_route", true)
+                put("stack", "system")
+                put("sniff", true)
+            })
+            add(buildJsonObject {
+                put("type", "mixed")
+                put("tag", "local-proxy-in")
+                put("listen", "127.0.0.1")
+                put("listen_port", PROXY_PORT)
+            })
+        })
+        put("outbounds", buildJsonArray {
+            add(buildOutbound(config, "proxy"))
+            add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
+            add(buildJsonObject { put("type", "block"); put("tag", "block") })
+        })
+        put("route", buildJsonObject {
+            put("auto_detect_interface", true)
+            put("rules", buildJsonArray {
+                add(buildJsonObject {
+                    put("protocol", "dns")
+                    put("action", "hijack-dns")
+                })
+                add(buildJsonObject {
+                    put("inbound", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("local-proxy-in")) })
+                    put("outbound", "proxy")
+                })
+            })
+            put("final", "proxy")
+        })
+    }.toString()
+
     /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildMulti(configs: List<ParsedConfig>, ports: List<Int>): String {
         require(configs.isNotEmpty()) { "At least one Sing-box config is required" }
