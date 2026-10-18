@@ -134,9 +134,3 @@ if jar tf "$TMP_LIBBOX_DIR/libbox-classes.jar" | grep -q '^go/Seq.class$'; then
 fi
 echo "   ✅ libbox ${LIBBOX_VERSION} prepared with duplicate Go bridge classes removed"
 echo "   ✅ All native libraries ready"
-; then
-  echo "❌ Duplicate Go bridge classes remain in libbox AAR"
-  exit 1
-fi
-echo "   ✅ libbox ${LIBBOX_VERSION} prepared with duplicate Go bridge classes removed"
-echo "   ✅ All native libraries ready"
