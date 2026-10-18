@@ -152,11 +152,10 @@ class NetworkAwareReconnector(
         val duplicate = lastAvailableNetwork == network &&
             lastAvailableSignature == signature &&
             lastLostAt == 0L
-        if (!duplicate) {
-            lastAvailableNetwork = network
-            lastAvailableSignature = signature
-            logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
-        }
+        if (duplicate) return
+        lastAvailableNetwork = network
+        lastAvailableSignature = signature
+        logCollector.debug(TAG, "Underlying network available transport=$transport netId=$netId vpn=${isVpnActive()} busy=${isBusy()}")
 
         // Brief blink: network came back quickly — cancel pending tunnel restart (protect UDP/Zello)
         val sinceLost = System.currentTimeMillis() - lastLostAt
