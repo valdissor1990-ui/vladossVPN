@@ -14,6 +14,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.util.Log
+import org.json.JSONObject
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
@@ -174,21 +175,23 @@ class SingboxProxyService : Service() {
             invokeUnwrapped(created.javaClass.methods.firstOrNull {
                 it.name == "start" && it.parameterTypes.isEmpty()
             } ?: error("libbox service start() API not found"), created)
+            val readyPort = JSONObject(config).getJSONArray("inbounds")
+                .getJSONObject(0).getInt("listen_port")
             var listenerReady = false
             for (attempt in 0 until 50) {
                 if (listenerReady) break
                 try {
                     Socket().use { socket ->
-                        socket.connect(InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT), 250)
+                        socket.connect(InetSocketAddress("127.0.0.1", readyPort), 250)
                     }
                     listenerReady = true
                 } catch (_: Throwable) {
                     delay(100)
                 }
             }
-            if (!listenerReady) error("Sing-box did not bind 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
+            if (!listenerReady) error("Sing-box did not bind 127.0.0.1:$readyPort")
             lastError = null
-            Log.i(TAG, "Sing-box proxy started on 127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
+            Log.i(TAG, "Sing-box proxy started on 127.0.0.1:$readyPort")
             true
         } catch (t: Throwable) {
             lastError = (t.cause ?: t).message ?: "Unknown libbox startup error"
