@@ -56,7 +56,6 @@ import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ServerMetrics
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionRepository
-import com.vpnproxy.ui.components.ServerGridCard
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
