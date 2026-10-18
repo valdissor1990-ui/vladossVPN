@@ -128,3 +128,8 @@
 # Callback-интерфейсы libv2ray
 -keep interface libv2ray.CoreCallbackHandler { *; }
 -keep class * implements libv2ray.CoreCallbackHandler { *; }
+
+# libbox is accessed reflectively by SingboxProxyService to tolerate generated API
+# differences between stable libbox releases. Keep the binding surface for R8.
+-keep class io.nekohasekai.libbox.** { *; }
+-keep interface io.nekohasekai.libbox.** { *; }
