@@ -64,7 +64,7 @@ class DebugViewModel @Inject constructor(
     }
 
     private fun refreshBattery() {
-        batteryMonitor.ensureRegistered()
+        batteryMonitor.register()
         batteryMonitor.updateBaseline()
         _battery.value = BatteryUiState(
             levelPercent = batteryMonitor.getLevelPercent(),

@@ -111,7 +111,6 @@ fun DebugScreen(
                 }
             }
 
-            // Battery card
             BatteryCard(
                 state = battery,
                 onLog = { viewModel.logBatteryManual() }
@@ -169,9 +168,13 @@ private fun BatteryCard(
         state.temperatureC <= 42f -> Color(0xFFFFC107)
         else -> Color(0xFFF44336)
     }
-    val tempText = if (state.temperatureC.isNaN()) "n/a" else String.format("%.1f°C", state.temperatureC)
-    val drainText = state.drainRatePerHour?.let { String.format("%.1f %%/h", it) } ?: "n/a"
-    val drawText = state.currentDrawMa?.let { "$it mA" } ?: "n/a"
+    val tempText = if (state.temperatureC.isNaN()) "N/A" else String.format("%.1f°C", state.temperatureC)
+    val drainText = when {
+        state.charging -> "Заряжается"
+        state.drainRatePerHour != null -> String.format("%.1f %%/h", state.drainRatePerHour)
+        else -> "N/A"
+    }
+    val drawText = state.currentDrawMa?.let { "$it mA" } ?: "N/A"
 
     Card(
         modifier = Modifier
@@ -187,7 +190,7 @@ private fun BatteryCard(
                 style = MaterialTheme.typography.titleSmall
             )
             Spacer(Modifier.height(8.dp))
-            Text("Уровень: ${if (state.levelPercent >= 0) "${state.levelPercent}%" else "n/a"}")
+            Text("Уровень: ${if (state.levelPercent >= 0) "${state.levelPercent}%" else "N/A"}")
             Text(
                 text = "Температура: $tempText",
                 color = tempColor
