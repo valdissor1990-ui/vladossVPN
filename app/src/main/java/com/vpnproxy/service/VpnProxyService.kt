@@ -348,6 +348,11 @@ class VpnProxyService : VpnService() {
     }
 
     private fun stopVpnKeepAlive(reason: String) {
+        if (!_isRunning.value && !startInProgress) {
+            Log.d(TAG, "ForceDisconnected/stopVpnKeepAlive: already stopped, skip ($reason)")
+            logCollector.debug(TAG, "stopVpnKeepAlive skipped — already stopped ($reason)")
+            return
+        }
         Log.e("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
         vpnJob?.cancel()
         vpnJob = scope.launch {
