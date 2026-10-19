@@ -28,7 +28,12 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /** Full VPN configuration. The libbox platform callback creates the Android TUN. */
+    /**
+     * Full VPN configuration for libbox 1.14.3+.
+     *
+     * Legacy inbound fields (`sniff`, `sniff_override_destination`, `domain_strategy`)
+     * were removed in sing-box 1.13.0 — sniffing is done via route rule action instead.
+     */
     fun buildVpn(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject { put("level", "warn") })
         put("dns", buildJsonObject {
@@ -57,7 +62,8 @@ object SingboxConfigBuilder {
                 put("auto_route", true)
                 put("strict_route", true)
                 put("stack", "system")
-                put("sniff", true)
+                // Do NOT set sniff / sniff_override_destination / domain_strategy here:
+                // removed in sing-box 1.13.0 → use route action "sniff".
             })
             add(buildJsonObject {
                 put("type", "mixed")
@@ -74,6 +80,11 @@ object SingboxConfigBuilder {
         put("route", buildJsonObject {
             put("auto_detect_interface", true)
             put("rules", buildJsonArray {
+                // Protocol sniff before other rules (replaces inbound.sniff)
+                add(buildJsonObject {
+                    put("action", "sniff")
+                })
+                // Hijack DNS to sing-box DNS module
                 add(buildJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
