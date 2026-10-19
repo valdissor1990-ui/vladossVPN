@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
@@ -31,7 +32,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @HiltViewModel
@@ -43,12 +43,12 @@ class HomeViewModel @Inject constructor(
     private val trafficCollector: TrafficStatsCollector,
     private val pingService: PingService,
     private val logCollector: LogCollector,
-    private val connectionCoordinator: ConnectionCoordinator
+    private val connectionCoordinator: ConnectionCoordinator,
+    private val lastServerStore: LastServerStore
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val MAX_FALLBACK_ATTEMPTS = 5
     }
 
     data class UiState(
@@ -74,14 +74,6 @@ class HomeViewModel @Inject constructor(
     val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
 
     private var pingJob: Job? = null
-    private var connectTimeoutJob: Job? = null
-    private var connectAttemptId = 0L
-    private var fallbackAttempts = 0
-    private val attemptedServerKeys = mutableSetOf<String>()
-    private val isFallingBack = AtomicBoolean(false)
-
-    private fun serverKey(address: String, port: Int): String = "$address:$port"
-
     private var vpnPermissionRequester: (() -> Unit)? = null
 
     init {
@@ -90,13 +82,12 @@ class HomeViewModel @Inject constructor(
                 when (state) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Disconnecting -> {
-                        if (!isFallingBack.get()) {
-                            _uiState.value = _uiState.value.copy(
-                                connectionState = ConnectionUiState.DISCONNECTED,
-                                isBusy = false,
-                                sessionStartedAt = null
-                            )
-                        }
+                        // Clears Error banner when idle ForceDisconnected lands.
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = ConnectionUiState.DISCONNECTED,
+                            isBusy = false,
+                            sessionStartedAt = null
+                        )
                     }
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
@@ -106,11 +97,6 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Connected -> {
-                        fallbackAttempts = 0
-                        attemptedServerKeys.clear()
-                        isFallingBack.set(false)
-                        connectTimeoutJob?.cancel()
-                        connectTimeoutJob = null
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) {
@@ -126,9 +112,6 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Error -> {
-                        isFallingBack.set(false)
-                        connectTimeoutJob?.cancel()
-                        connectTimeoutJob = null
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
@@ -141,26 +124,17 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            VpnProxyService.lastError.collect { err ->
-                if (err == null) return@collect
-                logCollector.warn(TAG, "Service error: $err")
-                VpnProxyService.clearError()
-                // Actor already counts retries; only try alternate server if still connecting.
-                if (_uiState.value.connectionState == ConnectionUiState.CONNECTING ||
-                    _uiState.value.isBusy
-                ) {
-                    isFallingBack.set(false)
-                    tryNextServer()
-                }
-            }
-        }
-
-        viewModelScope.launch {
             autoSwitcher.currentServer.collect { server ->
                 if (server != null) {
                     _uiState.value = _uiState.value.copy(
                         currentServerName = server.config.name,
                         currentRtt = server.latencyMs
+                    )
+                    lastServerStore.save(
+                        address = server.config.address,
+                        port = server.config.port,
+                        name = server.config.name,
+                        uuid = server.config.uuid
                     )
                 }
             }
@@ -230,19 +204,18 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /** "Повторить" on Error banner — same path as Connect. */
+    fun retryConnect() {
+        connect()
+    }
+
     private fun connect() {
         Log.i(TAG, "User clicked Connect")
-        fallbackAttempts = 0
-        attemptedServerKeys.clear()
-        isFallingBack.set(false)
-        connectAttemptId++
         VpnProxyService.clearError()
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
         vpnPermissionRequester?.invoke()
     }
 
@@ -264,7 +237,6 @@ class HomeViewModel @Inject constructor(
                     Log.d(TAG, "Network available=$hasNetwork")
                     var configs = subscriptionRepository.getAllConfigs()
                     if (configs.isEmpty() && hasNetwork) {
-                        Log.d(TAG, "No configured servers; refreshing subscription in background")
                         configs = try {
                             subscriptionRepository.refreshAll()
                             subscriptionRepository.getAllConfigs()
@@ -297,9 +269,12 @@ class HomeViewModel @Inject constructor(
                 }
 
                 Log.i(TAG, "Selected server: ${best.config.name} (${best.config.address}:${best.config.port}, ${best.latencyMs}ms)")
-                attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
-
-                // Order matters: ServerSelected THEN UserConnect (no double start).
+                lastServerStore.save(
+                    address = best.config.address,
+                    port = best.config.port,
+                    name = best.config.name,
+                    uuid = best.config.uuid
+                )
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
                 connectionCoordinator.send(ConnectionEvent.UserConnect)
                 Log.i(
@@ -318,8 +293,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionDenied() {
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
         connectionCoordinator.send(ConnectionEvent.UserDisconnect)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
@@ -328,13 +301,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
-        connectAttemptId++
-        fallbackAttempts = 0
-        attemptedServerKeys.clear()
-        isFallingBack.set(false)
         VpnProxyService.clearError()
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
         connectionCoordinator.send(ConnectionEvent.UserDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
         _uiState.value = _uiState.value.copy(
@@ -344,13 +311,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
-        connectAttemptId++
-        fallbackAttempts = 0
-        attemptedServerKeys.clear()
-        isFallingBack.set(false)
         VpnProxyService.clearError()
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
         connectionCoordinator.send(ConnectionEvent.UserDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
         _uiState.value = _uiState.value.copy(
@@ -363,7 +324,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun switchServer() {
-        if (isFallingBack.get() || autoSwitcher.isSwitching()) return
+        if (autoSwitcher.isSwitching()) return
         viewModelScope.launch {
             try {
                 val ranked = autoSwitcher.rankedServers.value
@@ -386,6 +347,13 @@ class HomeViewModel @Inject constructor(
                     currentServerName = next.config.name,
                     currentRtt = next.latencyMs
                 )
+                lastServerStore.save(
+                    address = next.config.address,
+                    port = next.config.port,
+                    name = next.config.name,
+                    uuid = next.config.uuid
+                )
+                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(next))
                 ensureServiceRunning()
                 delay(300)
@@ -395,65 +363,6 @@ class HomeViewModel @Inject constructor(
             } catch (e: Exception) {
                 logCollector.error(TAG, "Switch failed", e)
                 _uiState.value = _uiState.value.copy(isBusy = false)
-            }
-        }
-    }
-
-    private fun tryNextServer() {
-        if (!isFallingBack.compareAndSet(false, true)) return
-        viewModelScope.launch {
-            try {
-                if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) {
-                    fallbackAttempts = 0
-                    attemptedServerKeys.clear()
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
-                    connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-                    return@launch
-                }
-                if (autoSwitcher.rankedServers.value.isEmpty()) {
-                    val configs = subscriptionRepository.getAllConfigs()
-                    if (configs.isNotEmpty()) autoSwitcher.selectBest(configs)
-                }
-                var next: ScoringEngine.ScoredServer? = null
-                val rankedCount = autoSwitcher.rankedServers.value.size
-                for (i in 0 until rankedCount) {
-                    val candidate = autoSwitcher.switchToNext() ?: break
-                    val key = serverKey(candidate.config.address, candidate.config.port)
-                    if (!attemptedServerKeys.contains(key)) {
-                        attemptedServerKeys.add(key)
-                        next = candidate
-                        break
-                    }
-                }
-                if (next == null) {
-                    fallbackAttempts = 0
-                    attemptedServerKeys.clear()
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
-                    connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-                    return@launch
-                }
-                fallbackAttempts++
-                _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.CONNECTING,
-                    currentServerName = next.config.name,
-                    currentRtt = next.latencyMs,
-                    isBusy = true
-                )
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(next))
-                ensureServiceRunning()
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: Exception) {
-                logCollector.error(TAG, "tryNextServer failed", e)
-                connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-            } finally {
-                isFallingBack.set(false)
             }
         }
     }
@@ -500,10 +409,17 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 autoSwitcher.forceSelect(server)
+                lastServerStore.save(
+                    address = server.config.address,
+                    port = server.config.port,
+                    name = server.config.name,
+                    uuid = server.config.uuid
+                )
                 _uiState.value = _uiState.value.copy(
                     currentServerName = server.config.name,
                     currentRtt = server.latencyMs
                 )
+                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
                 if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
                     connectionCoordinator.state.value is ConnectionState.Error
