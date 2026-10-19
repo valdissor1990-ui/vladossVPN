@@ -72,7 +72,9 @@ class BootReceiver : BroadcastReceiver() {
         val scored = ScoringEngine.ScoredServer(
             config = matched,
             latencyMs = 0L,
-            score = 0.0
+            speedMbps = 0f,
+            successRate = 1f,
+            score = 0f
         )
         autoSwitcher.forceSelect(scored)
         connectionCoordinator.send(ConnectionEvent.ServerSelected(scored))
