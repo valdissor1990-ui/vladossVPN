@@ -3,6 +3,7 @@ package com.vpnproxy.ui.home
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.ping.LatencyBreakdown
@@ -69,6 +70,7 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var connectTimeoutJob: Job? = null
     private val connectTimeoutMs = 20_000L
+    private var connectAttemptId = 0L
     private var fallbackAttempts = 0
     private val attemptedServerKeys = mutableSetOf<String>()
     private val isFallingBack = AtomicBoolean(false)
@@ -204,18 +206,14 @@ class HomeViewModel @Inject constructor(
         fallbackAttempts = 0
         attemptedServerKeys.clear()
         isFallingBack.set(false)
+        connectAttemptId++
         VpnProxyService.clearError()
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
         connectTimeoutJob?.cancel()
-        connectTimeoutJob = viewModelScope.launch {
-            delay(connectTimeoutMs)
-            if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                forceDisconnect()
-            }
-        }
+        connectTimeoutJob = null
         vpnPermissionRequester?.invoke()
     }
 
@@ -292,6 +290,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        connectAttemptId++
         fallbackAttempts = 0
         attemptedServerKeys.clear()
         isFallingBack.set(false)
@@ -300,7 +299,7 @@ class HomeViewModel @Inject constructor(
         connectTimeoutJob = null
         safeStartService(Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
-        })
+        }, reason = "user requested disconnect")
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             sessionStartedAt = null
@@ -308,6 +307,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
+        connectAttemptId++
         fallbackAttempts = 0
         attemptedServerKeys.clear()
         isFallingBack.set(false)
@@ -316,7 +316,7 @@ class HomeViewModel @Inject constructor(
         connectTimeoutJob = null
         safeStartService(Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_STOP
-        })
+        }, reason = "forceDisconnect invoked after timeout or explicit reset")
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false,
@@ -378,7 +378,7 @@ class HomeViewModel @Inject constructor(
                     )
                     safeStartService(Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
-                    })
+                    }, reason = "fallback exhausted: max attempts reached")
                     return@launch
                 }
                 if (autoSwitcher.rankedServers.value.isEmpty()) {
@@ -405,7 +405,7 @@ class HomeViewModel @Inject constructor(
                     )
                     safeStartService(Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_STOP
-                    })
+                    }, reason = "fallback exhausted: no untried server available")
                     return@launch
                 }
                 fallbackAttempts++
@@ -416,12 +416,7 @@ class HomeViewModel @Inject constructor(
                     isBusy = true
                 )
                 connectTimeoutJob?.cancel()
-                connectTimeoutJob = viewModelScope.launch {
-                    delay(connectTimeoutMs)
-                    if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                        forceDisconnect()
-                    }
-                }
+                connectTimeoutJob = null
                 delay(500)
                 awaitingServiceResult = true
                 startVpnService()
@@ -443,14 +438,39 @@ class HomeViewModel @Inject constructor(
         val intent = Intent(context, VpnProxyService::class.java).apply {
             action = VpnProxyService.ACTION_START
         }
-        if (!safeStartService(intent)) {
+        if (!safeStartService(intent, reason = "new connection attempt")) {
+            connectTimeoutJob?.cancel()
+            connectTimeoutJob = null
             _uiState.value = _uiState.value.copy(isBusy = false)
             isFallingBack.set(false)
+        } else {
+            scheduleConnectionTimeout()
         }
     }
 
-    private fun safeStartService(intent: Intent): Boolean {
+    private fun scheduleConnectionTimeout() {
+        connectTimeoutJob?.cancel()
+        val attemptId = connectAttemptId
+        connectTimeoutJob = viewModelScope.launch {
+            delay(connectTimeoutMs)
+            if (attemptId != connectAttemptId) {
+                Log.d(TAG, "Ignoring stale connection timeout for attempt=$attemptId")
+                return@launch
+            }
+            if (_uiState.value.connectionState == ConnectionUiState.CONNECTING) {
+                Log.e(TAG, "Connection timed out after ACTION_START; stopping attempt=$attemptId")
+                forceDisconnect()
+            }
+        }
+    }
+
+    private fun safeStartService(intent: Intent, reason: String = "unspecified caller"): Boolean {
         return try {
+            when (intent.action) {
+                VpnProxyService.ACTION_START -> Log.d(TAG, "Sending ACTION_START to VpnProxyService. Reason: $reason")
+                VpnProxyService.ACTION_STOP -> Log.e("AutoSwitcher", "Sending ACTION_STOP to VpnProxyService! Reason: $reason", Exception("ACTION_STOP dispatch stack"))
+                VpnProxyService.ACTION_RECONNECT -> Log.d(TAG, "Sending ACTION_RECONNECT to VpnProxyService. Reason: $reason")
+            }
             if (intent.action == VpnProxyService.ACTION_STOP ||
                 android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O
             ) {
