@@ -252,8 +252,33 @@ jobs:
           emulator-boot-timeout: 600
           disable-animations: false
           script: |
-            adb install app/build/outputs/apk/direct/release/app-direct-x86_64-release.apk
-            adb shell pm list packages | grep -Fx com.vpnproxy.direct
+            set -eu
+
+            # Wait for PackageManager to become responsive after Android reports boot complete.
+            package_manager_ready=false
+            for i in $(seq 1 60); do
+              if adb shell pm path android >/dev/null 2>&1; then
+                package_manager_ready=true
+                echo "PackageManager ready"
+                break
+              fi
+              sleep 2
+            done
+            if [ "$package_manager_ready" != true ]; then
+              echo "::error::PackageManager did not become ready within 120 seconds"
+              adb logcat -d -t 300 || true
+              exit 1
+            fi
+
+            adb install -r app/build/outputs/apk/direct/release/app-direct-x86_64-release.apk
+
+            installed_packages="$(adb shell pm list packages)"
+            printf '%s\n' "$installed_packages"
+            if ! printf '%s\n' "$installed_packages" | grep -F 'com.vpnproxy'; then
+              echo "::error::Installed APK package was not found; package list shown above"
+              adb shell dumpsys package 2>/dev/null | grep -i -E 'vpnproxy|versionCode|versionName' || true
+              exit 1
+            fi
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
