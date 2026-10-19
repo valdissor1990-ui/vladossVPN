@@ -38,6 +38,10 @@ sealed class ConnectionEvent {
     data class ServiceReady(val serverName: String) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
+    /** Clear soft-retry counter (e.g. after AutoSwitcher picks a new server). */
+    data object ResetRetryCount : ConnectionEvent()
+    /** Idle timeout / process death — force Disconnected and clear Error banner. */
+    data object ForceDisconnected : ConnectionEvent()
 }
 
 @Singleton
@@ -122,7 +126,6 @@ class ConnectionCoordinator @Inject constructor(
                 when (current) {
                     is ConnectionState.Disconnected -> { /* already down */ }
                     else -> {
-                        // Keep last selected server name for next connect, but clear retry.
                         retryCount = 0
                         setState(ConnectionState.Disconnecting)
                     }
@@ -132,10 +135,10 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.ServerSelected -> {
                 pendingServerName = event.server.config.name
                 hasServerSelected = true
+                retryCount = 0
                 when (current) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Error -> {
-                        // Server chosen first; wait for UserConnect to start.
                         Log.d(TAG, "ServerSelected while idle: ${event.server.config.name}")
                     }
                     is ConnectionState.Connecting -> {
@@ -143,7 +146,6 @@ class ConnectionCoordinator @Inject constructor(
                     }
                     is ConnectionState.Connected,
                     is ConnectionState.Reconnecting -> {
-                        retryCount = 0
                         setState(ConnectionState.Reconnecting)
                     }
                     is ConnectionState.Disconnecting -> {
@@ -157,11 +159,23 @@ class ConnectionCoordinator @Inject constructor(
                     is ConnectionState.Connected -> {
                         if (hasServerSelected) setState(ConnectionState.Reconnecting)
                     }
+                    is ConnectionState.Disconnected,
+                    is ConnectionState.Error -> {
+                        // Notification "Reconnect" or underlay recovery while idle.
+                        if (hasServerSelected) {
+                            retryCount = 0
+                            setState(ConnectionState.Connecting)
+                        } else {
+                            Log.d(TAG, "NetworkChanged ignored — no server selected")
+                        }
+                    }
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         Log.d(TAG, "NetworkChanged while $current — stay in state")
                     }
-                    else -> Log.d(TAG, "NetworkChanged ignored in $current")
+                    is ConnectionState.Disconnecting -> {
+                        Log.d(TAG, "NetworkChanged ignored while Disconnecting")
+                    }
                 }
             }
 
@@ -178,8 +192,23 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.ShowError -> {
+                // Do not re-emit if already showing the same (or any) Error.
+                if (current is ConnectionState.Error) {
+                    Log.d(TAG, "ShowError ignored — already in Error: ${current.message}")
+                    return
+                }
                 retryCount = 0
                 setState(ConnectionState.Error(event.message))
+            }
+
+            is ConnectionEvent.ResetRetryCount -> {
+                retryCount = 0
+                Log.d(TAG, "Retry count reset")
+            }
+
+            is ConnectionEvent.ForceDisconnected -> {
+                retryCount = 0
+                setState(ConnectionState.Disconnected)
             }
 
             is ConnectionEvent.ServiceReady -> {
@@ -192,8 +221,11 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.ServiceStopped -> {
                 when (current) {
                     is ConnectionState.Disconnecting,
-                    is ConnectionState.Disconnected,
-                    is ConnectionState.Error -> setState(ConnectionState.Disconnected)
+                    is ConnectionState.Disconnected -> setState(ConnectionState.Disconnected)
+                    is ConnectionState.Error -> {
+                        // Keep Error until idle ForceDisconnected clears the banner.
+                        Log.d(TAG, "ServiceStopped while Error — keep Error banner")
+                    }
                     is ConnectionState.Reconnecting,
                     is ConnectionState.Connecting -> {
                         Log.d(TAG, "ServiceStopped during $current — awaiting restart")
@@ -221,12 +253,16 @@ class ConnectionCoordinator @Inject constructor(
                     Log.e(TAG, msg)
                     logCollector.error(TAG, msg)
                     retryCount = 0
-                    setState(ConnectionState.Error(msg))
-                    // Also enqueue ShowError for explicit UI consumers.
-                    events.trySend(ConnectionEvent.ShowError(msg))
+                    // Only set Error once — do not enqueue ShowError if already Error.
+                    if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
+                        setState(ConnectionState.Error(msg))
+                    }
                 }
             }
-            else -> { /* ignore failures while already down */ }
+            is ConnectionState.Error -> {
+                Log.d(TAG, "Failure ignored — already in Error")
+            }
+            else -> { /* ignore while down */ }
         }
     }
 }
