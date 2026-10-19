@@ -258,7 +258,7 @@ class VpnProxyService : VpnService() {
         vpnJob = scope.launch {
             try {
                 if (_isRunning.value) {
-                    stopVpnInternal("soft restart for $state")
+                    stopVpnInternal("soft restart for $state", softRestart = true)
                     delay(300)
                 }
                 startVpnSession()
@@ -370,7 +370,8 @@ class VpnProxyService : VpnService() {
 
     private suspend fun stopVpnInternal(
         reason: String = "stopVpnInternal requested",
-        throwable: Throwable? = null
+        throwable: Throwable? = null,
+        softRestart: Boolean = false
     ) {
         try {
             autoSwitcher.stopMonitoring()
@@ -379,13 +380,16 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            stopBatteryPeriodicLogging()
-            try {
-                batteryLogger.logSnapshot("vpn_stopped")
-            } catch (t: Throwable) {
-                logCollector.debug(TAG, "battery log vpn_stopped failed: ${t.message}")
+            if (!softRestart) {
+                stopBatteryPeriodicLogging()
             }
-            logCollector.info(TAG, "VPN stopped (service alive). Reason: $reason")
+            try {
+                val trigger = if (softRestart) "vpn_soft_restart" else "vpn_stopped"
+                batteryLogger.logSnapshot(trigger)
+            } catch (t: Throwable) {
+                logCollector.debug(TAG, "battery log stop failed: ${t.message}")
+            }
+            logCollector.info(TAG, "VPN stopped (service alive). Reason: $reason softRestart=$softRestart")
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
