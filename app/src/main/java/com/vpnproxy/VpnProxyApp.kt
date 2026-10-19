@@ -3,6 +3,7 @@ package com.vpnproxy
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
@@ -26,6 +27,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var batteryLogger: BatteryLogger
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -45,6 +47,12 @@ class VpnProxyApp : Application(), Configuration.Provider {
         Timber.plant(LogCollectorTree(logCollector))
         LogCollectorHolder.install(logCollector)
         logCollector.info("VpnProxyApp", "Application started, version=${BuildConfig.VERSION_NAME}")
+
+        try {
+            batteryLogger.logSnapshot("app_start")
+        } catch (t: Throwable) {
+            logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
+        }
 
         // Периодические задачи
         SubscriptionUpdateWorker.schedule(this, intervalHours = 6)
