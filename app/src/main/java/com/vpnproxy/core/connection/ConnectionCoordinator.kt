@@ -35,7 +35,7 @@ sealed class ConnectionEvent {
     data object UserDisconnect : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
-    data class CoreError(val reason: String) : ConnectionEvent()
+    data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
@@ -52,7 +52,7 @@ class ConnectionCoordinator @Inject constructor(
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
         /** Connecting/Reconnecting hard timeout — prevents zombie Connecting. */
-        private const val CONNECTING_TIMEOUT_MS = 18_000L
+        const val CONNECTING_TIMEOUT_MS = 18_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -69,6 +69,14 @@ class ConnectionCoordinator @Inject constructor(
     private var hasServerSelected: Boolean = false
 
     private var retryCount: Int = 0
+
+    /**
+     * After a fatal error, block auto-reconnect (NetworkChanged / ServerSelected)
+     * until the user explicitly sends UserConnect.
+     */
+    @Volatile
+    var isFatalErrorLocked: Boolean = false
+        private set
 
     private var connectingTimeoutJob: Job? = null
 
@@ -96,12 +104,17 @@ class ConnectionCoordinator @Inject constructor(
 
     fun hasSelectedServer(): Boolean = hasServerSelected
 
-    private fun setState(next: ConnectionState) {
+    /** Test / debug access to retry counter. */
+    fun currentRetryCount(): Int = retryCount
+
+    private fun setState(next: ConnectionState, reason: String = "") {
         val prev = _state.value
         if (prev == next) return
         _state.value = next
-        Log.d(TAG, "Actor state changed to: $next (from $prev)")
-        logCollector.info(TAG, "Actor state changed to: $next (from $prev)")
+        val msg =
+            "STATE: $prev -> $next | reason=$reason | retry=$retryCount | fatalLock=$isFatalErrorLocked"
+        Log.d(TAG, msg)
+        logCollector.info(TAG, msg)
         onStateChanged(next)
     }
 
@@ -120,9 +133,9 @@ class ConnectionCoordinator @Inject constructor(
             val s = _state.value
             if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
                 Log.e(TAG, "Connecting timeout ${CONNECTING_TIMEOUT_MS}ms in $s")
-                logCollector.error(TAG, "Connecting timeout — forcing Error")
-                retryCount = 0
-                setState(ConnectionState.Error("Превышено время подключения"))
+                logCollector.error(TAG, "Connecting timeout — FATAL lock + Error")
+                // Same path as fatal: no retries, lock until UserConnect
+                applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
             }
         }
     }
@@ -132,33 +145,18 @@ class ConnectionCoordinator @Inject constructor(
         connectingTimeoutJob = null
     }
 
-    /** Fatal errors that must not be retried (TUN conflict, permission). */
-    private fun isFatalNoRetry(reason: String): Boolean {
-        val r = reason.lowercase()
-        return r.contains("another vpn") ||
-            r.contains("establish failed") ||
-            r.contains("establish() returned null") ||
-            r.contains("permission denied") ||
-            r.contains("permission is missing") ||
-            r.contains("permission revoked")
-    }
-
-    private fun userFacingMessage(reason: String): String {
-        return when {
-            isFatalNoRetry(reason) &&
-                (reason.contains("Another VPN", ignoreCase = true) ||
-                    reason.contains("establish", ignoreCase = true)) ->
-                "Другое VPN уже активно. Отключите его."
-            reason.contains("permission", ignoreCase = true) ->
-                "Нет разрешения VPN. Выдайте доступ в настройках."
-            else -> reason
-        }
+    private fun applyFatal(reason: VpnFailureReason) {
+        retryCount = 0
+        isFatalErrorLocked = true
+        setState(ConnectionState.Error(reason.userMessage()), reason = reason.toString())
     }
 
     private fun handle(event: ConnectionEvent) {
         val current = _state.value
         when (event) {
             is ConnectionEvent.UserConnect -> {
+                // Explicit user action clears fatal lock
+                isFatalErrorLocked = false
                 retryCount = 0
                 if (!hasServerSelected || pendingServerName == null) {
                     Log.d(TAG, "UserConnect deferred — no server selected yet")
@@ -168,7 +166,7 @@ class ConnectionCoordinator @Inject constructor(
                 when (current) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Disconnecting,
-                    is ConnectionState.Error -> setState(ConnectionState.Connecting)
+                    is ConnectionState.Error -> setState(ConnectionState.Connecting, reason = "UserConnect")
                     is ConnectionState.Connected,
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
@@ -182,7 +180,7 @@ class ConnectionCoordinator @Inject constructor(
                     is ConnectionState.Disconnected -> { /* already down */ }
                     else -> {
                         retryCount = 0
-                        setState(ConnectionState.Disconnecting)
+                        setState(ConnectionState.Disconnecting, reason = "UserDisconnect")
                     }
                 }
             }
@@ -201,7 +199,9 @@ class ConnectionCoordinator @Inject constructor(
                     }
                     is ConnectionState.Connected,
                     is ConnectionState.Reconnecting -> {
-                        setState(ConnectionState.Reconnecting)
+                        if (!isFatalErrorLocked) {
+                            setState(ConnectionState.Reconnecting, reason = "ServerSelected")
+                        }
                     }
                     is ConnectionState.Disconnecting -> {
                         Log.d(TAG, "ServerSelected ignored while Disconnecting")
@@ -210,15 +210,20 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.NetworkChanged -> {
+                if (isFatalErrorLocked) {
+                    Log.d(TAG, "NetworkChanged ignored — fatalErrorLocked")
+                    logCollector.info(TAG, "NetworkChanged ignored — fatalErrorLocked")
+                    return
+                }
                 when (current) {
                     is ConnectionState.Connected -> {
-                        if (hasServerSelected) setState(ConnectionState.Reconnecting)
+                        if (hasServerSelected) setState(ConnectionState.Reconnecting, reason = "NetworkChanged")
                     }
                     is ConnectionState.Disconnected,
                     is ConnectionState.Error -> {
                         if (hasServerSelected) {
                             retryCount = 0
-                            setState(ConnectionState.Connecting)
+                            setState(ConnectionState.Connecting, reason = "NetworkChanged")
                         } else {
                             Log.d(TAG, "NetworkChanged ignored — no server selected")
                         }
@@ -236,21 +241,13 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.CoreError -> {
                 Log.e(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
                 logCollector.error(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
-                if (isFatalNoRetry(event.reason)) {
-                    retryCount = 0
-                    val msg = userFacingMessage(event.reason)
-                    if (current !is ConnectionState.Error) {
-                        setState(ConnectionState.Error(msg))
-                    }
-                } else {
-                    handleFailure(event.reason, current)
-                }
+                handleFailure(event.reason, current)
             }
 
             is ConnectionEvent.Timeout -> {
                 Log.e(TAG, "Timeout in state $current (retry=$retryCount)")
                 logCollector.warn(TAG, "Timeout in state $current (retry=$retryCount)")
-                handleFailure("Timeout", current)
+                handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
             }
 
             is ConnectionEvent.ShowError -> {
@@ -259,7 +256,7 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 retryCount = 0
-                setState(ConnectionState.Error(event.message))
+                setState(ConnectionState.Error(event.message), reason = "ShowError")
             }
 
             is ConnectionEvent.ResetRetryCount -> {
@@ -274,20 +271,22 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 retryCount = 0
-                setState(ConnectionState.Disconnected)
+                setState(ConnectionState.Disconnected, reason = "ForceDisconnected")
             }
 
             is ConnectionEvent.ServiceReady -> {
                 retryCount = 0
+                isFatalErrorLocked = false
                 pendingServerName = event.serverName
                 hasServerSelected = true
-                setState(ConnectionState.Connected(event.serverName))
+                setState(ConnectionState.Connected(event.serverName), reason = "ServiceReady")
             }
 
             is ConnectionEvent.ServiceStopped -> {
                 when (current) {
                     is ConnectionState.Disconnecting,
-                    is ConnectionState.Disconnected -> setState(ConnectionState.Disconnected)
+                    is ConnectionState.Disconnected ->
+                        setState(ConnectionState.Disconnected, reason = "ServiceStopped")
                     is ConnectionState.Error -> {
                         Log.d(TAG, "ServiceStopped while Error — keep Error banner")
                     }
@@ -296,30 +295,34 @@ class ConnectionCoordinator @Inject constructor(
                         Log.d(TAG, "ServiceStopped during $current — awaiting restart")
                     }
                     is ConnectionState.Connected -> {
-                        handleFailure("Unexpected service stop", current)
+                        handleFailure(VpnFailureReason.CoreError("Unexpected service stop"), current)
                     }
                 }
             }
         }
     }
 
-    private fun handleFailure(reason: String, current: ConnectionState) {
+    private fun handleFailure(reason: VpnFailureReason, current: ConnectionState) {
+        if (!reason.isRetryable()) {
+            applyFatal(reason)
+            return
+        }
         when (current) {
             is ConnectionState.Connecting,
             is ConnectionState.Reconnecting,
             is ConnectionState.Connected -> {
                 retryCount++
-                if (retryCount < MAX_RETRIES && hasServerSelected) {
+                if (retryCount < MAX_RETRIES && hasServerSelected && !isFatalErrorLocked) {
                     Log.w(TAG, "Retry $retryCount/$MAX_RETRIES after: $reason")
                     logCollector.warn(TAG, "Retry $retryCount/$MAX_RETRIES after: $reason")
-                    setState(ConnectionState.Reconnecting)
+                    setState(ConnectionState.Reconnecting, reason = "retry:$reason")
                 } else {
-                    val msg = "Connection failed after $MAX_RETRIES attempts: $reason"
+                    val msg = "Connection failed after $MAX_RETRIES attempts: ${reason.userMessage()}"
                     Log.e(TAG, msg)
                     logCollector.error(TAG, msg)
                     retryCount = 0
                     if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
-                        setState(ConnectionState.Error(msg))
+                        setState(ConnectionState.Error(msg), reason = "maxRetries:$reason")
                     }
                 }
             }
