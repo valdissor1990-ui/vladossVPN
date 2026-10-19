@@ -16,19 +16,24 @@ class BatteryLogger @Inject constructor(
     }
 
     fun logSnapshot(trigger: String) {
-        batteryMonitor.ensureRegistered()
+        batteryMonitor.register()
         batteryMonitor.updateBaseline()
         val level = batteryMonitor.getLevelPercent()
         val temp = batteryMonitor.getTemperatureCelsius()
         val charging = batteryMonitor.isCharging()
         val draw = batteryMonitor.getCurrentDrawMa()
         val drain = batteryMonitor.getDrainRatePerHour()
-        val tempStr = if (temp.isNaN()) "n/a" else String.format("%.1f", temp)
-        val drawStr = draw?.toString() ?: "n/a"
-        val drainStr = drain?.let { String.format("%.1f", it) } ?: "n/a"
+        val tempStr = if (temp.isNaN()) "N/A" else String.format("%.1f", temp)
+        val drawStr = draw?.toString() ?: "N/A"
+        val drainStr = when {
+            charging -> "charging"
+            drain == null -> "N/A"
+            else -> String.format("%.1f", drain)
+        }
+        val drainUnit = if (charging || drain == null) "" else "%/h"
         val msg =
             "BATTERY | trigger=$trigger level=$level% temp=${tempStr}°C " +
-                "charging=$charging draw=$drawStr mA drain=$drainStr%/h"
+                "charging=$charging draw=$drawStr mA drain=$drainStr$drainUnit"
         logCollector.info(TAG, msg)
     }
 

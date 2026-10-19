@@ -33,32 +33,50 @@ class BatteryMonitor @Inject constructor(
         }
     }
 
-    @Volatile private var registered = false
+    @Volatile
+    private var isRegistered = false
 
     init {
-        ensureRegistered()
-        // Seed from sticky battery intent if available.
+        // Seed from sticky battery intent if available (no live receiver yet).
         readSticky()?.let { updateBaseline(it) }
     }
 
-    fun ensureRegistered() {
-        if (registered) return
+    /** Register battery receiver. Safe to call multiple times (isRegistered guard). */
+    fun register(appContext: Context = context) {
+        if (isRegistered) return
         synchronized(lock) {
-            if (registered) return
+            if (isRegistered) return
             try {
                 val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                    appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
                 } else {
                     @Suppress("UnspecifiedRegisterReceiverFlag")
-                    context.registerReceiver(receiver, filter)
+                    appContext.registerReceiver(receiver, filter)
                 }
-                registered = true
+                isRegistered = true
             } catch (_: Throwable) {
                 // Keep working via sticky/read path.
             }
         }
     }
+
+    /** Unregister battery receiver. Safe if never registered. */
+    fun unregister(appContext: Context = context) {
+        if (!isRegistered) return
+        synchronized(lock) {
+            if (!isRegistered) return
+            try {
+                appContext.unregisterReceiver(receiver)
+            } catch (_: Throwable) {
+                // Already unregistered or never registered on this context.
+            }
+            isRegistered = false
+        }
+    }
+
+    /** @deprecated Use [register]; kept for call-sites during migration. */
+    fun ensureRegistered() = register()
 
     fun getLevelPercent(): Int {
         val sticky = readSticky()
@@ -91,7 +109,7 @@ class BatteryMonitor @Inject constructor(
     /**
      * Instantaneous current draw in mA.
      * BATTERY_PROPERTY_CURRENT_NOW is µA on most devices (negative = discharge).
-     * Returns absolute value in mA; null if unsupported.
+     * Returns absolute value in mA; null if unsupported / unknown (0, -1, MIN_VALUE).
      */
     fun getCurrentDrawMa(): Int? {
         return try {
@@ -99,12 +117,9 @@ class BatteryMonitor @Inject constructor(
                 ?: return null
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
             val ua = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
-            if (ua == Int.MIN_VALUE || ua == 0) {
-                // Some OEMs return 0 when unavailable
-                if (ua == Int.MIN_VALUE) null else 0
-            } else {
-                abs(ua / 1000)
-            }
+            // 0 / -1 / MIN_VALUE = unknown on many OEMs
+            if (ua == Int.MIN_VALUE || ua == 0 || ua == -1) return null
+            abs(ua / 1000)
         } catch (_: Throwable) {
             null
         }
