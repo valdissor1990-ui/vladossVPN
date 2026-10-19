@@ -299,7 +299,12 @@ class VpnProxyService : VpnService() {
                     graceWaitedMs += 5_000L
                 }
                 if (!_isRunning.value) {
-                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
+                    val currentState = connectionCoordinator.state.value
+                    val totalWait = 15_000 + graceWaitedMs
+                    logCollector.error(
+                        TAG,
+                        "Watchdog: No state change for ${totalWait}ms while in $currentState — sending Timeout"
+                    )
                     connectionCoordinator.send(ConnectionEvent.Timeout)
                 }
             }
