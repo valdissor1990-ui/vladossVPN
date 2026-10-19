@@ -39,102 +39,107 @@ class ConnectionCoordinatorTest {
         )
     }
 
-    private fun pump() {
-        // Actor processes events on Default dispatcher — give it a tick
-        Thread.sleep(80)
+    /** Wait until [predicate] is true or timeout. */
+    private fun awaitUntil(timeoutMs: Long = 3000, predicate: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate()) return
+            Thread.sleep(25)
+        }
+        throw AssertionError("Condition not met within ${timeoutMs}ms; state=${coordinator.state.value} retry=${coordinator.currentRetryCount()} fatal=${coordinator.isFatalErrorLocked}")
+    }
+
+    private fun sendAndWait(event: ConnectionEvent, predicate: () -> Boolean) {
+        coordinator.send(event)
+        awaitUntil { predicate() }
     }
 
     @Before
     fun setUp() {
         coordinator = ConnectionCoordinator(LogCollector())
-        pump()
+        // actor loop starts asynchronously
+        Thread.sleep(50)
     }
 
     @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
-        coordinator.send(ConnectionEvent.ServerSelected(sampleServer()))
-        pump()
-        coordinator.send(ConnectionEvent.UserConnect)
-        pump()
-        assertTrue(coordinator.state.value is ConnectionState.Connecting)
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
 
-        coordinator.send(ConnectionEvent.CoreError(VpnFailureReason.AnotherVpnActive))
-        pump()
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.AnotherVpnActive)) {
+            coordinator.state.value is ConnectionState.Error
+        }
 
-        val state = coordinator.state.value
-        assertTrue(state is ConnectionState.Error)
-        assertEquals(
-            "Другое VPN уже активно. Отключите его.",
-            (state as ConnectionState.Error).message
-        )
+        val state = coordinator.state.value as ConnectionState.Error
+        assertEquals("Другое VPN уже активно. Отключите его.", state.message)
         assertEquals(0, coordinator.currentRetryCount())
         assertTrue(coordinator.isFatalErrorLocked)
     }
 
     @Test
     fun retryableTimeout_retriesThenError() {
-        coordinator.send(ConnectionEvent.ServerSelected(sampleServer()))
-        pump()
-        coordinator.send(ConnectionEvent.UserConnect)
-        pump()
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
 
-        // 1st failure → Reconnecting (retry 1)
-        coordinator.send(ConnectionEvent.Timeout)
-        pump()
-        assertTrue(
-            "expected Reconnecting after 1st timeout, got ${coordinator.state.value}",
-            coordinator.state.value is ConnectionState.Reconnecting
-        )
-        assertEquals(1, coordinator.currentRetryCount())
+        sendAndWait(ConnectionEvent.Timeout) {
+            coordinator.state.value is ConnectionState.Reconnecting &&
+                coordinator.currentRetryCount() == 1
+        }
 
-        // 2nd → still retry (retry 2)
-        coordinator.send(ConnectionEvent.Timeout)
-        pump()
-        assertTrue(coordinator.state.value is ConnectionState.Reconnecting)
-        assertEquals(2, coordinator.currentRetryCount())
+        sendAndWait(ConnectionEvent.Timeout) {
+            coordinator.state.value is ConnectionState.Reconnecting &&
+                coordinator.currentRetryCount() == 2
+        }
 
-        // 3rd → Error (MAX_RETRIES = 3, retryCount becomes 3 and fails)
-        coordinator.send(ConnectionEvent.Timeout)
-        pump()
-        assertTrue(
-            "expected Error after max retries, got ${coordinator.state.value}",
+        sendAndWait(ConnectionEvent.Timeout) {
             coordinator.state.value is ConnectionState.Error
-        )
+        }
+
         assertEquals(0, coordinator.currentRetryCount())
     }
 
     @Test
     fun fatalLock_blocksNetworkChangedAutoConnect() {
-        coordinator.send(ConnectionEvent.ServerSelected(sampleServer()))
-        pump()
-        coordinator.send(ConnectionEvent.UserConnect)
-        pump()
-        coordinator.send(ConnectionEvent.CoreError(VpnFailureReason.AnotherVpnActive))
-        pump()
-        assertTrue(coordinator.isFatalErrorLocked)
-        assertTrue(coordinator.state.value is ConnectionState.Error)
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.AnotherVpnActive)) {
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
 
         coordinator.send(ConnectionEvent.NetworkChanged)
-        pump()
-        // Must stay in Error — not auto-Connecting
+        Thread.sleep(150)
         assertTrue(coordinator.state.value is ConnectionState.Error)
         assertTrue(coordinator.isFatalErrorLocked)
     }
 
     @Test
     fun userConnect_clearsFatalLock() {
-        coordinator.send(ConnectionEvent.ServerSelected(sampleServer()))
-        pump()
-        coordinator.send(ConnectionEvent.UserConnect)
-        pump()
-        coordinator.send(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied))
-        pump()
-        assertTrue(coordinator.isFatalErrorLocked)
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked
+        }
 
-        coordinator.send(ConnectionEvent.UserConnect)
-        pump()
-        assertFalse(coordinator.isFatalErrorLocked)
-        assertTrue(coordinator.state.value is ConnectionState.Connecting)
+        sendAndWait(ConnectionEvent.UserConnect) {
+            !coordinator.isFatalErrorLocked &&
+                coordinator.state.value is ConnectionState.Connecting
+        }
     }
 
     @Test
