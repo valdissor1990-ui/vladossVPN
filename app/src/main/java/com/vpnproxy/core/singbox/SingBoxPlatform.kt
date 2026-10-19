@@ -107,8 +107,19 @@ class SingBoxPlatform(
             (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
         }
 
-        val pfd = builder.establish() ?: error("VpnService.Builder.establish() returned null")
+        Log.d(TAG, "Attempting to create TUN interface...")
+        val pfd = try {
+            builder.establish()
+        } catch (t: Throwable) {
+            Log.e(TAG, "VpnService.Builder.establish() threw an exception", t)
+            throw t
+        }
+        if (pfd == null) {
+            Log.e(TAG, "establish() returned null! Permission denied or VPN already active.")
+            throw IllegalStateException("VpnService.Builder.establish() returned null")
+        }
         tunDescriptor = pfd
+        Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
         Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
         return pfd.fd
         } catch (t: Throwable) {
