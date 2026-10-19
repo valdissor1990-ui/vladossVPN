@@ -115,8 +115,11 @@ class SingBoxPlatform(
             throw t
         }
         if (pfd == null) {
-            Log.e(TAG, "establish() returned null! Permission denied or VPN already active.")
-            throw IllegalStateException("VpnService.Builder.establish() returned null")
+            // Another VPN is holding the TUN, or system denied the interface.
+            Log.e(TAG, "establish() returned null — another VPN active or permission denied")
+            throw IllegalStateException(
+                "VPN establish failed: Another VPN is active or permission denied"
+            )
         }
         tunDescriptor = pfd
         Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
@@ -124,6 +127,13 @@ class SingBoxPlatform(
         return pfd.fd
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
+            // Preserve the specific "another VPN" message for upstream UX mapping.
+            if (t is IllegalStateException &&
+                (t.message?.contains("Another VPN", ignoreCase = true) == true ||
+                    t.message?.contains("establish failed", ignoreCase = true) == true)
+            ) {
+                throw t
+            }
             throw IllegalStateException("Sing-box openTun failed: ${t.message}", t)
         }
     }
