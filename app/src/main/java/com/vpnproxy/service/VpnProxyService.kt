@@ -13,6 +13,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionEvent
+import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.network.NetworkAwareReconnector
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
@@ -31,10 +34,16 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Reactive VPN service: lifecycle is driven by [ConnectionCoordinator] StateFlow.
+ * Does not process ACTION_START / ACTION_STOP. Service stays alive as a subscriber
+ * and only tears down TUN + Sing-box when state becomes Disconnected/Disconnecting.
+ */
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
 
@@ -43,8 +52,17 @@ class VpnProxyService : VpnService() {
         private const val CHANNEL_ID = "vpnproxy_channel"
         private const val NOTIFICATION_ID = 1001
 
+        /** Bring the process up so it can subscribe to the coordinator. */
+        const val ACTION_ENSURE_RUNNING = "com.vpnproxy.ENSURE_RUNNING"
+        /** Notification / external: map to UserDisconnect event (no stopSelf). */
+        const val ACTION_REQUEST_DISCONNECT = "com.vpnproxy.REQUEST_DISCONNECT"
+
+        // Legacy aliases kept so older call sites compile during migration; no-ops in onStartCommand.
+        @Deprecated("Use ConnectionCoordinator.send(UserConnect) + ACTION_ENSURE_RUNNING")
         const val ACTION_START = "com.vpnproxy.START"
+        @Deprecated("Use ConnectionCoordinator.send(UserDisconnect)")
         const val ACTION_STOP = "com.vpnproxy.STOP"
+        @Deprecated("Use ConnectionCoordinator.send(NetworkChanged / ServerSelected)")
         const val ACTION_RECONNECT = "com.vpnproxy.RECONNECT"
 
         private val _isRunning = MutableStateFlow(false)
@@ -65,11 +83,13 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var autoSwitcher: AutoSwitcher
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+    @Inject lateinit var connectionCoordinator: ConnectionCoordinator
 
     private var singBoxCore: SingBoxCore? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
+    private var stateCollectorJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
@@ -81,8 +101,6 @@ class VpnProxyService : VpnService() {
         super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
 
-        // Preserve the existing crash handler (installed by Application) while adding
-        // an early service lifecycle trace. Java handlers cannot catch SIGSEGV/SIGABRT.
         if (uncaughtHandlerInstalled.compareAndSet(false, true)) {
             val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -93,7 +111,6 @@ class VpnProxyService : VpnService() {
 
         createNotificationChannel()
         try {
-            // Promote immediately, before any libbox/JNI initialization.
             val notification = buildNotification(getString(R.string.state_connecting))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
@@ -125,52 +142,67 @@ class VpnProxyService : VpnService() {
             isVpnActive = { _isRunning.value },
             isBusy = { startInProgress || autoSwitcher.isSwitching() },
             onReconnectRequested = {
-                if (startInProgress || autoSwitcher.isSwitching()) {
-                    isReconnecting.set(false)
-                    logCollector.debug(TAG, "Network reconnect skipped — busy")
-                    return@NetworkAwareReconnector
-                }
-                val intent = Intent(this, VpnProxyService::class.java).apply {
-                    action = ACTION_RECONNECT
-                }
-                try {
-                    startService(intent)
-                } catch (t: Throwable) {
-                    isReconnecting.set(false)
-                    logCollector.error(TAG, "Network reconnect start failed", t)
-                }
+                Log.d(TAG, "Network reconnect → ConnectionEvent.NetworkChanged")
+                connectionCoordinator.send(ConnectionEvent.NetworkChanged)
             },
             onReconnectStateChanged = { reconnecting ->
                 isReconnecting.set(reconnecting)
                 logCollector.debug(TAG, "Network reconnect state=$reconnecting")
             }
         ).also { it.start() }
+
+        // Reactive core: subscribe to coordinator state.
+        stateCollectorJob = scope.launch {
+            connectionCoordinator.state
+                .distinctUntilChanged()
+                .collect { state ->
+                    Log.d(TAG, "Service reacting to state: $state")
+                    logCollector.info(TAG, "Service reacting to state: $state")
+                    when (state) {
+                        is ConnectionState.Connecting,
+                        is ConnectionState.Reconnecting -> {
+                            restartVpnForDesiredState(state)
+                        }
+                        is ConnectionState.Connected -> {
+                            if (!_isRunning.value && !startInProgress) {
+                                restartVpnForDesiredState(state)
+                            } else {
+                                updateNotification(getString(R.string.state_connected))
+                            }
+                        }
+                        is ConnectionState.Disconnecting,
+                        is ConnectionState.Disconnected -> {
+                            stopVpnKeepAlive(state.toString())
+                        }
+                    }
+                }
+        }
+
         Log.d("VpnService", "===== onCreate completed =====")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("VpnService", "===== onStartCommand. Action: ${intent?.action} =====")
-        Log.i(TAG, "onStartCommand: action=${intent?.action}, startId=$startId, flags=$flags")
-        if (intent?.action == null || intent.action == ACTION_STOP) {
-            Log.e("VpnService", "STOPPING SERVICE. Reason: ACTION_STOP or null intent", Exception("onStartCommand action trace"))
-        }
+        Log.i(TAG, "onStartCommand: action=${intent?.action}, startId=$startId (reactive mode)")
+
         when (intent?.action) {
-            ACTION_STOP -> stopVpn()
-            ACTION_RECONNECT -> scope.launch {
-                if (startInProgress) {
-                    isReconnecting.set(false)
-                    logCollector.debug(TAG, "RECONNECT skipped — startInProgress")
-                    return@launch
-                }
-                stopVpnInternal()
-                delay(500)
-                startVpn()
+            ACTION_REQUEST_DISCONNECT,
+            ACTION_STOP -> {
+                // Map legacy stop intents to actor event; do NOT stopSelf.
+                Log.e("VpnService", "REQUEST_DISCONNECT mapped to UserDisconnect (no stopSelf)")
+                connectionCoordinator.send(ConnectionEvent.UserDisconnect)
             }
-            ACTION_START -> startVpn()
+            ACTION_RECONNECT -> {
+                Log.d(TAG, "Legacy ACTION_RECONNECT → NetworkChanged")
+                connectionCoordinator.send(ConnectionEvent.NetworkChanged)
+            }
+            ACTION_START,
+            ACTION_ENSURE_RUNNING,
             null -> {
-                logCollector.debug(TAG, "onStartCommand(null): isRunning=${_isRunning.value}, inProgress=$startInProgress")
-                startVpn()
+                // Ensure process is alive; actor drives actual start.
+                Log.d(TAG, "ENSURE_RUNNING — actor state=${connectionCoordinator.state.value}")
             }
+            else -> Log.d(TAG, "Unhandled action ${intent.action}")
         }
         return START_STICKY
     }
@@ -180,114 +212,120 @@ class VpnProxyService : VpnService() {
     override fun onRevoke() {
         Log.e("VpnService", "===== onRevoke called (Another VPN active or user revoked) =====", Exception("onRevoke trace"))
         logCollector.warn(TAG, "onRevoke — VPN revoked by system")
-        scope.launch { stopVpnInternal("VPN permission revoked by system") }
-        stopServiceWithReason("VPN permission revoked by system")
+        connectionCoordinator.send(ConnectionEvent.CoreError("VPN permission revoked by system"))
+        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
         super.onRevoke()
     }
 
-    private fun startVpn() {
-        Log.i(TAG, "startVpn requested: startInProgress=$startInProgress isRunning=${_isRunning.value}")
-        if (startInProgress || _isRunning.value) {
-            logCollector.debug(TAG,
-                "startVpn skipped: startInProgress=$startInProgress isRunning=${_isRunning.value}")
+    private fun restartVpnForDesiredState(state: ConnectionState) {
+        if (startInProgress) {
+            logCollector.debug(TAG, "restartVpn skipped: startInProgress for $state")
             return
         }
-        _lastError.value = null
-        startInProgress = true
-
         vpnJob?.cancel()
         vpnJob = scope.launch {
             try {
-                Log.d("VpnService", "startVpn coroutine entered on ${Thread.currentThread().name}")
-                logCollector.info(TAG, "Starting VPN orchestrator…")
-
-                watchdogJob?.cancel()
-                watchdogJob = scope.launch {
-                    delay(15_000)
-                    // Do not let a legacy watchdog tear down active Sing-box initialization.
-                    if (startInProgress) {
-                        logCollector.warn(TAG, "Watchdog: Sing-box startup still in progress after 15s; suppressing startup timeout")
-                        return@launch
-                    }
-                    var graceWaitedMs = 0L
-                    while (WatchdogReconnectPolicy.shouldWaitForReconnect(
-                        vpnRunning = _isRunning.value,
-                        reconnecting = isReconnecting.get(),
-                        graceWaitedMs = graceWaitedMs
-                    )) {
-                        logCollector.debug(TAG, "Watchdog: reconnect in progress; extending timeout")
-                        delay(5_000)
-                        graceWaitedMs += 5_000L
-                    }
-                    if (!_isRunning.value) {
-                        val elapsedSeconds = 15 + graceWaitedMs / 1_000
-                        logCollector.warn(TAG, "Watchdog: VPN not running after ${elapsedSeconds}s — stopping")
-                        stopVpnInternal("watchdog timeout")
-                        stopServiceWithReason("watchdog timeout")
-                    }
+                // Soft stop previous session without killing the service.
+                if (_isRunning.value) {
+                    stopVpnInternal("soft restart for $state")
+                    delay(300)
                 }
-
-                val parsed = autoSwitcher.currentServer.value?.config
-                    ?: subscriptionRepository.getAllConfigs().firstOrNull()
-                if (parsed == null) {
-                    val reason = "No server selected — open Subscriptions first"
-                    logCollector.warn(TAG, reason)
-                    _lastError.value = reason
-                    stopServiceWithReason(reason)
-                    return@launch
-                }
-
-                logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
-                val core = singBoxCore ?: error("Sing-box core was not initialized")
-                try {
-                    val configJson = SingboxConfigBuilder.buildVpn(parsed)
-                    Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
-                    core.start(configJson)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Failed to start Sing-box", t)
-                    throw t
-                }
-
-                trafficCollector.start()
-                trafficCollector.resetSession()
-                autoSwitcher.startMonitoring()
-
-                _isRunning.value = true
-                isReconnecting.set(false)
-                updateNotification(getString(R.string.state_connected))
-                logCollector.info(TAG, "Sing-box VPN started successfully")
+                startVpnSession()
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
-                Log.e(TAG, "Stopping VPN. Reason: startVpn failed", t)
-                logCollector.error(TAG, "Failed to start VPN", t)
-                stopVpnInternal("startVpn failed", t)
-                stopServiceWithReason("startVpn failed", t)
-            } finally {
-                startInProgress = false
-
-                isReconnecting.set(false)
+                Log.e(TAG, "restartVpnForDesiredState failed", t)
+                connectionCoordinator.send(ConnectionEvent.CoreError(t.message ?: "restart failed"))
             }
         }
     }
 
-    private fun stopVpn() {
-        Log.e("VpnService", "STOPPING SERVICE. Reason: stopVpn()", Exception("stopVpn() call stack"))
-        scope.launch {
-            stopVpnInternal("explicit ACTION_STOP")
-            stopServiceWithReason("explicit ACTION_STOP")
+    private suspend fun startVpnSession() {
+        Log.i(TAG, "startVpnSession: startInProgress=$startInProgress isRunning=${_isRunning.value}")
+        if (startInProgress) return
+        _lastError.value = null
+        startInProgress = true
+
+        try {
+            Log.d("VpnService", "startVpnSession on ${Thread.currentThread().name}")
+            logCollector.info(TAG, "Starting VPN orchestrator (actor-driven)…")
+
+            watchdogJob?.cancel()
+            watchdogJob = scope.launch {
+                delay(15_000)
+                if (startInProgress) {
+                    logCollector.warn(TAG, "Watchdog: startup still in progress after 15s; suppressing")
+                    return@launch
+                }
+                var graceWaitedMs = 0L
+                while (WatchdogReconnectPolicy.shouldWaitForReconnect(
+                    vpnRunning = _isRunning.value,
+                    reconnecting = isReconnecting.get(),
+                    graceWaitedMs = graceWaitedMs
+                )) {
+                    logCollector.debug(TAG, "Watchdog: reconnect in progress; extending timeout")
+                    delay(5_000)
+                    graceWaitedMs += 5_000L
+                }
+                if (!_isRunning.value) {
+                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
+                    connectionCoordinator.send(ConnectionEvent.Timeout)
+                }
+            }
+
+            val parsed = autoSwitcher.currentServer.value?.config
+                ?: subscriptionRepository.getAllConfigs().firstOrNull()
+            if (parsed == null) {
+                val reason = "No server selected — open Subscriptions first"
+                logCollector.warn(TAG, reason)
+                _lastError.value = reason
+                connectionCoordinator.send(ConnectionEvent.CoreError(reason))
+                return
+            }
+
+            logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
+            val core = singBoxCore ?: error("Sing-box core was not initialized")
+            try {
+                val configJson = SingboxConfigBuilder.buildVpn(parsed)
+                Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
+                core.start(configJson)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to start Sing-box", t)
+                throw t
+            }
+
+            trafficCollector.start()
+            trafficCollector.resetSession()
+            autoSwitcher.startMonitoring()
+
+            _isRunning.value = true
+            isReconnecting.set(false)
+            updateNotification(getString(R.string.state_connected))
+            logCollector.info(TAG, "Sing-box VPN started successfully")
+            connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            Log.e(TAG, "startVpnSession failed", t)
+            logCollector.error(TAG, "Failed to start VPN", t)
+            _lastError.value = t.message ?: "start failed"
+            stopVpnInternal("startVpnSession failed", t)
+            connectionCoordinator.send(ConnectionEvent.CoreError(t.message ?: "startVpnSession failed"))
+        } finally {
+            startInProgress = false
+            isReconnecting.set(false)
         }
     }
 
-    private fun stopServiceWithReason(reason: String, throwable: Throwable? = null) {
-        Log.e("VpnService", "STOPPING SERVICE. Reason: $reason", throwable ?: Exception("stopServiceWithReason($reason) call stack"))
-        try {
-            singBoxCore?.stop()
-        } catch (t: Throwable) {
-            Log.e("VpnService", "Sing-box stop failed while stopping service: $reason", t)
+    /** Stop TUN/core but keep the service process alive as a StateFlow subscriber. */
+    private fun stopVpnKeepAlive(reason: String) {
+        Log.e("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
+        vpnJob?.cancel()
+        vpnJob = scope.launch {
+            stopVpnInternal(reason)
+            connectionCoordinator.send(ConnectionEvent.ServiceStopped)
+            updateNotification(getString(R.string.state_disconnected))
         }
-        Log.e("VpnService", "Calling stopSelf(). Reason: $reason", Exception("stopSelf() call stack"))
-        stopSelf()
     }
 
     private suspend fun stopVpnInternal(
@@ -301,7 +339,7 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            logCollector.info(TAG, "VPN stopped. Reason: $reason")
+            logCollector.info(TAG, "VPN stopped (service alive). Reason: $reason")
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -311,10 +349,11 @@ class VpnProxyService : VpnService() {
 
     override fun onDestroy() {
         Log.e("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
-        Log.e("VpnService", "STOPPING SERVICE. Reason: onDestroy", Exception("onDestroy call stack"))
         autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
+        stateCollectorJob?.cancel()
+        stateCollectorJob = null
         watchdogJob?.cancel()
         watchdogJob = null
         isReconnecting.set(false)
@@ -341,12 +380,7 @@ class VpnProxyService : VpnService() {
     private fun buildNotification(state: String): Notification {
         val stopPi = PendingIntent.getService(
             this, 0,
-            Intent(this, VpnProxyService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val recPi = PendingIntent.getService(
-            this, 1,
-            Intent(this, VpnProxyService::class.java).setAction(ACTION_RECONNECT),
+            Intent(this, VpnProxyService::class.java).setAction(ACTION_REQUEST_DISCONNECT),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val contentPi = PendingIntent.getActivity(
@@ -362,7 +396,6 @@ class VpnProxyService : VpnService() {
             .setContentIntent(contentPi)
             .setOngoing(true)
             .addAction(0, getString(R.string.notification_stop), stopPi)
-            .addAction(0, getString(R.string.notification_reconnect), recPi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -372,12 +405,16 @@ class VpnProxyService : VpnService() {
             .notify(NOTIFICATION_ID, buildNotification(state))
     }
 
-    /** Reconnects the existing VPN service after AutoSwitcher selected another server. */
+    /** Called by AutoSwitcher after slow-server switch — posts ServerSelected-style reconnect. */
     fun reconnectAfterSlowServerSwitch() {
-        startService(Intent(this, VpnProxyService::class.java).setAction(ACTION_RECONNECT))
+        val server = autoSwitcher.currentServer.value
+        if (server != null) {
+            connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+        } else {
+            connectionCoordinator.send(ConnectionEvent.NetworkChanged)
+        }
     }
 
-    /** Updates the persistent VPN notification when repeated switches indicate an unstable network. */
     fun showUnstableNetworkNotification() {
         logCollector.warn(TAG, "Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
         updateNotification("Ваша сеть нестабильна, попробуйте сменить Wi-Fi")
