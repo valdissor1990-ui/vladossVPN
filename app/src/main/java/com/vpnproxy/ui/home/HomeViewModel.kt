@@ -75,7 +75,6 @@ class HomeViewModel @Inject constructor(
 
     private var pingJob: Job? = null
     private var connectTimeoutJob: Job? = null
-    private val connectTimeoutMs = 20_000L
     private var connectAttemptId = 0L
     private var fallbackAttempts = 0
     private val attemptedServerKeys = mutableSetOf<String>()
@@ -86,7 +85,6 @@ class HomeViewModel @Inject constructor(
     private var vpnPermissionRequester: (() -> Unit)? = null
 
     init {
-        // Primary UI mirror of actor state.
         viewModelScope.launch {
             connectionCoordinator.state.collect { state ->
                 when (state) {
@@ -127,15 +125,17 @@ class HomeViewModel @Inject constructor(
                             sessionStartedAt = sessionStart
                         )
                     }
-                }
-            }
-        }
-
-        // Keep legacy isRunning mirror for residual callers.
-        viewModelScope.launch {
-            VpnProxyService.isRunning.collect { running ->
-                if (running && _uiState.value.connectionState == ConnectionUiState.CONNECTING) {
-                    // Actor will soon emit Connected; no extra action.
+                    is ConnectionState.Error -> {
+                        isFallingBack.set(false)
+                        connectTimeoutJob?.cancel()
+                        connectTimeoutJob = null
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = ConnectionUiState.ERROR,
+                            isBusy = false,
+                            sessionStartedAt = null
+                        )
+                        logCollector.warn(TAG, "Actor Error: ${state.message}")
+                    }
                 }
             }
         }
@@ -145,13 +145,12 @@ class HomeViewModel @Inject constructor(
                 if (err == null) return@collect
                 logCollector.warn(TAG, "Service error: $err")
                 VpnProxyService.clearError()
+                // Actor already counts retries; only try alternate server if still connecting.
                 if (_uiState.value.connectionState == ConnectionUiState.CONNECTING ||
                     _uiState.value.isBusy
                 ) {
                     isFallingBack.set(false)
                     tryNextServer()
-                } else {
-                    logCollector.warn(TAG, "Ignoring stale service error outside connection attempt")
                 }
             }
         }
@@ -250,14 +249,10 @@ class HomeViewModel @Inject constructor(
     fun onVpnPermissionGranted() {
         val permissionGrantedAt = android.os.SystemClock.elapsedRealtime()
         Log.i(TAG, "VPN permission granted")
-        Log.i(TAG, "HomeVM: Starting connection flow...")
+        Log.i(TAG, "HomeVM: Starting connection flow (select server FIRST)...")
 
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
-
-        // Actor first — service will react once process is up.
-        connectionCoordinator.send(ConnectionEvent.UserConnect)
         ensureServiceRunning()
-        Log.i(TAG, "HomeVM: UserConnect + ENSURE_RUNNING after ${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt} ms")
 
         viewModelScope.launch {
             try {
@@ -286,30 +281,38 @@ class HomeViewModel @Inject constructor(
                 }
                 val configs = selection.first
                 val best = selection.second
-                Log.i(TAG, "HomeVM: Server selection finished in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt} ms; configs=${configs.size}")
+                Log.i(
+                    TAG,
+                    "HomeVM: Server selection finished in " +
+                        "${android.os.SystemClock.elapsedRealtime() - selectionStartedAt} ms; configs=${configs.size}"
+                )
                 if (configs.isNotEmpty()) _uiState.value = _uiState.value.copy(serverCount = configs.size)
                 _uiState.value = _uiState.value.copy(usingBootstrap = subscriptionRepository.usingBootstrap.value)
 
                 if (best == null) {
-                    logCollector.warn(TAG, "No server candidate found after UserConnect")
-                    if (connectionCoordinator.state.value !is ConnectionState.Connected) {
-                        connectionCoordinator.send(ConnectionEvent.CoreError("No server candidate"))
-                        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
-                    }
+                    logCollector.warn(TAG, "No server candidate — abort connect")
+                    connectionCoordinator.send(ConnectionEvent.ShowError("No server candidate"))
+                    _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
                     return@launch
                 }
 
                 Log.i(TAG, "Selected server: ${best.config.name} (${best.config.address}:${best.config.port}, ${best.latencyMs}ms)")
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
+
+                // Order matters: ServerSelected THEN UserConnect (no double start).
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
+                connectionCoordinator.send(ConnectionEvent.UserConnect)
+                Log.i(
+                    TAG,
+                    "HomeVM: ServerSelected+UserConnect after " +
+                        "${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt} ms"
+                )
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                logCollector.error(TAG, "Server selection failed after UserConnect", e)
-                if (connectionCoordinator.state.value !is ConnectionState.Connected) {
-                    connectionCoordinator.send(ConnectionEvent.CoreError(e.message ?: "selection failed"))
-                    _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
-                }
+                logCollector.error(TAG, "Server selection failed", e)
+                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "selection failed"))
+                _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
             }
         }
     }
@@ -502,6 +505,11 @@ class HomeViewModel @Inject constructor(
                     currentRtt = server.latencyMs
                 )
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+                if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
+                    connectionCoordinator.state.value is ConnectionState.Error
+                ) {
+                    connectionCoordinator.send(ConnectionEvent.UserConnect)
+                }
                 ensureServiceRunning()
             } catch (c: CancellationException) {
                 throw c
