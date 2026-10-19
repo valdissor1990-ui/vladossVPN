@@ -151,7 +151,7 @@ jobs:
             version_code="$(printf '%s\n' "$badging" | sed -n "1s/.*versionCode='\([^']*\)'.*/\1/p")"
             test -n "$version_name" && test -n "$version_code"
             echo "Package/version: com.vpnproxy.direct $version_name ($version_code)"
-            cert="$( "$APKSIGNER" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 )"
+            cert="$( "$APKSIGNER" verify --print-certs "$apk" | sed -n -E 's/^(Signer #1 certificate SHA-256 digest: |V[0-9]+ Signer: certificate SHA-256 digest: )//p' | head -1 )"
             test -n "$cert" || { echo "::error::No signer certificate found in $apk"; exit 1; }
             if [ -z "$cert_digest" ]; then cert_digest="$cert"; elif [ "$cert" != "$cert_digest" ]; then
               echo "::error::APK signing certificate differs between split artifacts"
