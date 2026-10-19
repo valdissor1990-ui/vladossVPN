@@ -170,10 +170,12 @@ class HomeViewModel @Inject constructor(
         pingJob = viewModelScope.launch {
             while (isActive) {
                 try {
-                    val region = PingTargets.detectRegion(context)
-                    val targets = PingTargets.forRegion(region)
-                    val multi = pingService.pingAll(targets = targets, region = region)
-                    val breakdown = LatencyCalculator.compute(multi.results)
+                    val breakdown = withContext(Dispatchers.IO) {
+                        val region = PingTargets.detectRegion(context)
+                        val targets = PingTargets.forRegion(region)
+                        val multi = pingService.pingAll(targets = targets, region = region)
+                        LatencyCalculator.compute(multi.results)
+                    }
                     _latencyBreakdown.value = breakdown
                     if (breakdown.isValid) {
                         val score = breakdown.compositeScore.toLong()
@@ -277,13 +279,22 @@ class HomeViewModel @Inject constructor(
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
                 // ACTION_START has already been dispatched. If service bootstrapped with
                 // another config, request reconnect so it consumes the selected server.
-                if (!VpnProxyService.isRunning.value) {
-                    Log.i(TAG, "HomeVM: Server ranking completed while service is starting; service will observe selected server if startup has not read config yet")
-                } else {
+                // Service startup is asynchronous. Wait briefly for its first start to
+                // finish, then apply the selected server via reconnect; never delay ACTION_START.
+                var waitMs = 0L
+                while (!VpnProxyService.isRunning.value && waitMs < 15_000L &&
+                    _uiState.value.connectionState == ConnectionUiState.CONNECTING
+                ) {
+                    delay(250L)
+                    waitMs += 250L
+                }
+                if (VpnProxyService.isRunning.value) {
                     Log.i(TAG, "HomeVM: Requesting reconnect to the selected best server")
                     safeStartService(Intent(context, VpnProxyService::class.java).apply {
                         action = VpnProxyService.ACTION_RECONNECT
                     }, reason = "best server selected after immediate ACTION_START")
+                } else {
+                    Log.w(TAG, "HomeVM: Service did not reach CONNECTED state within ${waitMs}ms after ACTION_START")
                 }
             } catch (c: CancellationException) {
                 throw c
