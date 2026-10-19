@@ -34,14 +34,30 @@ class SingBoxPlatform(
             Log.d(TAG, "No active VPN service for fd=$fd; probe mode has no TUN to bypass")
             return
         }
-        check(service.protect(fd)) { "VpnService.protect($fd) failed" }
+        val protected = try {
+            service.protect(fd)
+        } catch (t: Throwable) {
+            Log.e(TAG, "VpnService.protect($fd) threw an exception", t)
+            false
+        }
+        if (!protected) {
+            Log.e(TAG, "Failed to protect fd $fd")
+            return
+        }
     }
 
     override fun openTun(options: TunOptions): Int {
         try {
             Log.i(TAG, "openTun requested by libbox")
-            val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
-        check(VpnService.prepare(context) == null) { "VPN permission is missing" }
+            val service = vpnService
+            if (service == null) {
+                Log.e(TAG, "TUN is unavailable in proxy-only probe mode")
+                return -1
+            }
+            if (VpnService.prepare(context) != null) {
+                Log.e(TAG, "TUN permission missing: VpnService.prepare() returned non-null")
+                return -1
+            }
         tunDescriptor?.close()
         val builder = service.Builder()
             .setSession("VPNProxy · Sing-box")
@@ -112,11 +128,11 @@ class SingBoxPlatform(
             builder.establish()
         } catch (t: Throwable) {
             Log.e(TAG, "VpnService.Builder.establish() threw an exception", t)
-            throw t
+            return -1
         }
         if (pfd == null) {
-            Log.e(TAG, "establish() returned null! Permission denied or VPN already active.")
-            throw IllegalStateException("VpnService.Builder.establish() returned null")
+            Log.e(TAG, "establish() returned null — permission denied or VPN already active.")
+            return -1
         }
         tunDescriptor = pfd
         Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
@@ -124,7 +140,7 @@ class SingBoxPlatform(
         return pfd.fd
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
-            throw IllegalStateException("Sing-box openTun failed: ${t.message}", t)
+            return -1
         }
     }
 
