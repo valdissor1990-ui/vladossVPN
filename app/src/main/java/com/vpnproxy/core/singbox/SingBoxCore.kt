@@ -47,9 +47,17 @@ class SingBoxCore(
                     put("model", android.os.Build.MODEL)
                 }.toString()
             }
-            Libbox.setLocale(Locale.getDefault().toLanguageTag())
-            Libbox.setup(options)
-            setupComplete = true
+            try {
+                Log.d(TAG, "Calling Libbox.setLocale()...")
+                Libbox.setLocale(Locale.getDefault().toLanguageTag())
+                Log.d(TAG, "Calling Libbox.setup()... basePath=${options.basePath}, workingPath=${options.workingPath}")
+                Libbox.setup(options)
+                setupComplete = true
+                Log.i(TAG, "Libbox.setup() completed")
+            } catch (t: Throwable) {
+                Log.e(TAG, "JNI failure during Libbox initialization", t)
+                throw t
+            }
         }
     }
 
@@ -93,11 +101,22 @@ class SingBoxCore(
         try {
             Log.i(TAG, "Initializing libbox 1.14.3")
             setup(context)
+            Log.d(TAG, "Creating libbox CommandServer...")
             val createdServer = CommandServer(handler, platform)
             server = createdServer
-            createdServer.start()
-            Log.i(TAG, "CommandServer started; applying VPN configuration")
-            createdServer.startOrReloadService(configJson, OverrideOptions())
+            try {
+                Log.d(TAG, "Calling CommandServer.start()...")
+                createdServer.start()
+                Log.i(TAG, "CommandServer started; applying VPN configuration")
+                // libbox 1.14.3's public Java API creates the native service internally
+                // in startOrReloadService; there is no direct Libbox.newService() call here.
+                Log.d(TAG, "Calling Libbox.newService()... (via CommandServer.startOrReloadService)")
+                createdServer.startOrReloadService(configJson, OverrideOptions())
+                Log.d(TAG, "startOrReloadService returned successfully")
+            } catch (t: Throwable) {
+                Log.e(TAG, "JNI/libbox failure while starting CommandServer or service", t)
+                throw t
+            }
             commandServer = createdServer
             activeConfig = configJson
             Log.i(TAG, "libbox 1.14.3 started in the app process")
