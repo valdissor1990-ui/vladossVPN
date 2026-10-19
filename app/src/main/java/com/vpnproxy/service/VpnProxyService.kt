@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.pm.ServiceInfo
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -76,8 +77,35 @@ class VpnProxyService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "VpnProxyService.onCreate entered")
+        Log.d("VpnService", "===== onCreate started =====")
+
+        // Preserve the existing crash handler (installed by Application) while adding
+        // an early service lifecycle trace. Java handlers cannot catch SIGSEGV/SIGABRT.
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Log.e("VpnService", "FATAL EXCEPTION IN THREAD: ${thread.name}", throwable)
+            previousHandler?.uncaughtException(thread, throwable)
+        }
+
         createNotificationChannel()
+        try {
+            // Promote immediately, before any libbox/JNI initialization.
+            val notification = buildNotification(getString(R.string.state_connecting))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d("VpnService", "startForeground successful")
+        } catch (t: Throwable) {
+            Log.e("VpnService", "startForeground FAILED", t)
+            throw t
+        }
+
         try {
             autoSwitcher.attachVpnService(this)
             singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
@@ -113,10 +141,15 @@ class VpnProxyService : VpnService() {
                 logCollector.debug(TAG, "Network reconnect state=$reconnecting")
             }
         ).also { it.start() }
+        Log.d("VpnService", "===== onCreate completed =====")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d("VpnService", "===== onStartCommand. Action: ${intent?.action} =====")
         Log.i(TAG, "onStartCommand: action=${intent?.action}, startId=$startId, flags=$flags")
+        if (intent?.action == null || intent.action == ACTION_STOP) {
+            Log.e("VpnService", "STOPPING SERVICE. Reason: ACTION_STOP or null intent", Exception("onStartCommand action trace"))
+        }
         when (intent?.action) {
             ACTION_STOP -> stopVpn()
             ACTION_RECONNECT -> scope.launch {
@@ -141,6 +174,7 @@ class VpnProxyService : VpnService() {
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onRevoke() {
+        Log.e("VpnService", "===== onRevoke called (Another VPN active or user revoked) =====", Exception("onRevoke trace"))
         logCollector.warn(TAG, "onRevoke — VPN revoked by system")
         scope.launch { stopVpnInternal("VPN permission revoked by system") }
         stopServiceWithReason("VPN permission revoked by system")
@@ -160,8 +194,8 @@ class VpnProxyService : VpnService() {
         vpnJob?.cancel()
         vpnJob = scope.launch {
             try {
+                Log.d("VpnService", "startVpn coroutine entered on ${Thread.currentThread().name}")
                 logCollector.info(TAG, "Starting VPN orchestrator…")
-                startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
 
                 watchdogJob?.cancel()
                 watchdogJob = scope.launch {
@@ -234,6 +268,7 @@ class VpnProxyService : VpnService() {
     }
 
     private fun stopVpn() {
+        Log.e("VpnService", "STOPPING SERVICE. Reason: stopVpn()", Exception("stopVpn() call stack"))
         scope.launch {
             stopVpnInternal("explicit ACTION_STOP")
             stopServiceWithReason("explicit ACTION_STOP")
@@ -241,8 +276,13 @@ class VpnProxyService : VpnService() {
     }
 
     private fun stopServiceWithReason(reason: String, throwable: Throwable? = null) {
-        Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
-        singBoxCore?.stop()
+        Log.e("VpnService", "STOPPING SERVICE. Reason: $reason", throwable ?: Exception("stopServiceWithReason($reason) call stack"))
+        try {
+            singBoxCore?.stop()
+        } catch (t: Throwable) {
+            Log.e("VpnService", "Sing-box stop failed while stopping service: $reason", t)
+        }
+        Log.e("VpnService", "Calling stopSelf(). Reason: $reason", Exception("stopSelf() call stack"))
         stopSelf()
     }
 
@@ -257,7 +297,7 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            logCollector.info(TAG, "VPN stopped")
+            logCollector.info(TAG, "VPN stopped. Reason: $reason")
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -266,7 +306,8 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onDestroy() {
-        Log.e(TAG, "Stopping VPN. Reason: onDestroy invoked")
+        Log.e("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
+        Log.e("VpnService", "STOPPING SERVICE. Reason: onDestroy", Exception("onDestroy call stack"))
         autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
