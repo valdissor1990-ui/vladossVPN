@@ -5,8 +5,10 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +51,8 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
+        /** Connecting/Reconnecting hard timeout — prevents zombie Connecting. */
+        private const val CONNECTING_TIMEOUT_MS = 18_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -65,6 +69,8 @@ class ConnectionCoordinator @Inject constructor(
     private var hasServerSelected: Boolean = false
 
     private var retryCount: Int = 0
+
+    private var connectingTimeoutJob: Job? = null
 
     init {
         scope.launch {
@@ -96,6 +102,57 @@ class ConnectionCoordinator @Inject constructor(
         _state.value = next
         Log.d(TAG, "Actor state changed to: $next (from $prev)")
         logCollector.info(TAG, "Actor state changed to: $next (from $prev)")
+        onStateChanged(next)
+    }
+
+    private fun onStateChanged(next: ConnectionState) {
+        when (next) {
+            is ConnectionState.Connecting,
+            is ConnectionState.Reconnecting -> scheduleConnectingTimeout()
+            else -> cancelConnectingTimeout()
+        }
+    }
+
+    private fun scheduleConnectingTimeout() {
+        connectingTimeoutJob?.cancel()
+        connectingTimeoutJob = scope.launch {
+            delay(CONNECTING_TIMEOUT_MS)
+            val s = _state.value
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+                Log.e(TAG, "Connecting timeout ${CONNECTING_TIMEOUT_MS}ms in $s")
+                logCollector.error(TAG, "Connecting timeout — forcing Error")
+                retryCount = 0
+                setState(ConnectionState.Error("Превышено время подключения"))
+            }
+        }
+    }
+
+    private fun cancelConnectingTimeout() {
+        connectingTimeoutJob?.cancel()
+        connectingTimeoutJob = null
+    }
+
+    /** Fatal errors that must not be retried (TUN conflict, permission). */
+    private fun isFatalNoRetry(reason: String): Boolean {
+        val r = reason.lowercase()
+        return r.contains("another vpn") ||
+            r.contains("establish failed") ||
+            r.contains("establish() returned null") ||
+            r.contains("permission denied") ||
+            r.contains("permission is missing") ||
+            r.contains("permission revoked")
+    }
+
+    private fun userFacingMessage(reason: String): String {
+        return when {
+            isFatalNoRetry(reason) &&
+                (reason.contains("Another VPN", ignoreCase = true) ||
+                    reason.contains("establish", ignoreCase = true)) ->
+                "Другое VPN уже активно. Отключите его."
+            reason.contains("permission", ignoreCase = true) ->
+                "Нет разрешения VPN. Выдайте доступ в настройках."
+            else -> reason
+        }
     }
 
     private fun handle(event: ConnectionEvent) {
@@ -179,7 +236,15 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.CoreError -> {
                 Log.e(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
                 logCollector.error(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
-                handleFailure(event.reason, current)
+                if (isFatalNoRetry(event.reason)) {
+                    retryCount = 0
+                    val msg = userFacingMessage(event.reason)
+                    if (current !is ConnectionState.Error) {
+                        setState(ConnectionState.Error(msg))
+                    }
+                } else {
+                    handleFailure(event.reason, current)
+                }
             }
 
             is ConnectionEvent.Timeout -> {
