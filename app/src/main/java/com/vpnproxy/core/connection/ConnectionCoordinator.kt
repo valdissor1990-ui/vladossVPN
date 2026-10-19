@@ -17,6 +17,7 @@ import javax.inject.Singleton
 /**
  * Single source of truth for VPN connection lifecycle.
  * Actor pattern: events are processed sequentially via a Channel.
+ * Does NOT depend on AutoSwitcher (Hilt-safe).
  */
 sealed class ConnectionState {
     data object Disconnected : ConnectionState()
@@ -24,6 +25,7 @@ sealed class ConnectionState {
     data class Connected(val serverName: String) : ConnectionState()
     data object Disconnecting : ConnectionState()
     data object Reconnecting : ConnectionState()
+    data class Error(val message: String) : ConnectionState()
 }
 
 sealed class ConnectionEvent {
@@ -33,10 +35,9 @@ sealed class ConnectionEvent {
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: String) : ConnectionEvent()
     data object Timeout : ConnectionEvent()
-    /** Service successfully established TUN + core. */
     data class ServiceReady(val serverName: String) : ConnectionEvent()
-    /** Service finished stopping core/TUN without killing the process. */
     data object ServiceStopped : ConnectionEvent()
+    data class ShowError(val message: String) : ConnectionEvent()
 }
 
 @Singleton
@@ -45,6 +46,7 @@ class ConnectionCoordinator @Inject constructor(
 ) {
     companion object {
         private const val TAG = "ConnectionCoordinator"
+        private const val MAX_RETRIES = 3
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -56,6 +58,11 @@ class ConnectionCoordinator @Inject constructor(
 
     @Volatile
     private var pendingServerName: String? = null
+
+    @Volatile
+    private var hasServerSelected: Boolean = false
+
+    private var retryCount: Int = 0
 
     init {
         scope.launch {
@@ -79,6 +86,8 @@ class ConnectionCoordinator @Inject constructor(
 
     fun currentServerName(): String? = pendingServerName
 
+    fun hasSelectedServer(): Boolean = hasServerSelected
+
     private fun setState(next: ConnectionState) {
         val prev = _state.value
         if (prev == next) return
@@ -91,11 +100,16 @@ class ConnectionCoordinator @Inject constructor(
         val current = _state.value
         when (event) {
             is ConnectionEvent.UserConnect -> {
+                retryCount = 0
+                if (!hasServerSelected || pendingServerName == null) {
+                    Log.d(TAG, "UserConnect deferred — no server selected yet")
+                    logCollector.info(TAG, "UserConnect deferred — waiting for ServerSelected")
+                    return
+                }
                 when (current) {
                     is ConnectionState.Disconnected,
-                    is ConnectionState.Disconnecting -> {
-                        setState(ConnectionState.Connecting)
-                    }
+                    is ConnectionState.Disconnecting,
+                    is ConnectionState.Error -> setState(ConnectionState.Connecting)
                     is ConnectionState.Connected,
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
@@ -108,7 +122,8 @@ class ConnectionCoordinator @Inject constructor(
                 when (current) {
                     is ConnectionState.Disconnected -> { /* already down */ }
                     else -> {
-                        pendingServerName = null
+                        // Keep last selected server name for next connect, but clear retry.
+                        retryCount = 0
                         setState(ConnectionState.Disconnecting)
                     }
                 }
@@ -116,16 +131,19 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServerSelected -> {
                 pendingServerName = event.server.config.name
+                hasServerSelected = true
                 when (current) {
-                    is ConnectionState.Disconnected -> {
-                        setState(ConnectionState.Connecting)
+                    is ConnectionState.Disconnected,
+                    is ConnectionState.Error -> {
+                        // Server chosen first; wait for UserConnect to start.
+                        Log.d(TAG, "ServerSelected while idle: ${event.server.config.name}")
                     }
                     is ConnectionState.Connecting -> {
-                        // Keep Connecting; service will pick up new current server.
                         Log.d(TAG, "ServerSelected while Connecting: ${event.server.config.name}")
                     }
                     is ConnectionState.Connected,
                     is ConnectionState.Reconnecting -> {
+                        retryCount = 0
                         setState(ConnectionState.Reconnecting)
                     }
                     is ConnectionState.Disconnecting -> {
@@ -136,7 +154,9 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.NetworkChanged -> {
                 when (current) {
-                    is ConnectionState.Connected -> setState(ConnectionState.Reconnecting)
+                    is ConnectionState.Connected -> {
+                        if (hasServerSelected) setState(ConnectionState.Reconnecting)
+                    }
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         Log.d(TAG, "NetworkChanged while $current — stay in state")
@@ -146,50 +166,67 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.CoreError -> {
-                Log.e(TAG, "CoreError: ${event.reason}")
-                logCollector.error(TAG, "CoreError: ${event.reason}")
-                when (current) {
-                    is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting,
-                    is ConnectionState.Connected -> {
-                        // Soft path: ask service to retry via Reconnecting.
-                        setState(ConnectionState.Reconnecting)
-                    }
-                    else -> { /* ignore */ }
-                }
+                Log.e(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
+                logCollector.error(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
+                handleFailure(event.reason, current)
             }
 
             is ConnectionEvent.Timeout -> {
-                Log.e(TAG, "Timeout in state $current")
-                logCollector.warn(TAG, "Timeout in state $current")
-                when (current) {
-                    is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting,
-                    is ConnectionState.Connected -> setState(ConnectionState.Reconnecting)
-                    else -> { }
-                }
+                Log.e(TAG, "Timeout in state $current (retry=$retryCount)")
+                logCollector.warn(TAG, "Timeout in state $current (retry=$retryCount)")
+                handleFailure("Timeout", current)
+            }
+
+            is ConnectionEvent.ShowError -> {
+                retryCount = 0
+                setState(ConnectionState.Error(event.message))
             }
 
             is ConnectionEvent.ServiceReady -> {
+                retryCount = 0
                 pendingServerName = event.serverName
+                hasServerSelected = true
                 setState(ConnectionState.Connected(event.serverName))
             }
 
             is ConnectionEvent.ServiceStopped -> {
                 when (current) {
                     is ConnectionState.Disconnecting,
-                    is ConnectionState.Disconnected -> setState(ConnectionState.Disconnected)
+                    is ConnectionState.Disconnected,
+                    is ConnectionState.Error -> setState(ConnectionState.Disconnected)
                     is ConnectionState.Reconnecting,
                     is ConnectionState.Connecting -> {
-                        // Expected intermediate stop before restart — keep desired state.
                         Log.d(TAG, "ServiceStopped during $current — awaiting restart")
                     }
                     is ConnectionState.Connected -> {
-                        // Unexpected stop while connected — soft reconnect.
-                        setState(ConnectionState.Reconnecting)
+                        handleFailure("Unexpected service stop", current)
                     }
                 }
             }
+        }
+    }
+
+    private fun handleFailure(reason: String, current: ConnectionState) {
+        when (current) {
+            is ConnectionState.Connecting,
+            is ConnectionState.Reconnecting,
+            is ConnectionState.Connected -> {
+                retryCount++
+                if (retryCount < MAX_RETRIES && hasServerSelected) {
+                    Log.w(TAG, "Retry $retryCount/$MAX_RETRIES after: $reason")
+                    logCollector.warn(TAG, "Retry $retryCount/$MAX_RETRIES after: $reason")
+                    setState(ConnectionState.Reconnecting)
+                } else {
+                    val msg = "Connection failed after $MAX_RETRIES attempts: $reason"
+                    Log.e(TAG, msg)
+                    logCollector.error(TAG, msg)
+                    retryCount = 0
+                    setState(ConnectionState.Error(msg))
+                    // Also enqueue ShowError for explicit UI consumers.
+                    events.trySend(ConnectionEvent.ShowError(msg))
+                }
+            }
+            else -> { /* ignore failures while already down */ }
         }
     }
 }
