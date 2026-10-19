@@ -56,6 +56,8 @@ class VpnProxyService : VpnService() {
         fun clearError() {
             _lastError.value = null
         }
+
+        private val uncaughtHandlerInstalled = AtomicBoolean(false)
     }
 
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
@@ -81,10 +83,12 @@ class VpnProxyService : VpnService() {
 
         // Preserve the existing crash handler (installed by Application) while adding
         // an early service lifecycle trace. Java handlers cannot catch SIGSEGV/SIGABRT.
-        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e("VpnService", "FATAL EXCEPTION IN THREAD: ${thread.name}", throwable)
-            previousHandler?.uncaughtException(thread, throwable)
+        if (uncaughtHandlerInstalled.compareAndSet(false, true)) {
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                Log.e("VpnService", "FATAL EXCEPTION IN THREAD: ${thread.name}", throwable)
+                previousHandler?.uncaughtException(thread, throwable)
+            }
         }
 
         createNotificationChannel()
