@@ -40,9 +40,8 @@ import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Reactive VPN service: lifecycle is driven by [ConnectionCoordinator] StateFlow.
- * Does not process ACTION_START / ACTION_STOP. Service stays alive as a subscriber
- * and only tears down TUN + Sing-box when state becomes Disconnected/Disconnecting.
+ * Reactive VPN service driven by [ConnectionCoordinator].
+ * No ACTION_START / ACTION_STOP. Soft-stops TUN without stopSelf until idle timeout.
  */
 @AndroidEntryPoint
 class VpnProxyService : VpnService() {
@@ -51,19 +50,14 @@ class VpnProxyService : VpnService() {
         private const val TAG = "VpnProxyService"
         private const val CHANNEL_ID = "vpnproxy_channel"
         private const val NOTIFICATION_ID = 1001
+        private const val IDLE_STOP_MS = 5 * 60_000L
 
         /** Bring the process up so it can subscribe to the coordinator. */
         const val ACTION_ENSURE_RUNNING = "com.vpnproxy.ENSURE_RUNNING"
-        /** Notification / external: map to UserDisconnect event (no stopSelf). */
+        /** Notification: map to UserDisconnect (no immediate stopSelf). */
         const val ACTION_REQUEST_DISCONNECT = "com.vpnproxy.REQUEST_DISCONNECT"
-
-        // Legacy aliases kept so older call sites compile during migration; no-ops in onStartCommand.
-        @Deprecated("Use ConnectionCoordinator.send(UserConnect) + ACTION_ENSURE_RUNNING")
-        const val ACTION_START = "com.vpnproxy.START"
-        @Deprecated("Use ConnectionCoordinator.send(UserDisconnect)")
-        const val ACTION_STOP = "com.vpnproxy.STOP"
-        @Deprecated("Use ConnectionCoordinator.send(NetworkChanged / ServerSelected)")
-        const val ACTION_RECONNECT = "com.vpnproxy.RECONNECT"
+        /** Notification: map to NetworkChanged. */
+        const val ACTION_REQUEST_RECONNECT = "com.vpnproxy.REQUEST_RECONNECT"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
@@ -90,6 +84,7 @@ class VpnProxyService : VpnService() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
     private var stateCollectorJob: Job? = null
+    private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
@@ -110,22 +105,7 @@ class VpnProxyService : VpnService() {
         }
 
         createNotificationChannel()
-        try {
-            val notification = buildNotification(getString(R.string.state_connecting))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-            Log.d("VpnService", "startForeground successful")
-        } catch (t: Throwable) {
-            Log.e("VpnService", "startForeground FAILED", t)
-            throw t
-        }
+        promoteToForeground(getString(R.string.state_connecting))
 
         try {
             autoSwitcher.attachVpnService(this)
@@ -151,7 +131,6 @@ class VpnProxyService : VpnService() {
             }
         ).also { it.start() }
 
-        // Reactive core: subscribe to coordinator state.
         stateCollectorJob = scope.launch {
             connectionCoordinator.state
                 .distinctUntilChanged()
@@ -161,9 +140,12 @@ class VpnProxyService : VpnService() {
                     when (state) {
                         is ConnectionState.Connecting,
                         is ConnectionState.Reconnecting -> {
+                            cancelIdleStop()
+                            promoteToForeground(getString(R.string.state_connecting))
                             restartVpnForDesiredState(state)
                         }
                         is ConnectionState.Connected -> {
+                            cancelIdleStop()
                             if (!_isRunning.value && !startInProgress) {
                                 restartVpnForDesiredState(state)
                             } else {
@@ -173,6 +155,13 @@ class VpnProxyService : VpnService() {
                         is ConnectionState.Disconnecting,
                         is ConnectionState.Disconnected -> {
                             stopVpnKeepAlive(state.toString())
+                            scheduleIdleStop()
+                        }
+                        is ConnectionState.Error -> {
+                            stopVpnKeepAlive("Error: ${state.message}")
+                            _lastError.value = state.message
+                            updateNotification(state.message)
+                            scheduleIdleStop()
                         }
                     }
                 }
@@ -186,20 +175,15 @@ class VpnProxyService : VpnService() {
         Log.i(TAG, "onStartCommand: action=${intent?.action}, startId=$startId (reactive mode)")
 
         when (intent?.action) {
-            ACTION_REQUEST_DISCONNECT,
-            ACTION_STOP -> {
-                // Map legacy stop intents to actor event; do NOT stopSelf.
-                Log.e("VpnService", "REQUEST_DISCONNECT mapped to UserDisconnect (no stopSelf)")
+            ACTION_REQUEST_DISCONNECT -> {
+                Log.e("VpnService", "REQUEST_DISCONNECT → UserDisconnect (no stopSelf)")
                 connectionCoordinator.send(ConnectionEvent.UserDisconnect)
             }
-            ACTION_RECONNECT -> {
-                Log.d(TAG, "Legacy ACTION_RECONNECT → NetworkChanged")
+            ACTION_REQUEST_RECONNECT -> {
+                Log.d(TAG, "REQUEST_RECONNECT → NetworkChanged")
                 connectionCoordinator.send(ConnectionEvent.NetworkChanged)
             }
-            ACTION_START,
-            ACTION_ENSURE_RUNNING,
-            null -> {
-                // Ensure process is alive; actor drives actual start.
+            ACTION_ENSURE_RUNNING, null -> {
                 Log.d(TAG, "ENSURE_RUNNING — actor state=${connectionCoordinator.state.value}")
             }
             else -> Log.d(TAG, "Unhandled action ${intent.action}")
@@ -217,15 +201,68 @@ class VpnProxyService : VpnService() {
         super.onRevoke()
     }
 
+    private fun promoteToForeground(text: String) {
+        try {
+            val notification = buildNotification(text)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d("VpnService", "startForeground successful")
+        } catch (t: Throwable) {
+            Log.e("VpnService", "startForeground FAILED", t)
+            throw t
+        }
+    }
+
+    private fun scheduleIdleStop() {
+        idleStopJob?.cancel()
+        idleStopJob = scope.launch {
+            Log.d(TAG, "Idle stop timer started (${IDLE_STOP_MS}ms)")
+            delay(IDLE_STOP_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Disconnected || s is ConnectionState.Error || s is ConnectionState.Disconnecting) {
+                Log.e(TAG, "Idle ${IDLE_STOP_MS}ms in $s — stopForeground + stopSelf")
+                logCollector.info(TAG, "Idle timeout — stopping service process")
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "stopForeground failed", t)
+                }
+                stopSelf()
+            } else {
+                Log.d(TAG, "Idle timer fired but state=$s — keep alive")
+            }
+        }
+    }
+
+    private fun cancelIdleStop() {
+        idleStopJob?.cancel()
+        idleStopJob = null
+    }
+
     private fun restartVpnForDesiredState(state: ConnectionState) {
         if (startInProgress) {
             logCollector.debug(TAG, "restartVpn skipped: startInProgress for $state")
             return
         }
+        if (!connectionCoordinator.hasSelectedServer()) {
+            logCollector.warn(TAG, "restartVpn deferred — coordinator has no selected server")
+            return
+        }
         vpnJob?.cancel()
         vpnJob = scope.launch {
             try {
-                // Soft stop previous session without killing the service.
                 if (_isRunning.value) {
                     stopVpnInternal("soft restart for $state")
                     delay(300)
@@ -273,8 +310,8 @@ class VpnProxyService : VpnService() {
                 }
             }
 
+            // Strict: only AutoSwitcher.currentServer — no firstOrNull() fallback.
             val parsed = autoSwitcher.currentServer.value?.config
-                ?: subscriptionRepository.getAllConfigs().firstOrNull()
             if (parsed == null) {
                 val reason = "No server selected — open Subscriptions first"
                 logCollector.warn(TAG, reason)
@@ -317,7 +354,6 @@ class VpnProxyService : VpnService() {
         }
     }
 
-    /** Stop TUN/core but keep the service process alive as a StateFlow subscriber. */
     private fun stopVpnKeepAlive(reason: String) {
         Log.e("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
         vpnJob?.cancel()
@@ -352,6 +388,7 @@ class VpnProxyService : VpnService() {
         autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
+        cancelIdleStop()
         stateCollectorJob?.cancel()
         stateCollectorJob = null
         watchdogJob?.cancel()
@@ -383,6 +420,11 @@ class VpnProxyService : VpnService() {
             Intent(this, VpnProxyService::class.java).setAction(ACTION_REQUEST_DISCONNECT),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val reconnectPi = PendingIntent.getService(
+            this, 1,
+            Intent(this, VpnProxyService::class.java).setAction(ACTION_REQUEST_RECONNECT),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val contentPi = PendingIntent.getActivity(
             this, 2,
             Intent(this, MainActivity::class.java),
@@ -396,6 +438,7 @@ class VpnProxyService : VpnService() {
             .setContentIntent(contentPi)
             .setOngoing(true)
             .addAction(0, getString(R.string.notification_stop), stopPi)
+            .addAction(0, getString(R.string.notification_reconnect), reconnectPi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -405,7 +448,6 @@ class VpnProxyService : VpnService() {
             .notify(NOTIFICATION_ID, buildNotification(state))
     }
 
-    /** Called by AutoSwitcher after slow-server switch — posts ServerSelected-style reconnect. */
     fun reconnectAfterSlowServerSwitch() {
         val server = autoSwitcher.currentServer.value
         if (server != null) {
