@@ -1,12 +1,15 @@
 package com.vpnproxy.core.singbox
 
 import android.content.Context
-import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.net.IpPrefix
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.vpnproxy.core.connection.VpnFailureReason
+import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
@@ -41,100 +44,130 @@ class SingBoxPlatform(
         try {
             Log.i(TAG, "openTun requested by libbox")
             val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
-        check(VpnService.prepare(context) == null) { "VPN permission is missing" }
-        tunDescriptor?.close()
-        val builder = service.Builder()
-            .setSession("VPNProxy · Sing-box")
-            .setMtu(1400)
 
-        val v4 = options.inet4Address
-        while (v4.hasNext()) {
-            val address = v4.next()
-            builder.addAddress(address.address(), address.prefix())
-        }
-        val v6 = options.inet6Address
-        while (v6.hasNext()) {
-            val address = v6.next()
-            builder.addAddress(address.address(), address.prefix())
-        }
-
-        if (options.autoRoute) {
-            if (options.dnsMode.value != Libbox.DNSModeDisabled) {
-                val dns = options.dnsServerAddress
-                while (dns.hasNext()) builder.addDnsServer(dns.next())
+            val prepareIntent = VpnService.prepare(context)
+            if (prepareIntent != null) {
+                throw VpnStartException(VpnFailureReason.PermissionDenied)
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val routes4 = options.inet4RouteAddress
-                if (routes4.hasNext()) while (routes4.hasNext()) builder.addRoute(routes4.next().toIpPrefix())
-                else if (options.inet4Address.hasNext()) builder.addRoute("0.0.0.0", 0)
+            tunDescriptor?.close()
+            val builder = service.Builder()
+                .setSession("VPNProxy · Sing-box")
+                .setMtu(1400)
 
-                val routes6 = options.inet6RouteAddress
-                if (routes6.hasNext()) while (routes6.hasNext()) builder.addRoute(routes6.next().toIpPrefix())
-                else if (options.inet6Address.hasNext()) builder.addRoute("::", 0)
+            val v4 = options.inet4Address
+            while (v4.hasNext()) {
+                val address = v4.next()
+                builder.addAddress(address.address(), address.prefix())
+            }
+            val v6 = options.inet6Address
+            while (v6.hasNext()) {
+                val address = v6.next()
+                builder.addAddress(address.address(), address.prefix())
+            }
 
-                val excludes4 = options.inet4RouteExcludeAddress
-                while (excludes4.hasNext()) builder.excludeRoute(excludes4.next().toIpPrefix())
-                val excludes6 = options.inet6RouteExcludeAddress
-                while (excludes6.hasNext()) builder.excludeRoute(excludes6.next().toIpPrefix())
+            if (options.autoRoute) {
+                if (options.dnsMode.value != Libbox.DNSModeDisabled) {
+                    val dns = options.dnsServerAddress
+                    while (dns.hasNext()) builder.addDnsServer(dns.next())
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    val routes4 = options.inet4RouteAddress
+                    if (routes4.hasNext()) while (routes4.hasNext()) builder.addRoute(routes4.next().toIpPrefix())
+                    else if (options.inet4Address.hasNext()) builder.addRoute("0.0.0.0", 0)
+
+                    val routes6 = options.inet6RouteAddress
+                    if (routes6.hasNext()) while (routes6.hasNext()) builder.addRoute(routes6.next().toIpPrefix())
+                    else if (options.inet6Address.hasNext()) builder.addRoute("::", 0)
+
+                    val excludes4 = options.inet4RouteExcludeAddress
+                    while (excludes4.hasNext()) builder.excludeRoute(excludes4.next().toIpPrefix())
+                    val excludes6 = options.inet6RouteExcludeAddress
+                    while (excludes6.hasNext()) builder.excludeRoute(excludes6.next().toIpPrefix())
+                } else {
+                    val routes4 = options.inet4RouteRange
+                    while (routes4.hasNext()) {
+                        val address = routes4.next()
+                        builder.addRoute(address.address(), address.prefix())
+                    }
+                    val routes6 = options.inet6RouteRange
+                    while (routes6.hasNext()) {
+                        val address = routes6.next()
+                        builder.addRoute(address.address(), address.prefix())
+                    }
+                }
+            }
+
+            val includes = mutableSetOf<String>()
+            val excludes = mutableSetOf<String>()
+            val includeIterator = options.includePackage
+            while (includeIterator.hasNext()) includes += includeIterator.next()
+            val excludeIterator = options.excludePackage
+            while (excludeIterator.hasNext()) excludes += excludeIterator.next()
+            if (splitTunnelManager != null) {
+                runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes) }
+            } else if (includes.isNotEmpty()) {
+                includes.filterNot { it in excludes || it == context.packageName }.forEach { builder.addAllowedApplication(it) }
             } else {
-                val routes4 = options.inet4RouteRange
-                while (routes4.hasNext()) {
-                    val address = routes4.next()
-                    builder.addRoute(address.address(), address.prefix())
-                }
-                val routes6 = options.inet6RouteRange
-                while (routes6.hasNext()) {
-                    val address = routes6.next()
-                    builder.addRoute(address.address(), address.prefix())
-                }
+                (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
             }
-        }
 
-        // Apply saved INCLUDE_SELECTED / EXCLUDE_SELECTED policy in the same builder
-        // that establishes the TUN. The VPN app is always excluded from per-app routing.
-        val includes = mutableSetOf<String>()
-        val excludes = mutableSetOf<String>()
-        val includeIterator = options.includePackage
-        while (includeIterator.hasNext()) includes += includeIterator.next()
-        val excludeIterator = options.excludePackage
-        while (excludeIterator.hasNext()) excludes += excludeIterator.next()
-        if (splitTunnelManager != null) {
-            runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes) }
-        } else if (includes.isNotEmpty()) {
-            includes.filterNot { it in excludes || it == context.packageName }.forEach { builder.addAllowedApplication(it) }
-        } else {
-            (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
-        }
-
-        Log.d(TAG, "Attempting to create TUN interface...")
-        val pfd = try {
-            builder.establish()
-        } catch (t: Throwable) {
-            Log.e(TAG, "VpnService.Builder.establish() threw an exception", t)
-            throw t
-        }
-        if (pfd == null) {
-            // Another VPN is holding the TUN, or system denied the interface.
-            Log.e(TAG, "establish() returned null — another VPN active or permission denied")
-            throw IllegalStateException(
-                "VPN establish failed: Another VPN is active or permission denied"
-            )
-        }
-        tunDescriptor = pfd
-        Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
-        Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
-        return pfd.fd
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
-            // Preserve the specific "another VPN" message for upstream UX mapping.
-            if (t is IllegalStateException &&
-                (t.message?.contains("Another VPN", ignoreCase = true) == true ||
-                    t.message?.contains("establish failed", ignoreCase = true) == true)
-            ) {
+            Log.d(TAG, "Attempting to create TUN interface...")
+            val pfd = try {
+                builder.establish()
+            } catch (t: Throwable) {
+                Log.e(TAG, "VpnService.Builder.establish() threw an exception", t)
                 throw t
             }
-            throw IllegalStateException("Sing-box openTun failed: ${t.message}", t)
+            if (pfd == null) {
+                val reason = classifyEstablishNull()
+                Log.e(TAG, "establish() returned null → $reason")
+                throw VpnStartException(reason)
+            }
+            tunDescriptor = pfd
+            Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
+            Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
+            return pfd.fd
+        } catch (e: VpnStartException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
+            throw VpnStartException(
+                VpnFailureReason.CoreError("Sing-box openTun failed: ${t.message}"),
+                t
+            )
+        }
+    }
+
+    /**
+     * Best-effort classification when establish() returns null.
+     * prepare()!=null → permission; active VPN transport → another VPN; else TunConflict.
+     */
+    private fun classifyEstablishNull(): VpnFailureReason {
+        val prepare = VpnService.prepare(context)
+        if (prepare != null) return VpnFailureReason.PermissionDenied
+        if (isAnotherVpnActive()) return VpnFailureReason.AnotherVpnActive
+        return VpnFailureReason.TunConflict
+    }
+
+    private fun isAnotherVpnActive(): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val active = cm.activeNetwork ?: return false
+                val caps = cm.getNetworkCapabilities(active) ?: return false
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            } else {
+                @Suppress("DEPRECATION")
+                cm.allNetworks.any { net ->
+                    val caps = cm.getNetworkCapabilities(net) ?: return@any false
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                }
+            }
+        } catch (_: Throwable) {
+            false
         }
     }
 
