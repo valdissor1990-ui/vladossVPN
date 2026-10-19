@@ -10,6 +10,8 @@ import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
 
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
@@ -32,6 +34,7 @@ import javax.inject.Singleton
 
 /**
  * Автосвитчер: следит за здоровьем текущего сервера и переключается при деградации.
+ * Не дёргает сервис императивно — шлёт ConnectionEvent.ServerSelected в Coordinator.
  */
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
 
@@ -39,7 +42,8 @@ enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITC
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val connectionCoordinator: ConnectionCoordinator
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
@@ -289,8 +293,13 @@ class AutoSwitcher @Inject constructor(
                     logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
                 }
             }
-            Log.d(TAG, "Requesting ACTION_RECONNECT from VpnProxyService after slow-server switch")
-            vpnService?.reconnectAfterSlowServerSwitch()
+            val server = _currentServer.value
+            if (server != null) {
+                Log.d(TAG, "ServerSelected event after slow-server switch: ${server.config.name}")
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+            } else {
+                vpnService?.reconnectAfterSlowServerSwitch()
+            }
             logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
         } else {
             logCollector.warn(TAG, "Slow-server switch could not select a different server")
@@ -413,6 +422,7 @@ class AutoSwitcher @Inject constructor(
         consecutiveErrors = 0
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
+        connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
     }
 
     private fun sameServer(
