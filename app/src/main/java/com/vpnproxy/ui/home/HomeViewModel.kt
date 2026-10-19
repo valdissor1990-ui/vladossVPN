@@ -26,8 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
@@ -221,87 +221,79 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionGranted() {
-        Log.i(TAG, "VPN permission granted; entering connection startup")
+        val permissionGrantedAt = android.os.SystemClock.elapsedRealtime()
+        Log.i(TAG, "VPN permission granted")
+        Log.i(TAG, "HomeVM: Starting connection flow...")
+
+        // Dispatch ACTION_START immediately. VpnProxyService has its own IO scope and
+        // can bootstrap from the first configured server while ranking runs in parallel.
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
+        Log.i(TAG, "HomeVM: Sending ACTION_START to VpnProxyService NOW")
+        startVpnService()
+        Log.i(TAG, "HomeVM: ACTION_START dispatch returned after ${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt} ms")
+
         viewModelScope.launch {
             try {
-                _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING)
-                Log.i(TAG, "Starting server selection...")
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val hasNetwork = cm.activeNetwork != null
-                Log.d(TAG, "Network available=$hasNetwork")
-
-                Log.d(TAG, "Loading configured servers (timeout=5000ms)")
-                var configs = withTimeout(5_000L) { subscriptionRepository.getAllConfigs() }
-                if (configs.isEmpty() && hasNetwork) {
-                    Log.d(TAG, "No configured servers; refreshing subscription (timeout=5000ms)")
-                    configs = try {
-                        withTimeout(5_000L) {
+                Log.i(TAG, "HomeVM: Selecting best server...")
+                val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
+                val selection = withContext(Dispatchers.IO) {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    val hasNetwork = cm.activeNetwork != null
+                    Log.d(TAG, "Network available=$hasNetwork")
+                    var configs = subscriptionRepository.getAllConfigs()
+                    if (configs.isEmpty() && hasNetwork) {
+                        Log.d(TAG, "No configured servers; refreshing subscription in background")
+                        configs = try {
                             subscriptionRepository.refreshAll()
                             subscriptionRepository.getAllConfigs()
+                        } catch (c: CancellationException) {
+                            throw c
+                        } catch (e: Exception) {
+                            logCollector.warn(TAG, "Subscription refresh failed: ${e.message}")
+                            emptyList()
                         }
-                    } catch (c: CancellationException) {
-                        throw c
-                    } catch (e: Exception) {
-                        logCollector.warn(TAG, "Subscription refresh failed before ACTION_START: ${e.message}")
-                        emptyList()
                     }
+                    if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
+                    val best = if (configs.isNotEmpty()) autoSwitcher.selectBest(configs) else null
+                    configs to best
                 }
-                if (configs.isEmpty()) {
-                    Log.d(TAG, "No online configs; loading cached/bootstrap configs")
-                    configs = subscriptionRepository.getCachedConfigs()
-                    _uiState.value = _uiState.value.copy(
-                        usingBootstrap = subscriptionRepository.usingBootstrap.value
-                    )
-                }
+                val configs = selection.first
+                val best = selection.second
+                Log.i(TAG, "HomeVM: Server selection finished in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt} ms; configs=${configs.size}")
+                if (configs.isNotEmpty()) _uiState.value = _uiState.value.copy(serverCount = configs.size)
+                _uiState.value = _uiState.value.copy(usingBootstrap = subscriptionRepository.usingBootstrap.value)
 
-                if (configs.isEmpty()) {
-                    logCollector.warn(TAG, "Connection aborted: no server configs available")
-                    connectTimeoutJob?.cancel()
-                    connectTimeoutJob = null
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
-                    return@launch
-                }
-
-                _uiState.value = _uiState.value.copy(serverCount = configs.size)
-                Log.i(TAG, "Server configs loaded: ${configs.size}; ranking with 5000ms timeout")
-                val best = withTimeout(5_000L) { autoSwitcher.selectBest(configs) }
                 if (best == null) {
-                    logCollector.warn(TAG, "Connection aborted: server selection returned no candidate")
-                    connectTimeoutJob?.cancel()
-                    connectTimeoutJob = null
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
+                    logCollector.warn(TAG, "No server candidate found after ACTION_START")
+                    if (!VpnProxyService.isRunning.value) {
+                        connectTimeoutJob?.cancel()
+                        connectTimeoutJob = null
+                        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+                    }
                     return@launch
                 }
 
                 Log.i(TAG, "Selected server: ${best.config.name} (${best.config.address}:${best.config.port}, ${best.latencyMs}ms)")
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
-                Log.i(TAG, "Server selection complete; dispatching ACTION_START")
-                startVpnService()
-            } catch (e: TimeoutCancellationException) {
-                logCollector.warn(TAG, "Connection startup timed out before ACTION_START: ${e.message ?: "operation exceeded 5000ms"}")
-                connectTimeoutJob?.cancel()
-                connectTimeoutJob = null
-                isFallingBack.set(false)
-                _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.ERROR,
-                    isBusy = false
-                )
+                // ACTION_START has already been dispatched. If service bootstrapped with
+                // another config, request reconnect so it consumes the selected server.
+                if (!VpnProxyService.isRunning.value) {
+                    Log.i(TAG, "HomeVM: Server ranking completed while service is starting; service will observe selected server if startup has not read config yet")
+                } else {
+                    Log.i(TAG, "HomeVM: Requesting reconnect to the selected best server")
+                    safeStartService(Intent(context, VpnProxyService::class.java).apply {
+                        action = VpnProxyService.ACTION_RECONNECT
+                    }, reason = "best server selected after immediate ACTION_START")
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                logCollector.error(TAG, "Connect failed before/during ACTION_START", e)
-                connectTimeoutJob?.cancel()
-                connectTimeoutJob = null
-                _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.ERROR,
-                    isBusy = false
-                )
+                logCollector.error(TAG, "Server selection failed after ACTION_START", e)
+                if (!VpnProxyService.isRunning.value) {
+                    connectTimeoutJob?.cancel()
+                    connectTimeoutJob = null
+                    _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+                }
             }
         }
     }
