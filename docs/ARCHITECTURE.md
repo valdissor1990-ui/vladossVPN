@@ -1,46 +1,36 @@
 # Архитектура VPNProxy
 
-## Слои
-
-```
-┌─────────────────────────────────────────┐
-│  Presentation (Compose + ViewModel)     │
-├─────────────────────────────────────────┤
-│  Domain (UseCases, Models)              │
-├─────────────────────────────────────────┤
-│  Data (Repositories, Parsers, Network)  │
-├─────────────────────────────────────────┤
-│  Core (Xray, Tunnel, TrafficStats)      │
-└─────────────────────────────────────────┘
-```
-
-## Ключевые компоненты
+## Основные компоненты
 
 | Компонент | Ответственность |
-|-----------|----------------|
-| `XrayCore` | JNI-обёртка над libxray.so, старт/стоп/статистика |
-| `TunnelManager` | Создание TUN, запуск tun2socks, связка с VpnService |
-| `TrafficStatsCollector` | Сбор Rx/Tx из TrafficStats + Xray Stats API, Flow 1Hz |
-| `SubscriptionParser` | Парсинг vless://, base64, JSON, Clash YAML |
-| `HealthChecker` | Параллельный latency-тест (Semaphore 10), speed-тест |
-| `ScoringEngine` | Скоринг: 0.6·latency + 0.3·speed + 0.1·success |
-| `AutoSwitcher` | Фоновый health-check 60с, автосвитч при 3 ошибках |
-| `LogCollector` | Ring buffer 5000, Flow<List<LogEntry>>, Timber Tree |
-| `VpnProxyService` | Foreground Service, persistent notification |
+|---|---|
+| `VpnProxyService` | Android `VpnService`, foreground notification, reconnect/watchdog |
+| `SingBoxCore` | Запуск и остановка libbox 1.14.3 через `CommandServer` / `CommandServerHandler` |
+| `SingBoxPlatform` | Реализация `PlatformInterface`; `openTun()`, маршруты, DNS, split tunneling и `protect(fd)` |
+| `SingboxConfigBuilder` | JSON-конфигурации VPN и временных proxy-only проверок |
+| `SplitTunnelManager` | Применение INCLUDE_SELECTED / EXCLUDE_SELECTED через Android per-app VPN API |
+| `HealthChecker` | Проверка доступности и скорости через Sing-box proxy |
+| `DeepProbeEngine` | Loopback inbound на каждый сервер и измерение latency, jitter, loss и speed |
 
-## Поток данных туннеля
+## Поток запуска VPN
 
+```text
+VpnProxyService
+  -> SingboxConfigBuilder.buildVpn()
+  -> SingBoxCore.start(configJson)
+  -> CommandServer.startOrReloadService()
+  -> libbox вызывает SingBoxPlatform.openTun(TunOptions)
+  -> VpnService.Builder: addresses, DNS, routes, split tunneling
+  -> establish() -> fd возвращается libbox
+  -> Sing-box обрабатывает TCP и UDP через выбранный outbound
 ```
-Приложение → kernel → TUN (VpnService) → hev-socks5-tunnel → 127.0.0.1:2081 (Xray SOCKS-in) → VLESS/XHTTP/Reality → VPS → Internet
-```
 
-## DI (Hilt)
+## Ограничения и гарантии
 
-Все компоненты — `@Singleton`, инжектятся через `@Inject constructor`. ViewModel — `@HiltViewModel`.
-
-## Рекомендации по безопасности
-
-- Kill Switch: `setUnderlyingNetworks(null)` + `addDisallowedApplication` для системных
-- IPv6 блокировка: `addRoute("::", 0)` + DNS только через туннель
-- EncryptedSharedPreferences для URL подписок и токенов
-- Маскировка UUID/ключей в логах через `SensitiveMasker`
+- Ядро запускается в основном процессе приложения; отдельного Android-сервиса и процесса `:singbox` нет.
+- Используется полный `libbox.aar` версии 1.14.3, включая Go bridge-классы.
+- TUN и его `ParcelFileDescriptor` принадлежат `SingBoxPlatform` и закрываются при остановке ядра.
+- `autoDetectInterfaceControl(fd)` вызывает `VpnService.protect(fd)`, чтобы прямые соединения ядра не попадали обратно в TUN.
+- Android per-app VPN API допускает allow-list или deny-list, но не обе одновременно. При конфликтующих правилах приложение должно сообщить об ошибке, а не молча менять политику.
+- Deep Probe использует временный proxy-only `CommandServer` и не заменяет активную VPN-конфигурацию.
+- Успешная сборка не заменяет проверку реального трафика на Android-устройстве, включая UDP и оба режима split tunneling.

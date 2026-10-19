@@ -10,6 +10,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -96,6 +100,18 @@ class UpdateChecker @Inject constructor(
                 )
                 Result(hasUpdate = hasUpdate, release = release)
             }
+        } catch (e: ConnectException) {
+            logCollector.warn(TAG, "Update check unavailable: connection refused/unreachable (${e.message})")
+            Result(hasUpdate = false, error = "Network connection failed")
+        } catch (e: UnknownHostException) {
+            logCollector.warn(TAG, "Update check unavailable: DNS/network unreachable (${e.message})")
+            Result(hasUpdate = false, error = "Network unavailable")
+        } catch (e: SocketTimeoutException) {
+            logCollector.warn(TAG, "Update check timed out: ${e.message}")
+            Result(hasUpdate = false, error = "Network timeout")
+        } catch (e: IOException) {
+            logCollector.warn(TAG, "Update check network I/O failed: ${e.message}")
+            Result(hasUpdate = false, error = "Network I/O failed")
         } catch (e: Exception) {
             logCollector.error(TAG, "Update check error", e)
             Result(hasUpdate = false, error = e.message)

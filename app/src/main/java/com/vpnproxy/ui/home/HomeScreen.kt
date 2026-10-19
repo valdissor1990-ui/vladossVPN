@@ -1,5 +1,6 @@
 package com.vpnproxy.ui.home
 
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -157,6 +158,50 @@ fun HomeScreen(
                                     Spacer(Modifier.width(4.dp))
                                 }
                                 Text("Обновить")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                // Error banner + Retry
+                if (uiState.connectionState == ConnectionUiState.ERROR) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF5C1010).copy(alpha = 0.92f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF8A80)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Не удалось подключиться. Проверьте сеть или смените сервер.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFFFCDD2),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    Log.i("HomeScreen", "HomeScreen: User pressed Retry button")
+                                    viewModel.retryConnect()
+                                },
+                                enabled = !uiState.isBusy,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFE53935),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Повторить")
                             }
                         }
                     }

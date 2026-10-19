@@ -30,4 +30,12 @@ class DeepProbeScoringTest {
         assertEquals(1.0, scored[0].normalizedScore, 0.000001)
         assertEquals(1.0, scored[1].normalizedScore, 0.000001)
     }
+    @Test fun allFailedMetricsNeverRankAsHealthy() {
+        val failedA = DeepProbeEngine.ProbeMetrics(config("failed-a", "a.example"), Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
+        val failedB = DeepProbeEngine.ProbeMetrics(config("failed-b", "b.example"), Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
+        val scored = DeepProbeEngine.scoreMetrics(listOf(failedA, failedB))
+        assertTrue(scored.all { it.normalizedScore == 0.0 })
+        assertEquals(0.0, scored.first().speedScore, 0.000001)
+    }
+
 }

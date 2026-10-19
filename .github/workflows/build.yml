@@ -40,15 +40,10 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Download Xray-core
+      - name: Download full sing-box-lx libbox 1.14.3-lx.21
         run: |
-          chmod +x scripts/download_xray.sh
-          ./scripts/download_xray.sh
-
-      - name: Verify pinned libv2ray API surface
-        run: |
-          unzip -p app/libs/libv2ray.aar classes.jar > /tmp/lv.jar
-          javap -classpath /tmp/lv.jar libv2ray.Libv2ray libv2ray.CoreController libv2ray.CoreCallbackHandler
+          chmod +x scripts/download_libbox.sh
+          ./scripts/download_libbox.sh
 
       - name: Bootstrap Gradle Wrapper JAR
         run: |
@@ -61,6 +56,24 @@ jobs:
 
       - name: Build Direct Release APK
         run: ./gradlew assembleDirectRelease --stacktrace
+
+      - name: Verify APK excludes retired native cores and secondary process
+        run: |
+          set -euo pipefail
+          if grep -q 'android:process=":singbox"' app/src/main/AndroidManifest.xml; then
+            echo "Unexpected :singbox process declaration"
+            exit 1
+          fi
+          found=0
+          while IFS= read -r apk; do
+            found=1
+            if unzip -l "$apk" | grep -E 'libv2ray\.so|libhev-socks5-tunnel\.so'; then
+              echo "Retired native core found in $apk"
+              exit 1
+            fi
+          done < <(find app/build/outputs/apk/direct/release -name '*.apk' -type f)
+          test "$found" -eq 1
+          echo "Verified direct APKs contain neither retired native core"
 
       - name: Build Play Release AAB
         run: ./gradlew bundlePlayRelease --stacktrace

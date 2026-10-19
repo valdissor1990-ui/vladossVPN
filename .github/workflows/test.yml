@@ -42,8 +42,8 @@ jobs:
 
       - name: Download native libs
         run: |
-          chmod +x scripts/download_xray.sh
-          ./scripts/download_xray.sh
+          chmod +x scripts/download_libbox.sh
+          ./scripts/download_libbox.sh
           ls -la app/libs/
 
       - name: Run unit tests

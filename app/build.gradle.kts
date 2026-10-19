@@ -128,21 +128,14 @@ android {
             )
         }
         jniLibs {
-            // Критично для libv2ray + hev: оба содержат libgojni.so
-            pickFirsts += setOf(
-                "**/libgojni.so",
-                "**/libv2ray.so",
-                "**/libhev-socks5-tunnel.so"
-            )
             useLegacyPackaging = false
         }
     }
 }
 
 dependencies {
-    // Downloaded by scripts/download_xray.sh in CI
-    implementation(files("libs/libv2ray.aar"))
-    implementation(files("libs/hev-socks5-tunnel.aar"))
+    // Full sing-box-lx 1.14.3-lx.21 AAR with XHTTP and Go bridge classes.
+    implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
     implementation("androidx.compose.ui:ui")

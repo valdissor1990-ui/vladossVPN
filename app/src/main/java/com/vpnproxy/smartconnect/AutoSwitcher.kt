@@ -1,5 +1,6 @@
 package com.vpnproxy.smartconnect
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetSocketAddress
@@ -9,7 +10,9 @@ import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
 
-import com.vpnproxy.core.tunnel.TunnelManager
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionEvent
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
@@ -29,16 +32,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Автосвитчер: следит за здоровьем текущего сервера и переключается при деградации.
- */
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
 
 @Singleton
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val connectionCoordinator: ConnectionCoordinator
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
@@ -75,7 +76,7 @@ class AutoSwitcher @Inject constructor(
     private var cooldownUntilMs = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
     private val microProbeClient = OkHttpClient.Builder()
-        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)))
+        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
         .connectTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .readTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .callTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -129,7 +130,6 @@ class AutoSwitcher @Inject constructor(
         if (switching.get()) return
         try {
             val result = healthChecker.testLatency(listOf(current.config)).firstOrNull() ?: return
-
             val jitter = previousRtt?.let { kotlin.math.abs(result.latencyMs - it) } ?: 0L
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
             val measuredRtt = if (result.success) result.latencyMs else Long.MAX_VALUE
@@ -140,7 +140,6 @@ class AutoSwitcher @Inject constructor(
                     return
                 }
             }
-
             if (!result.success) {
                 consecutiveErrors++
                 logCollector.warn(TAG, "Health check failed for ${current.config.name}", mapOf("errors" to consecutiveErrors))
@@ -178,7 +177,6 @@ class AutoSwitcher @Inject constructor(
             "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
                 "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms"
         )
-
         when {
             !direct.success || direct.latencyMs > SUSPECT_RTT_MS -> {
                 transitionTo(AutoSwitchState.MONITORING, "underlying network is slow; reconnect manager owns recovery")
@@ -197,7 +195,7 @@ class AutoSwitcher @Inject constructor(
             try {
                 val socketProxy = if (protectFromVpn) Proxy.NO_PROXY else Proxy(
                     Proxy.Type.SOCKS,
-                    InetSocketAddress(TunnelManager.SOCKS_HOST, TunnelManager.SOCKS_PORT)
+                    InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
                 )
                 Socket(socketProxy).use { socket ->
                     if (protectFromVpn) {
@@ -273,7 +271,6 @@ class AutoSwitcher @Inject constructor(
                 return
             }
         }
-
         val switched = switchToBest() != null
         if (switched) {
             val switchedAt = System.currentTimeMillis()
@@ -288,7 +285,14 @@ class AutoSwitcher @Inject constructor(
                     logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
                 }
             }
-            vpnService?.reconnectAfterSlowServerSwitch()
+            val server = _currentServer.value
+            if (server != null) {
+                Log.d(TAG, "ServerSelected event after slow-server switch: ${server.config.name}")
+                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+            } else {
+                vpnService?.reconnectAfterSlowServerSwitch()
+            }
             logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
         } else {
             logCollector.warn(TAG, "Slow-server switch could not select a different server")
@@ -320,9 +324,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
+        Log.i(TAG, "Starting server selection/ranking for ${configs.size} configs")
         val ranked = scoringEngine.rankAll(configs, healthChecker)
+        Log.i(TAG, "Server ranking completed: ${ranked.size} candidates")
         _rankedServers.value = ranked
-
         val best = ranked.firstOrNull()
         if (best != null) {
             _currentServer.value = best
@@ -333,6 +338,9 @@ class AutoSwitcher @Inject constructor(
                 "Selected best server: ${best.config.name}",
                 mapOf("rtt" to best.latencyMs, "score" to best.score)
             )
+            Log.i(TAG, "Selected server: ${best.config.name} at ${best.config.address}:${best.config.port}; rtt=${best.latencyMs}ms score=${best.score}")
+        } else {
+            Log.w(TAG, "Server selection produced no candidate from ${configs.size} configs")
         }
         return best
     }
@@ -363,7 +371,6 @@ class AutoSwitcher @Inject constructor(
             val ranked = _rankedServers.value
             val current = _currentServer.value
             if (ranked.isEmpty()) return null
-
             val currentIndex = ranked.indexOfFirst {
                 it.config.address == current?.config?.address
             }
@@ -376,7 +383,6 @@ class AutoSwitcher @Inject constructor(
                 logCollector.info(TAG, "Manual switch skipped — already on ${next.config.name}; metrics refreshed")
                 return next
             }
-
             _currentServer.value = next
             baselineRtt = next.latencyMs
             consecutiveErrors = 0
@@ -406,6 +412,8 @@ class AutoSwitcher @Inject constructor(
         consecutiveErrors = 0
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
+        connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+        connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
     }
 
     private fun sameServer(
