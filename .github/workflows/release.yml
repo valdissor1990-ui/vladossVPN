@@ -246,10 +246,11 @@ jobs:
       - name: Install APK on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
+          target: default
           emulator-boot-timeout: 600
-          disable-animations: true
+          disable-animations: false
           script: |
             adb install app/build/outputs/apk/direct/release/app-direct-x86_64-release.apk
             adb shell pm list packages | grep -Fx com.vpnproxy.direct
