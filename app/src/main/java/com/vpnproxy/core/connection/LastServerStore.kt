@@ -1,18 +1,28 @@
 package com.vpnproxy.core.connection
 
 import android.content.Context
+import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Persists last successfully selected VPN server identity for BootReceiver auto-connect.
+ * Persists last successfully selected VPN server for BootReceiver auto-connect.
+ * Uses [Context.createDeviceProtectedStorageContext] so data is readable before
+ * the user unlocks the device (Direct Boot / LOCKED_BOOT_COMPLETED).
  */
 @Singleton
 class LastServerStore @Inject constructor(
     @ApplicationContext context: Context
 ) {
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val prefs = run {
+        val storageContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            context.createDeviceProtectedStorageContext() ?: context
+        } else {
+            context
+        }
+        storageContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    }
 
     data class SavedServer(
         val address: String,

@@ -15,8 +15,10 @@ import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
 /**
- * Автозапуск VPN при загрузке устройства.
- * Восстанавливает последний сервер из [LastServerStore], затем ServerSelected → UserConnect.
+ * Автозапуск VPN при загрузке / разблокировке устройства.
+ *
+ * - LOCKED_BOOT_COMPLETED: только если configs уже доступны; иначе skip.
+ * - USER_UNLOCKED / BOOT_COMPLETED: восстановить last server и поднять VPN.
  */
 @AndroidEntryPoint
 class BootReceiver : BroadcastReceiver() {
@@ -32,6 +34,7 @@ class BootReceiver : BroadcastReceiver() {
 
         val isBootAction = action == Intent.ACTION_BOOT_COMPLETED ||
                 action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
+                action == Intent.ACTION_USER_UNLOCKED ||
                 action == "android.intent.action.QUICKBOOT_POWERON" ||
                 action == "com.htc.intent.action.QUICKBOOT_POWERON"
 
@@ -39,18 +42,32 @@ class BootReceiver : BroadcastReceiver() {
 
         logCollector.info("BootReceiver", "Boot event received: $action")
 
-        val saved = lastServerStore.load()
-        if (saved == null) {
-            logCollector.warn("BootReceiver", "BootReceiver: no saved server, skipping auto-connect")
-            return
-        }
-
         val configs = try {
             val live = subscriptionRepository.getAllConfigs()
             if (live.isNotEmpty()) live else subscriptionRepository.getCachedConfigs()
         } catch (t: Throwable) {
             logCollector.warn("BootReceiver", "Failed to load configs: ${t.message}")
             emptyList()
+        }
+
+        // Direct Boot: credential-encrypted storage may be unavailable.
+        if (configs.isEmpty() && action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
+            logCollector.info(
+                "BootReceiver",
+                "BootReceiver: direct boot, configs unavailable, skip auto-connect"
+            )
+            return
+        }
+
+        if (configs.isEmpty()) {
+            logCollector.warn("BootReceiver", "BootReceiver: no configs available, skip auto-connect")
+            return
+        }
+
+        val saved = lastServerStore.load()
+        if (saved == null) {
+            logCollector.warn("BootReceiver", "BootReceiver: no saved server, skipping auto-connect")
+            return
         }
 
         val matched = configs.firstOrNull { cfg ->
@@ -81,7 +98,7 @@ class BootReceiver : BroadcastReceiver() {
         connectionCoordinator.send(ConnectionEvent.UserConnect)
         logCollector.info(
             "BootReceiver",
-            "Auto-connect: ServerSelected(${matched.name}) + UserConnect"
+            "Auto-connect ($action): ServerSelected(${matched.name}) + UserConnect"
         )
 
         val serviceIntent = Intent(context, VpnProxyService::class.java).apply {
