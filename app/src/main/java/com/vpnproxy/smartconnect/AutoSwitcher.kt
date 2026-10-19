@@ -1,5 +1,6 @@
 package com.vpnproxy.smartconnect
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetSocketAddress
@@ -288,6 +289,7 @@ class AutoSwitcher @Inject constructor(
                     logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
                 }
             }
+            Log.d(TAG, "Requesting ACTION_RECONNECT from VpnProxyService after slow-server switch")
             vpnService?.reconnectAfterSlowServerSwitch()
             logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
         } else {
