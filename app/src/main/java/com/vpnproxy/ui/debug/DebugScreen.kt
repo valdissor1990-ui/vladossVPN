@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,6 +28,7 @@ fun DebugScreen(
     val logs by viewModel.filteredLogs.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val lastCrash by viewModel.lastCrash.collectAsStateWithLifecycle()
+    val battery by viewModel.battery.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
     val listState = rememberLazyListState()
@@ -109,6 +111,11 @@ fun DebugScreen(
                 }
             }
 
+            BatteryCard(
+                state = battery,
+                onLog = { viewModel.logBatteryManual() }
+            )
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,6 +152,57 @@ fun DebugScreen(
                 items(logs.reversed()) { entry ->
                     LogEntryItem(entry)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BatteryCard(
+    state: BatteryUiState,
+    onLog: () -> Unit
+) {
+    val tempColor = when {
+        state.temperatureC.isNaN() -> MaterialTheme.colorScheme.onSurface
+        state.temperatureC < 35f -> Color(0xFF4CAF50)
+        state.temperatureC <= 42f -> Color(0xFFFFC107)
+        else -> Color(0xFFF44336)
+    }
+    val tempText = if (state.temperatureC.isNaN()) "N/A" else String.format("%.1f°C", state.temperatureC)
+    val drainText = when {
+        state.charging -> "Заряжается"
+        state.drainRatePerHour != null -> String.format("%.1f %%/h", state.drainRatePerHour)
+        else -> "N/A"
+    }
+    val drawText = state.currentDrawMa?.let { "$it mA" } ?: "N/A"
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "Батарея",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Уровень: ${if (state.levelPercent >= 0) "${state.levelPercent}%" else "N/A"}")
+            Text(
+                text = "Температура: $tempText",
+                color = tempColor
+            )
+            Text("Зарядка: ${if (state.charging) "да" else "нет"}")
+            Text("Ток: $drawText")
+            Text("Разряд: $drainText")
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onLog) {
+                Icon(Icons.Default.BatteryChargingFull, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Залогировать батарею")
             }
         }
     }

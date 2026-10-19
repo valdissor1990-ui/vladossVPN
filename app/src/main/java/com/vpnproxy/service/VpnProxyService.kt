@@ -16,6 +16,7 @@ import com.vpnproxy.R
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.network.NetworkAwareReconnector
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
@@ -70,6 +71,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
+    @Inject lateinit var batteryLogger: BatteryLogger
 
     private var singBoxCore: SingBoxCore? = null
 
@@ -79,6 +81,7 @@ class VpnProxyService : VpnService() {
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
+    private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
 
     @Volatile
@@ -125,36 +128,36 @@ class VpnProxyService : VpnService() {
 
         stateCollectorJob = scope.launch {
             connectionCoordinator.state.collect { state ->
-                    Log.d(TAG, "Service reacting to state: $state")
-                    logCollector.info(TAG, "Service reacting to state: $state")
-                    when (state) {
-                        is ConnectionState.Connecting,
-                        is ConnectionState.Reconnecting -> {
-                            cancelIdleStop()
-                            promoteToForeground(getString(R.string.state_connecting))
+                Log.d(TAG, "Service reacting to state: $state")
+                logCollector.info(TAG, "Service reacting to state: $state")
+                when (state) {
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Reconnecting -> {
+                        cancelIdleStop()
+                        promoteToForeground(getString(R.string.state_connecting))
+                        restartVpnForDesiredState(state)
+                    }
+                    is ConnectionState.Connected -> {
+                        cancelIdleStop()
+                        if (!_isRunning.value && !startInProgress) {
                             restartVpnForDesiredState(state)
-                        }
-                        is ConnectionState.Connected -> {
-                            cancelIdleStop()
-                            if (!_isRunning.value && !startInProgress) {
-                                restartVpnForDesiredState(state)
-                            } else {
-                                updateNotification(getString(R.string.state_connected))
-                            }
-                        }
-                        is ConnectionState.Disconnecting,
-                        is ConnectionState.Disconnected -> {
-                            stopVpnKeepAlive(state.toString())
-                            scheduleIdleStop()
-                        }
-                        is ConnectionState.Error -> {
-                            stopVpnKeepAlive("Error: ${state.message}")
-                            _lastError.value = state.message
-                            updateNotification(state.message)
-                            scheduleIdleStop()
+                        } else {
+                            updateNotification(getString(R.string.state_connected))
                         }
                     }
+                    is ConnectionState.Disconnecting,
+                    is ConnectionState.Disconnected -> {
+                        stopVpnKeepAlive(state.toString())
+                        scheduleIdleStop()
+                    }
+                    is ConnectionState.Error -> {
+                        stopVpnKeepAlive("Error: ${state.message}")
+                        _lastError.value = state.message
+                        updateNotification(state.message)
+                        scheduleIdleStop()
+                    }
                 }
+            }
         }
 
         Log.d("VpnService", "===== onCreate completed =====")
@@ -255,7 +258,7 @@ class VpnProxyService : VpnService() {
         vpnJob = scope.launch {
             try {
                 if (_isRunning.value) {
-                    stopVpnInternal("soft restart for $state")
+                    stopVpnInternal("soft restart for $state", softRestart = true)
                     delay(300)
                 }
                 startVpnSession()
@@ -330,6 +333,12 @@ class VpnProxyService : VpnService() {
             updateNotification(getString(R.string.state_connected))
             logCollector.info(TAG, "Sing-box VPN started successfully")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
+            try {
+                batteryLogger.logSnapshot("vpn_connected")
+            } catch (t: Throwable) {
+                logCollector.debug(TAG, "battery log vpn_connected failed: ${t.message}")
+            }
+            startBatteryPeriodicLogging()
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -361,7 +370,8 @@ class VpnProxyService : VpnService() {
 
     private suspend fun stopVpnInternal(
         reason: String = "stopVpnInternal requested",
-        throwable: Throwable? = null
+        throwable: Throwable? = null,
+        softRestart: Boolean = false
     ) {
         try {
             autoSwitcher.stopMonitoring()
@@ -370,12 +380,42 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            logCollector.info(TAG, "VPN stopped (service alive). Reason: $reason")
+            if (!softRestart) {
+                stopBatteryPeriodicLogging()
+            }
+            try {
+                val trigger = if (softRestart) "vpn_soft_restart" else "vpn_stopped"
+                batteryLogger.logSnapshot(trigger)
+            } catch (t: Throwable) {
+                logCollector.debug(TAG, "battery log stop failed: ${t.message}")
+            }
+            logCollector.info(TAG, "VPN stopped (service alive). Reason: $reason softRestart=$softRestart")
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
             logCollector.error(TAG, "Error stopping VPN", t)
         }
+    }
+
+    private fun startBatteryPeriodicLogging() {
+        batteryPeriodicJob?.cancel()
+        batteryPeriodicJob = scope.launch {
+            while (true) {
+                delay(5 * 60_000L)
+                if (!_isRunning.value) break
+                try {
+                    batteryLogger.logSnapshot("periodic")
+                    batteryLogger.logWarningIfNeeded()
+                } catch (t: Throwable) {
+                    logCollector.debug(TAG, "battery periodic failed: ${t.message}")
+                }
+            }
+        }
+    }
+
+    private fun stopBatteryPeriodicLogging() {
+        batteryPeriodicJob?.cancel()
+        batteryPeriodicJob = null
     }
 
     override fun onDestroy() {
@@ -388,6 +428,7 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = null
         watchdogJob?.cancel()
         watchdogJob = null
+        stopBatteryPeriodicLogging()
         isReconnecting.set(false)
         kotlinx.coroutines.runBlocking { stopVpnInternal("onDestroy invoked") }
         scope.cancel()

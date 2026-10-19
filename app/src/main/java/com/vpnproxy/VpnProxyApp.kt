@@ -3,6 +3,8 @@ package com.vpnproxy
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.vpnproxy.core.diagnostics.BatteryLogger
+import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
@@ -20,12 +22,15 @@ import javax.inject.Inject
  * - Инициализация Timber → LogCollector
  * - Настройка WorkManager через HiltWorkerFactory
  * - Планирование периодических задач (subscriptions)
+ * - BatteryMonitor register / unregister
  */
 @HiltAndroidApp
 class VpnProxyApp : Application(), Configuration.Provider {
 
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var batteryLogger: BatteryLogger
+    @Inject lateinit var batteryMonitor: BatteryMonitor
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -46,6 +51,13 @@ class VpnProxyApp : Application(), Configuration.Provider {
         LogCollectorHolder.install(logCollector)
         logCollector.info("VpnProxyApp", "Application started, version=${BuildConfig.VERSION_NAME}")
 
+        try {
+            batteryMonitor.register(this)
+            batteryLogger.logSnapshot("app_start")
+        } catch (t: Throwable) {
+            logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
+        }
+
         // Периодические задачи
         SubscriptionUpdateWorker.schedule(this, intervalHours = 6)
 
@@ -55,5 +67,13 @@ class VpnProxyApp : Application(), Configuration.Provider {
         // Планирование из двух мест даёт дубли и race condition.
         // Если нужен фоновый периодический чек — раскомментируйте:
         // UpdateCheckWorker.schedule(this, intervalHours = 6)
+    }
+
+    override fun onTerminate() {
+        try {
+            batteryMonitor.unregister(this)
+        } catch (_: Throwable) {
+        }
+        super.onTerminate()
     }
 }

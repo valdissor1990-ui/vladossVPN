@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.diagnostics.BatteryLogger
+import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogEntry
@@ -12,17 +14,29 @@ import com.vpnproxy.logging.LogExporter
 import com.vpnproxy.logging.LogLevel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+data class BatteryUiState(
+    val levelPercent: Int = -1,
+    val temperatureC: Float = Float.NaN,
+    val charging: Boolean = false,
+    val currentDrawMa: Int? = null,
+    val drainRatePerHour: Double? = null
+)
 
 @HiltViewModel
 class DebugViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val logCollector: LogCollector,
-    private val logExporter: LogExporter
+    private val logExporter: LogExporter,
+    private val batteryMonitor: BatteryMonitor,
+    private val batteryLogger: BatteryLogger
 ) : ViewModel() {
 
     val filteredLogs: StateFlow<List<LogEntry>> = logCollector.filteredLogs
@@ -33,11 +47,38 @@ class DebugViewModel @Inject constructor(
     private val _lastCrash = MutableStateFlow<String?>(null)
     val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
 
+    private val _battery = MutableStateFlow(BatteryUiState())
+    val battery: StateFlow<BatteryUiState> = _battery.asStateFlow()
+
     private var currentSearch: String? = null
     private var currentLevel: LogLevel? = null
 
     init {
         _lastCrash.value = CrashHandler.readLastCrash(context)
+        viewModelScope.launch {
+            while (isActive) {
+                refreshBattery()
+                delay(30_000L)
+            }
+        }
+    }
+
+    private fun refreshBattery() {
+        batteryMonitor.register()
+        batteryMonitor.updateBaseline()
+        _battery.value = BatteryUiState(
+            levelPercent = batteryMonitor.getLevelPercent(),
+            temperatureC = batteryMonitor.getTemperatureCelsius(),
+            charging = batteryMonitor.isCharging(),
+            currentDrawMa = batteryMonitor.getCurrentDrawMa(),
+            drainRatePerHour = batteryMonitor.getDrainRatePerHour()
+        )
+    }
+
+    fun logBatteryManual() {
+        batteryLogger.logSnapshot("manual_from_ui")
+        refreshBattery()
+        _message.value = "BATTERY snapshot logged"
     }
 
     fun clearCrash() {
