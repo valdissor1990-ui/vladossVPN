@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
@@ -203,6 +205,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun connect() {
+        Log.i(TAG, "User clicked Connect")
         fallbackAttempts = 0
         attemptedServerKeys.clear()
         isFallingBack.set(false)
@@ -218,24 +221,33 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionGranted() {
+        Log.i(TAG, "VPN permission granted; entering connection startup")
         viewModelScope.launch {
             try {
                 _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING)
+                Log.i(TAG, "Starting server selection...")
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
+                Log.d(TAG, "Network available=$hasNetwork")
 
-                var configs = subscriptionRepository.getAllConfigs()
+                Log.d(TAG, "Loading configured servers (timeout=5000ms)")
+                var configs = withTimeout(5_000L) { subscriptionRepository.getAllConfigs() }
                 if (configs.isEmpty() && hasNetwork) {
+                    Log.d(TAG, "No configured servers; refreshing subscription (timeout=5000ms)")
                     configs = try {
-                        subscriptionRepository.refreshAll()
-                        subscriptionRepository.getAllConfigs()
+                        withTimeout(5_000L) {
+                            subscriptionRepository.refreshAll()
+                            subscriptionRepository.getAllConfigs()
+                        }
                     } catch (c: CancellationException) {
                         throw c
                     } catch (e: Exception) {
+                        logCollector.warn(TAG, "Subscription refresh failed before ACTION_START: ${e.message}")
                         emptyList()
                     }
                 }
                 if (configs.isEmpty()) {
+                    Log.d(TAG, "No online configs; loading cached/bootstrap configs")
                     configs = subscriptionRepository.getCachedConfigs()
                     _uiState.value = _uiState.value.copy(
                         usingBootstrap = subscriptionRepository.usingBootstrap.value
@@ -243,6 +255,7 @@ class HomeViewModel @Inject constructor(
                 }
 
                 if (configs.isEmpty()) {
+                    logCollector.warn(TAG, "Connection aborted: no server configs available")
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
@@ -253,8 +266,10 @@ class HomeViewModel @Inject constructor(
                 }
 
                 _uiState.value = _uiState.value.copy(serverCount = configs.size)
-                val best = autoSwitcher.selectBest(configs)
+                Log.i(TAG, "Server configs loaded: ${configs.size}; ranking with 5000ms timeout")
+                val best = withTimeout(5_000L) { autoSwitcher.selectBest(configs) }
                 if (best == null) {
+                    logCollector.warn(TAG, "Connection aborted: server selection returned no candidate")
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     _uiState.value = _uiState.value.copy(
@@ -264,12 +279,23 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
+                Log.i(TAG, "Selected server: ${best.config.name} (${best.config.address}:${best.config.port}, ${best.latencyMs}ms)")
                 attemptedServerKeys.add(serverKey(best.config.address, best.config.port))
+                Log.i(TAG, "Server selection complete; dispatching ACTION_START")
                 startVpnService()
+            } catch (e: TimeoutCancellationException) {
+                logCollector.warn(TAG, "Connection startup timed out before ACTION_START: ${e.message ?: "operation exceeded 5000ms"}")
+                connectTimeoutJob?.cancel()
+                connectTimeoutJob = null
+                isFallingBack.set(false)
+                _uiState.value = _uiState.value.copy(
+                    connectionState = ConnectionUiState.ERROR,
+                    isBusy = false
+                )
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                logCollector.error(TAG, "Connect failed", e)
+                logCollector.error(TAG, "Connect failed before/during ACTION_START", e)
                 connectTimeoutJob?.cancel()
                 connectTimeoutJob = null
                 _uiState.value = _uiState.value.copy(

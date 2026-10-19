@@ -322,7 +322,9 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
+        Log.i(TAG, "Starting server selection/ranking for ${configs.size} configs")
         val ranked = scoringEngine.rankAll(configs, healthChecker)
+        Log.i(TAG, "Server ranking completed: ${ranked.size} candidates")
         _rankedServers.value = ranked
 
         val best = ranked.firstOrNull()
@@ -335,6 +337,9 @@ class AutoSwitcher @Inject constructor(
                 "Selected best server: ${best.config.name}",
                 mapOf("rtt" to best.latencyMs, "score" to best.score)
             )
+            Log.i(TAG, "Selected server: ${best.config.name} at ${best.config.address}:${best.config.port}; rtt=${best.latencyMs}ms score=${best.score}")
+        } else {
+            Log.w(TAG, "Server selection produced no candidate from ${configs.size} configs")
         }
         return best
     }

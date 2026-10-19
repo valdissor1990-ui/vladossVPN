@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.ConnectException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -96,6 +97,9 @@ class UpdateChecker @Inject constructor(
                 )
                 Result(hasUpdate = hasUpdate, release = release)
             }
+        } catch (e: ConnectException) {
+            logCollector.warn(TAG, "Update check unavailable: connection refused/unreachable (${e.message})")
+            Result(hasUpdate = false, error = "Network connection failed")
         } catch (e: Exception) {
             logCollector.error(TAG, "Update check error", e)
             Result(hasUpdate = false, error = e.message)
