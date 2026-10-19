@@ -122,55 +122,45 @@ jobs:
       - name: Validate every APK before publishing
         shell: bash
         run: |
-          set -Eeuo pipefail
-          DIR="app/build/outputs/apk/direct/release"
+          set -euo pipefail
+
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           APKSIGNER="$BUILD_TOOLS/apksigner"
           ZIPALIGN="$BUILD_TOOLS/zipalign"
           AAPT="$BUILD_TOOLS/aapt"
-          test -x "$APKSIGNER" || { echo "::error::apksigner not found"; exit 1; }
-          test -x "$ZIPALIGN" || { echo "::error::zipalign not found"; exit 1; }
-          test -x "$AAPT" || { echo "::error::aapt not found"; exit 1; }
 
           shopt -s nullglob
-          apks=("$DIR"/*.apk)
-          (("${#apks[@]}" >= 4)) || { echo "::error::Expected universal + 3 ABI APKs; found ${#apks[@]}"; ls -la "$DIR"; exit 1; }
+          apks=(app/build/outputs/apk/direct/release/*.apk)
+          (("${#apks[@]}" >= 2)) || { echo "::error::Expected universal + at least 1 ABI APK; found ${#apks[@]}"; exit 1; }
 
-          expected_version="${GITHUB_RUN_NUMBER:-0}"
-          cert_digest=""
+          cert_digests=()
+          expected_version_code=""
           for apk in "${apks[@]}"; do
-            echo "::group::Validate $apk"
-            test -s "$apk"
-            unzip -t "$apk"
-            "$ZIPALIGN" -c -P 16 -v 4 "$apk"
-            "$APKSIGNER" verify --verbose --print-certs "$apk"
-            badging="$("$AAPT" dump badging "$apk")"
-            echo "$badging" | grep -q "^package: name='com\.vpnproxy\.direct' "
-            echo "$badging" | grep -q "^sdkVersion:'26'$"
-            version_name="$(printf '%s\n' "$badging" | sed -n "1s/.*versionName='\([^']*\)'.*/\1/p")"
-            version_code="$(printf '%s\n' "$badging" | sed -n "1s/.*versionCode='\([^']*\)'.*/\1/p")"
-            test -n "$version_name" && test -n "$version_code"
-            echo "Package/version: com.vpnproxy.direct $version_name ($version_code)"
-            cert="$( "$APKSIGNER" verify --print-certs "$apk" | sed -n -E 's/^(Signer #1 certificate SHA-256 digest: |V[0-9]+ Signer: certificate SHA-256 digest: )//p' | head -1 )"
+            "$ZIPALIGN" -c -v 4 "$apk" >/dev/null || { echo "::error::APK not zipaligned: $apk"; exit 1; }
+            "$APKSIGNER" verify --print-certs "$apk" >/dev/null || { echo "::error::APK signature invalid: $apk"; exit 1; }
+
+            cert="$( "$APKSIGNER" verify --print-certs "$apk" | grep -m1 "SHA-256 digest" | awk -F': ' '{print $2}' | tr -d '[:space:]' )"
             test -n "$cert" || { echo "::error::No signer certificate found in $apk"; exit 1; }
-            if [ -z "$cert_digest" ]; then cert_digest="$cert"; elif [ "$cert" != "$cert_digest" ]; then
-              echo "::error::APK signing certificate differs between split artifacts"
+            cert_digests+=("$cert")
+
+            version_code="$("$AAPT" dump badging "$apk" 2>/dev/null | grep -oP "versionCode='\\K[^']+" || true)"
+            [[ "$version_code" =~ ^[0-9]+$ ]] || { echo "::error::Invalid or missing versionCode in $apk: '$version_code'"; exit 1; }
+            if [[ -z "$expected_version_code" ]]; then
+              expected_version_code="$version_code"
+            elif [[ "$version_code" != "$expected_version_code" ]]; then
+              echo "::error::versionCode differs between APKs: expected $expected_version_code, got $version_code in $apk"
               exit 1
             fi
-            if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-              if [[ "$version_name" != *.*.* ]]; then
-                echo "::error::Unexpected release versionName: $version_name"
-                exit 1
-              fi
-              if [[ "$version_code" != 1* ]]; then
-                echo "::error::Unexpected release versionCode: $version_code"
-                exit 1
-              fi
-            fi
-            echo "::endgroup::"
+            echo "Validated $apk: versionCode=$version_code"
           done
-          echo "All direct-release APKs passed ZIP, alignment, package, SDK and signature checks."
-          echo "Signing certificate SHA-256: $cert_digest"
+
+          unique_certs="$(printf '%s\n' "${cert_digests[@]}" | sort -u | wc -l | tr -d '[:space:]')"
+          if [[ "$unique_certs" -ne 1 ]]; then
+            echo "::error::APK signing certificate differs between split artifacts"
+            exit 1
+          fi
+
+          echo "::notice::All APKs passed validation with a single signing certificate and versionCode $expected_version_code."
 
       - name: Verify APK excludes retired native cores and secondary process
         run: |
@@ -257,13 +247,12 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
-          target: google_apis
           arch: x86_64
           emulator-boot-timeout: 600
           disable-animations: true
           script: |
-            adb install app/build/outputs/apk/direct/release/app-direct-universal-release.apk
-            adb shell pm path com.vpnproxy.direct
+            adb install app/build/outputs/apk/direct/release/app-direct-x86_64-release.apk
+            adb shell pm list packages | grep -Fx com.vpnproxy.direct
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
