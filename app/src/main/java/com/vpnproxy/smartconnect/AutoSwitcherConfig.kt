@@ -27,6 +27,8 @@ object AutoSwitcherConfig {
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
     const val serverBlacklistDurationMs = 10 * 60_000L
+    /** After Connected, suppress automatic switches for this period. */
+    const val postConnectWarmupMs = 45_000L
     const val ruTokenPattern = "(^|[^a-z0-9])ru([^a-z0-9]|$)"
     const val microProbeUrl = "https://proof.ovh.net/files/1Mb.dat"
 }
