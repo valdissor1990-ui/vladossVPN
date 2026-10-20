@@ -38,6 +38,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -94,6 +96,8 @@ class VpnProxyService : VpnService() {
     @Volatile
     private var isStopping = false
 
+    private val lifecycleMutex = Mutex()
+
     override fun onCreate() {
         super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
@@ -108,7 +112,6 @@ class VpnProxyService : VpnService() {
         }
 
         createNotificationChannel()
-        promoteToForeground(getString(R.string.state_connecting))
 
         try {
             autoSwitcher.attachVpnService(this)
@@ -143,7 +146,6 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         cancelIdleStop()
-                        promoteToForeground(getString(R.string.state_connecting))
                         restartVpnForDesiredState(state)
                     }
                     is ConnectionState.Connected -> {
@@ -267,17 +269,19 @@ class VpnProxyService : VpnService() {
         }
         vpnJob?.cancel()
         vpnJob = scope.launch {
-            try {
-                if (_isRunning.value) {
-                    stopVpnInternal("soft restart for $state", softRestart = true)
-                    delay(300)
+            lifecycleMutex.withLock {
+                try {
+                    if (_isRunning.value) {
+                        stopVpnInternal("soft restart for $state", softRestart = true)
+                        delay(300)
+                    }
+                    startVpnSession()
+                } catch (c: kotlinx.coroutines.CancellationException) {
+                    throw c
+                } catch (t: Throwable) {
+                    Log.e(TAG, "restartVpnForDesiredState failed", t)
+                    emitCoreError(t)
                 }
-                startVpnSession()
-            } catch (c: kotlinx.coroutines.CancellationException) {
-                throw c
-            } catch (t: Throwable) {
-                Log.e(TAG, "restartVpnForDesiredState failed", t)
-                emitCoreError(t)
             }
         }
     }
@@ -348,6 +352,7 @@ class VpnProxyService : VpnService() {
 
             _isRunning.value = true
             isReconnecting.set(false)
+            promoteToForeground(getString(R.string.state_connected))
             updateNotification(getString(R.string.state_connected))
             logCollector.info(TAG, "Sing-box VPN started successfully")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
@@ -366,6 +371,7 @@ class VpnProxyService : VpnService() {
             _lastError.value = reasonMsg
             stopVpnInternal("startVpnSession failed", t)
             emitCoreError(t)
+            stopSelf()
         } finally {
             startInProgress = false
             isReconnecting.set(false)
@@ -390,10 +396,12 @@ class VpnProxyService : VpnService() {
         Log.e("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
         vpnJob?.cancel()
         vpnJob = scope.launch {
-            stopVpnInternal(reason)
-            connectionCoordinator.send(ConnectionEvent.ServiceStopped)
-            if (!isStopping) {
-                updateNotification(getString(R.string.state_disconnected))
+            lifecycleMutex.withLock {
+                stopVpnInternal(reason)
+                connectionCoordinator.send(ConnectionEvent.ServiceStopped)
+                if (!isStopping) {
+                    updateNotification(getString(R.string.state_disconnected))
+                }
             }
         }
     }
@@ -476,10 +484,12 @@ class VpnProxyService : VpnService() {
         }
 
         scope.launch(Dispatchers.IO) {
-            try {
-                stopVpnInternal("forceStop: $reason")
-            } catch (t: Throwable) {
-                Log.e(TAG, "forceStopService stopVpnInternal failed", t)
+            lifecycleMutex.withLock {
+                try {
+                    stopVpnInternal("forceStop: $reason")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "forceStopService stopVpnInternal failed", t)
+                }
             }
             connectionCoordinator.send(ConnectionEvent.ForceDisconnected(reason = "forceStopService: $reason"))
             try {
