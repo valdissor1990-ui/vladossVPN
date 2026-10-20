@@ -35,7 +35,7 @@ class DeepProbeEngine @Inject constructor(
     companion object {
         private const val TAG = "DeepProbe"
         private const val LATENCY_URL = "https://www.gstatic.com/generate_204"
-        private const val SPEED_URL = "https://speed.cloudflare.com/__down?bytes=100000"
+        private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
         private const val CONNECT_TIMEOUT_MS = 2_000L
         private const val READ_TIMEOUT_MS = 4_000L
