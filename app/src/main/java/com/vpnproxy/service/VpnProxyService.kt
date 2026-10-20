@@ -329,6 +329,7 @@ class VpnProxyService : VpnService() {
                 connectionCoordinator.send(
                     ConnectionEvent.CoreError(VpnFailureReason.CoreError(reason))
                 )
+                stopSelf()
                 return
             }
 
