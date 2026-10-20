@@ -71,9 +71,11 @@ class HealthChecker @Inject constructor(
                 withSingboxClient(config) { client ->
                     val startedAt = System.nanoTime()
                     val request = Request.Builder().url(LATENCY_TEST_URL).head().build()
-                    client.newCall(request).execute().use { response ->
-                        val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-                        LatencyResult(config, elapsed, success = response.code in 200..399)
+                    runInterruptible(Dispatchers.IO) {
+                        client.newCall(request).execute().use { response ->
+                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                            LatencyResult(config, elapsed, success = response.code in 200..399)
+                        }
                     }
                 }
             } catch (c: CancellationException) {
@@ -93,18 +95,20 @@ class HealthChecker @Inject constructor(
     private suspend fun testSingleSpeed(config: ParsedConfig): SpeedResult =
         withContext(Dispatchers.IO) {
             try {
-                val action: (OkHttpClient) -> SpeedResult = { client ->
+                val action: suspend (OkHttpClient) -> SpeedResult = { client ->
                     val request = Request.Builder()
                         .url(SPEED_TEST_URL)
                         .header("User-Agent", "VPNProxy/1.0")
                         .build()
                     val startedAt = System.currentTimeMillis()
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
-                        val bytes = response.body?.bytes() ?: ByteArray(0)
-                        val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
-                        val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
-                        SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
+                    runInterruptible(Dispatchers.IO) {
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
+                            val bytes = response.body?.bytes() ?: ByteArray(0)
+                            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+                            val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
+                            SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
+                        }
                     }
                 }
                 withSingboxClient(config, action)
@@ -122,7 +126,7 @@ class HealthChecker @Inject constructor(
      */
     private suspend fun <T> withSingboxClient(
         config: ParsedConfig,
-        action: (OkHttpClient) -> T
+        action: suspend (OkHttpClient) -> T
     ): T {
         singboxProbeMutex.lock()
         try {
