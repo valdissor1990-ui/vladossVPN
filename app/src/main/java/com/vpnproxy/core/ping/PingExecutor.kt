@@ -44,7 +44,7 @@ class RealPingExecutor @Inject constructor() : PingExecutor {
                         val started = now()
                         socket.connect(
                             InetSocketAddress(address, target.port),
-                            timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                            timeoutMs.coerceIn(1L, SOCKET_CONNECT_TIMEOUT_MS).toInt()
                         )
                         now() - started
                     }
@@ -105,6 +105,7 @@ class RealPingExecutor @Inject constructor() : PingExecutor {
 
     companion object {
         private const val DNS_TIMEOUT_MS = 1000L
+        private const val SOCKET_CONNECT_TIMEOUT_MS = 1500L
         private const val CLEANUP_GRACE_MS = 200L
 
         // Bounded pool: timed-out OS DNS lookups cannot create unbounded worker threads.
