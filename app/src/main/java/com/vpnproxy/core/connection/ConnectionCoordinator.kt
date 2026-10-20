@@ -35,6 +35,8 @@ sealed class ConnectionState {
 sealed class ConnectionEvent {
     data object UserConnect : ConnectionEvent()
     data object UserDisconnect : ConnectionEvent()
+    /** Notification STOP / UI disconnect request — always goes through the actor. */
+    data object RequestDisconnect : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
@@ -43,7 +45,8 @@ sealed class ConnectionEvent {
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
-    data object ForceDisconnected : ConnectionEvent()
+    /** System kill / force teardown — clears flags and forces Disconnected. */
+    data class ForceDisconnected(val reason: String = "") : ConnectionEvent()
 }
 
 @Singleton
@@ -169,12 +172,20 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
 
-            is ConnectionEvent.UserDisconnect -> {
+            is ConnectionEvent.UserDisconnect,
+            is ConnectionEvent.RequestDisconnect -> {
+                // Notification STOP and UI disconnect both go through the actor.
+                val tag = if (event is ConnectionEvent.RequestDisconnect) "RequestDisconnect" else "UserDisconnect"
                 when (current) {
-                    is ConnectionState.Disconnected -> { /* already down */ }
+                    is ConnectionState.Disconnected -> {
+                        logCollector.debug(TAG, "$tag ignored — already Disconnected")
+                    }
+                    is ConnectionState.Disconnecting -> {
+                        logCollector.debug(TAG, "$tag while Disconnecting — stay")
+                    }
                     else -> {
                         retryCount = 0
-                        setState(ConnectionState.Disconnecting, reason = "UserDisconnect")
+                        setState(ConnectionState.Disconnecting, reason = tag)
                     }
                 }
             }
@@ -256,12 +267,17 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.ForceDisconnected -> {
+                val why = event.reason.ifBlank { "ForceDisconnected" }
                 if (current is ConnectionState.Disconnected) {
-                    logCollector.debug(TAG, "ForceDisconnected: already stopped, skip")
+                    // Still clear flags even if already Disconnected
+                    retryCount = 0
+                    isFatalErrorLocked = false
+                    logCollector.debug(TAG, "ForceDisconnected ($why): already Disconnected, flags cleared")
                     return
                 }
                 retryCount = 0
-                setState(ConnectionState.Disconnected, reason = "ForceDisconnected")
+                isFatalErrorLocked = false
+                setState(ConnectionState.Disconnected, reason = "ForceDisconnected:$why")
             }
 
             is ConnectionEvent.ServiceReady -> {

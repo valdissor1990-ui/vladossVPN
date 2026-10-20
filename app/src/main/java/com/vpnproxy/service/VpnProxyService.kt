@@ -53,7 +53,7 @@ class VpnProxyService : VpnService() {
         const val ACTION_ENSURE_RUNNING = "com.vpnproxy.ENSURE_RUNNING"
         const val ACTION_REQUEST_DISCONNECT = "com.vpnproxy.REQUEST_DISCONNECT"
         const val ACTION_REQUEST_RECONNECT = "com.vpnproxy.REQUEST_RECONNECT"
-        /** Always kills the service — works even while stuck in Connecting. */
+        /** Legacy force path — prefer RequestDisconnect via actor. */
         const val ACTION_FORCE_STOP = "com.vpnproxy.FORCE_STOP"
 
         private val _isRunning = MutableStateFlow(false)
@@ -182,18 +182,13 @@ class VpnProxyService : VpnService() {
 
         when (intent?.action) {
             ACTION_FORCE_STOP -> {
-                Log.e("VpnService", "FORCE_STOP from notification — immediate kill")
+                Log.e("VpnService", "FORCE_STOP — RequestDisconnect via actor then teardown")
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 forceStopService("notification FORCE_STOP")
             }
             ACTION_REQUEST_DISCONNECT -> {
-                val s = connectionCoordinator.state.value
-                if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
-                    Log.e("VpnService", "REQUEST_DISCONNECT while $s → FORCE path")
-                    forceStopService("disconnect while $s")
-                } else {
-                    Log.e("VpnService", "REQUEST_DISCONNECT → UserDisconnect (no stopSelf)")
-                    connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-                }
+                Log.e("VpnService", "REQUEST_DISCONNECT → ConnectionEvent.RequestDisconnect")
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
             }
             ACTION_REQUEST_RECONNECT -> {
                 Log.d(TAG, "REQUEST_RECONNECT → NetworkChanged")
@@ -212,10 +207,8 @@ class VpnProxyService : VpnService() {
     override fun onRevoke() {
         Log.e("VpnService", "===== onRevoke called (Another VPN active or user revoked) =====", Exception("onRevoke trace"))
         logCollector.warn(TAG, "onRevoke — VPN revoked by system")
-        connectionCoordinator.send(
-            ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)
-        )
-        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
+        connectionCoordinator.send(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied))
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         super.onRevoke()
     }
 
@@ -457,7 +450,7 @@ class VpnProxyService : VpnService() {
 
     /**
      * Immediate teardown without runBlocking.
-     * Idempotent via [isStopping]. Used by notification STOP even when stuck in Connecting.
+     * Idempotent via [isStopping].
      */
     private fun forceStopService(reason: String) {
         if (isStopping) {
@@ -488,7 +481,7 @@ class VpnProxyService : VpnService() {
             } catch (t: Throwable) {
                 Log.e(TAG, "forceStopService stopVpnInternal failed", t)
             }
-            connectionCoordinator.send(ConnectionEvent.ForceDisconnected)
+            connectionCoordinator.send(ConnectionEvent.ForceDisconnected(reason = "forceStopService: $reason"))
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -506,6 +499,13 @@ class VpnProxyService : VpnService() {
     override fun onDestroy() {
         Log.e("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
         isStopping = true
+        try {
+            connectionCoordinator.send(
+                ConnectionEvent.ForceDisconnected(reason = "Service destroyed by system")
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "onDestroy ForceDisconnected send failed", t)
+        }
         autoSwitcher.detachVpnService(this)
         networkReconnector?.stop()
         networkReconnector = null
@@ -519,7 +519,6 @@ class VpnProxyService : VpnService() {
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
         startInProgress = false
-        // Async stop core — avoid runBlocking on main/binder thread
         try {
             singBoxCore?.stop()
         } catch (t: Throwable) {
@@ -528,7 +527,6 @@ class VpnProxyService : VpnService() {
         _isRunning.value = false
         scope.cancel()
         singBoxCore = null
-        // Allow a future service instance to start cleanly
         isStopping = false
         super.onDestroy()
     }
@@ -550,7 +548,7 @@ class VpnProxyService : VpnService() {
     private fun buildNotification(state: String): Notification {
         val stopPi = PendingIntent.getService(
             this, 0,
-            Intent(this, VpnProxyService::class.java).setAction(ACTION_FORCE_STOP),
+            Intent(this, VpnProxyService::class.java).setAction(ACTION_REQUEST_DISCONNECT),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val reconnectPi = PendingIntent.getService(
