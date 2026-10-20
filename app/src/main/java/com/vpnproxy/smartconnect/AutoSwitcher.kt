@@ -36,7 +36,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val healthMonitor = HealthMonitor(logCollector)
+    private val healthMonitor = HealthMonitor(logCollector, healthChecker)
     private val decisionEngine = SwitchDecisionEngine()
     private var healthCheckJob: Job? = null
 
@@ -98,7 +98,7 @@ class AutoSwitcher @Inject constructor(
         if (switching.get()) return
 
         try {
-            val result = healthChecker.testLatency(listOf(current.config)).firstOrNull() ?: return
+            val result = healthMonitor.checkSelectedServer(current.config) ?: return
             val jitter = healthMonitor.calculateJitter(previousRtt, result.latencyMs)
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
 
