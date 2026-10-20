@@ -3,6 +3,7 @@ package com.vpnproxy.service
 import com.vpnproxy.core.singbox.SingBoxCore
 import com.vpnproxy.logging.LogCollector
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withLock
 
 /**
@@ -22,12 +23,32 @@ internal class VpnLifecycleController(
     suspend fun <T> withLifecycleLock(block: suspend () -> T): T =
         lifecycleMutex.withLock { block() }
 
+    /**
+     * Serializes a complete soft-restart transition. The callbacks retain Android/service side
+     * effects in VpnProxyService while this controller owns ordering and the restart delay.
+     */
+    suspend fun restartSession(
+        coreIsRunning: () -> Boolean,
+        stopSession: suspend () -> Unit,
+        startSession: suspend () -> Unit,
+        restartDelayMs: Long
+    ) = lifecycleMutex.withLock {
+        check(!closed) { "VPN lifecycle controller is closed" }
+        if (coreIsRunning()) {
+            stopSession()
+            delay(restartDelayMs)
+        }
+        check(!closed) { "VPN lifecycle controller is closed" }
+        startSession()
+    }
+
     fun startCore(configJson: String) {
         check(!closed) { "VPN lifecycle controller is closed" }
         core.start(configJson)
     }
 
     fun stopCore() {
+        if (closed) return
         core.stop()
     }
 
