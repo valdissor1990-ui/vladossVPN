@@ -26,7 +26,7 @@ class PingService @Inject constructor(
     suspend fun pingAll(
         targets: List<PingTarget>,
         concurrency: Int = 10,
-        timeoutMs: Long = 2000L,
+        timeoutMs: Long = 1500L,
         region: PingRegion = targets.firstOrNull()?.regions?.singleOrNull() ?: PingRegion.GLOBAL
     ): MultiPingResult {
         require(concurrency > 0) { "concurrency must be greater than zero" }
