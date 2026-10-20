@@ -37,6 +37,30 @@ enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITC
 
 internal enum class NetworkFaultKind { NONE, NETWORK_DEGRADATION, SERVER_DEGRADATION }
 internal data class ProbeResult(val latencyMs: Long, val success: Boolean)
+
+internal fun classifyProbeFault(
+    direct: ProbeResult,
+    vpn: ProbeResult,
+    suspectRttMs: Long = 500L,
+    directFastRttMs: Long = 100L
+): NetworkFaultKind {
+    val directBad = !direct.success || direct.latencyMs > suspectRttMs
+    val directFast = direct.success && direct.latencyMs < directFastRttMs
+    val vpnBad = !vpn.success || vpn.latencyMs > suspectRttMs
+    return when {
+        directBad && !vpnBad -> NetworkFaultKind.NETWORK_DEGRADATION
+        directFast && vpnBad -> NetworkFaultKind.SERVER_DEGRADATION
+        else -> NetworkFaultKind.NONE
+    }
+}
+
+internal fun shouldSwitchAfterEvidence(
+    serverConfirmations: Int,
+    networkConfirmations: Int,
+    directPathHealthy: Boolean
+): Boolean = directPathHealthy &&
+    serverConfirmations >= 2 &&
+    networkConfirmations < 2
 private data class ProbeEvidence(val directLatencyMs: Long, val directSuccess: Boolean, val vpnLatencyMs: Long, val vpnSuccess: Boolean, val jitterMs: Long, val timestampMs: Long = System.currentTimeMillis())
 
 @Singleton
@@ -219,16 +243,8 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
-    internal fun classifyFault(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind {
-        val directBad = !direct.success || direct.latencyMs > SUSPECT_RTT_MS
-        val directFast = direct.success && direct.latencyMs < DIRECT_FAST_RTT_MS
-        val vpnBad = !vpn.success || vpn.latencyMs > SUSPECT_RTT_MS
-        return when {
-            directBad && !vpnBad -> NetworkFaultKind.NETWORK_DEGRADATION
-            directFast && vpnBad -> NetworkFaultKind.SERVER_DEGRADATION
-            else -> NetworkFaultKind.NONE
-        }
-    }
+    internal fun classifyFault(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
+        classifyProbeFault(direct, vpn, SUSPECT_RTT_MS, DIRECT_FAST_RTT_MS)
 
     private suspend fun probeSocket(host: String, port: Int, protectFromVpn: Boolean): ProbeResult =
         withContext(Dispatchers.IO) {
@@ -252,6 +268,8 @@ class AutoSwitcher @Inject constructor(
                     val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
                     ProbeResult(elapsed, true)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logCollector.warn(TAG, "Socket probe failed for $host:$port protect=$protectFromVpn: ${e.message}")
                 ProbeResult(Long.MAX_VALUE, false)
@@ -288,8 +306,11 @@ class AutoSwitcher @Inject constructor(
             logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${elapsedMs}ms ($speedMbps Mbps)")
             if (bytesRead < MICRO_PROBE_BYTES || speedMbps < MICRO_PROBE_MIN_MBPS) {
                 val last = recentEvidence.lastOrNull()
-                if (last != null && last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS &&
-                    consecutiveServerEvidence >= SERVER_DEGRADATION_CONFIRMATIONS
+                if (last != null && shouldSwitchAfterEvidence(
+                    consecutiveServerEvidence,
+                    consecutiveNetworkEvidence,
+                    last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS
+                )
                 ) {
                     performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
                 } else {
@@ -303,8 +324,11 @@ class AutoSwitcher @Inject constructor(
         } catch (e: Exception) {
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
             val last = recentEvidence.lastOrNull()
-            if (last != null && last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS &&
-                consecutiveServerEvidence >= SERVER_DEGRADATION_CONFIRMATIONS
+            if (last != null && shouldSwitchAfterEvidence(
+                consecutiveServerEvidence,
+                consecutiveNetworkEvidence,
+                last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS
+            )
             ) {
                 performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
             } else {
