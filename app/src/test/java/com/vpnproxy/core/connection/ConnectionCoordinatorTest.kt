@@ -81,6 +81,25 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun fatalError_doesNotRetryAfterSubsequentTimeout() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.state.value is ConnectionState.Error && coordinator.isFatalErrorLocked
+        }
+
+        coordinator.send(ConnectionEvent.Timeout)
+        Thread.sleep(150)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertEquals(0, coordinator.currentRetryCount())
+    }
+
+    @Test
     fun retryableTimeout_retriesThenError() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
