@@ -31,7 +31,7 @@ class HealthChecker @Inject constructor(
         private const val TAG = "HealthChecker"
         private const val LATENCY_TIMEOUT_MS = 1500
         private const val LATENCY_TEST_URL = "https://www.gstatic.com/generate_204"
-        private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=1048576"
+        private const val SPEED_TEST_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val MAX_CONCURRENCY = 10
     }
 
