@@ -123,7 +123,7 @@ class VpnProxyService : VpnService() {
             context = this,
             logCollector = logCollector,
             isVpnActive = { _isRunning.value },
-            isBusy = { (_serviceState.value == ServiceState.Starting) || autoSwitcher.isSwitching() },
+            isBusy = { _serviceState.value == ServiceState.Starting || _serviceState.value == ServiceState.Stopping || autoSwitcher.isSwitching() },
             onReconnectRequested = {
                 Log.d(TAG, "Network reconnect → ConnectionEvent.NetworkChanged")
                 connectionCoordinator.send(ConnectionEvent.NetworkChanged)
@@ -137,9 +137,11 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = scope.launch {
             connectionCoordinator.state.collect { state ->
                 if (_serviceState.value == ServiceState.Stopping) return@collect
-                if (state is ConnectionState.Verifying) _serviceState.value = ServiceState.Verifying
-                else if (state is ConnectionState.Disconnected && _serviceState.value != ServiceState.Failed("")) _serviceState.value = ServiceState.Idle
-            Log.d(TAG, "Service reacting to state: $state")
+                if (state is ConnectionState.Verifying) transitionServiceState(ServiceState.Verifying)
+                else if (state is ConnectionState.Disconnected && _serviceState.value !is ServiceState.Failed) {
+                    transitionServiceState(ServiceState.Idle)
+                }
+                Log.d(TAG, "Service reacting to state: $state")
                 logCollector.info(TAG, "Service reacting to state: $state")
                 when (state) {
                     is ConnectionState.Connecting,
@@ -220,7 +222,7 @@ class VpnProxyService : VpnService() {
     }
 
     private fun promoteToForeground(text: String) {
-        if ((_serviceState.value == ServiceState.Stopping)) return
+        if (_serviceState.value == ServiceState.Stopping) return
         try {
             val notification = buildNotification(text)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -237,6 +239,11 @@ class VpnProxyService : VpnService() {
             Log.e("VpnService", "startForeground FAILED", t)
             throw t
         }
+    }
+
+    private fun transitionServiceState(next: ServiceState) {
+        _serviceState.value = next
+        logCollector.debug(TAG, "Service lifecycle state -> $next")
     }
 
     private fun scheduleIdleStop() {
@@ -292,11 +299,11 @@ class VpnProxyService : VpnService() {
     }
 
     private suspend fun startVpnSession() {
-        Log.i(TAG, "startVpnSession: (_serviceState.value == ServiceState.Starting)=$(_serviceState.value == ServiceState.Starting) isRunning=${_isRunning.value}")
+        Log.i(TAG, "startVpnSession: serviceState=${_serviceState.value} isRunning=${_isRunning.value}")
         if ((_serviceState.value == ServiceState.Stopping)) return
         if ((_serviceState.value == ServiceState.Starting)) return
         _lastError.value = null
-        _serviceState.value = ServiceState.Starting
+        transitionServiceState(ServiceState.Starting)
         try {
             Log.d("VpnService", "startVpnSession on ${Thread.currentThread().name}")
             logCollector.info(TAG, "Starting VPN orchestrator (actor-driven)…")
@@ -355,7 +362,7 @@ class VpnProxyService : VpnService() {
             trafficCollector.resetSession()
 
             _isRunning.value = true
-            _serviceState.value = ServiceState.Active
+            transitionServiceState(ServiceState.Active)
             isReconnecting.set(false)
             promoteToForeground("Проверка интернет-трафика…")
             updateNotification("Проверка интернет-трафика…")
@@ -374,7 +381,7 @@ class VpnProxyService : VpnService() {
             logCollector.error(TAG, "Failed to start VPN", t)
             val reasonMsg = t.message ?: "start failed"
             _lastError.value = reasonMsg
-            _serviceState.value = ServiceState.Failed(reasonMsg)
+            transitionServiceState(ServiceState.Failed(reasonMsg))
             stopVpnInternal("startVpnSession failed", t)
             emitCoreError(t)
             stopSelf()
@@ -394,7 +401,7 @@ class VpnProxyService : VpnService() {
 
     private fun stopVpnKeepAlive(reason: String) {
         if ((_serviceState.value == ServiceState.Stopping)) return
-        if (!_isRunning.value && !(_serviceState.value == ServiceState.Starting)) {
+        if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
             Log.d(TAG, "stopVpnKeepAlive: already stopped, skip ($reason)")
             logCollector.debug(TAG, "stopVpnKeepAlive skipped — already stopped ($reason)")
             return
@@ -424,6 +431,7 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
+            if (_serviceState.value !is ServiceState.Failed && !softRestart) transitionServiceState(ServiceState.Idle)
             if (!softRestart) {
                 stopBatteryPeriodicLogging()
             }
@@ -471,7 +479,7 @@ class VpnProxyService : VpnService() {
             Log.d(TAG, "forceStopService already in progress, skip ($reason)")
             return
         }
-        _serviceState.value = ServiceState.Stopping
+        transitionServiceState(ServiceState.Stopping)
         Log.e(TAG, "forceStopService: $reason")
         logCollector.warn(TAG, "forceStopService: $reason")
 
