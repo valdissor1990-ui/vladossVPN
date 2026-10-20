@@ -451,6 +451,11 @@ class VpnProxyService : VpnService() {
         } catch (t: Throwable) {
             logCollector.error(TAG, "Error stopping VPN", t)
             transitionServiceState(ServiceState.Failed(t.message ?: "stop failed"))
+        } finally {
+            // Cancellation during a soft restart must not strand the next start in Stopping.
+            if (!serviceWasAlreadyStopping && _serviceState.value == ServiceState.Stopping) {
+                transitionServiceState(ServiceState.Idle)
+            }
         }
     }
 
