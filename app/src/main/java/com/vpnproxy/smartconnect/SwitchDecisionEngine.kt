@@ -5,6 +5,15 @@ import java.util.ArrayDeque
 internal enum class NetworkFaultKind { NONE, NETWORK_DEGRADATION, SERVER_DEGRADATION }
 internal data class ProbeResult(val latencyMs: Long, val success: Boolean)
 
+internal data class ProbeEvidence(
+    val directLatencyMs: Long,
+    val directSuccess: Boolean,
+    val vpnLatencyMs: Long,
+    val vpnSuccess: Boolean,
+    val jitterMs: Long,
+    val timestampMs: Long = System.currentTimeMillis()
+)
+
 /** Pure classification helpers retained as top-level functions for existing unit-test callers. */
 internal fun classifyProbeFault(
     direct: ProbeResult,
@@ -39,6 +48,7 @@ internal class SwitchDecisionEngine {
     private var networkEvidence = 0
     private var cooldownUntil = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
+    private val recentEvidence = ArrayDeque<ProbeEvidence>()
 
     val consecutiveServerEvidence: Int get() = serverEvidence
     val consecutiveNetworkEvidence: Int get() = networkEvidence
@@ -46,6 +56,25 @@ internal class SwitchDecisionEngine {
 
     fun classify(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
         classifyProbeFault(direct, vpn)
+
+    @Synchronized
+    fun recordEvidence(direct: ProbeResult, vpn: ProbeResult, jitterMs: Long, nowMs: Long = System.currentTimeMillis()) {
+        trimEvidence(nowMs)
+        recentEvidence.addLast(ProbeEvidence(direct.latencyMs, direct.success, vpn.latencyMs, vpn.success, jitterMs, nowMs))
+        while (recentEvidence.size > AutoSwitcherConfig.evidenceHistoryLimit) recentEvidence.removeFirst()
+    }
+
+    @Synchronized
+    fun latestEvidence(nowMs: Long = System.currentTimeMillis()): ProbeEvidence? {
+        trimEvidence(nowMs)
+        return recentEvidence.lastOrNull()
+    }
+
+    private fun trimEvidence(nowMs: Long) {
+        while (recentEvidence.isNotEmpty() && nowMs - recentEvidence.peekFirst().timestampMs > AutoSwitcherConfig.evidenceWindowMs) {
+            recentEvidence.removeFirst()
+        }
+    }
 
     fun shouldSwitch(directPathHealthy: Boolean): Boolean =
         shouldSwitchAfterEvidence(serverEvidence, networkEvidence, directPathHealthy)
