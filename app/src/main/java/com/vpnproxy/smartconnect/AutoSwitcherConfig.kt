@@ -24,7 +24,7 @@ object AutoSwitcherConfig {
     const val microProbeBufferBytes = 8 * 1_024
     const val directProbePort = 53
     const val evidenceHistoryLimit = 12
-    const val microProbeCallTimeoutSeconds = 3L
+    const val microProbeCallTimeoutSeconds = 6L
     const val microProbeLogSwitchLimit = 3
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
