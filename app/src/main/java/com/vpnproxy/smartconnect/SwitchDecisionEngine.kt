@@ -44,6 +44,12 @@ internal class SwitchDecisionEngine {
     val consecutiveNetworkEvidence: Int get() = networkEvidence
     val cooldownUntilMs: Long get() = synchronized(this) { cooldownUntil }
 
+    fun classify(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
+        classifyProbeFault(direct, vpn)
+
+    fun shouldSwitch(directPathHealthy: Boolean): Boolean =
+        shouldSwitchAfterEvidence(serverEvidence, networkEvidence, directPathHealthy)
+
     @Synchronized
     fun record(classification: NetworkFaultKind): Pair<Int, Int> {
         when (classification) {
