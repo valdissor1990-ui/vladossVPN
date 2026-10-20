@@ -358,9 +358,9 @@ class VpnProxyService : VpnService() {
 
             _isRunning.value = true
             isReconnecting.set(false)
-            promoteToForeground(getString(R.string.state_connected))
-            updateNotification(getString(R.string.state_connected))
-            logCollector.info(TAG, "Sing-box VPN started successfully")
+            promoteToForeground("Проверка интернет-трафика…")
+            updateNotification("Проверка интернет-трафика…")
+            logCollector.info(TAG, "Sing-box VPN started; validating actual traffic")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
             try {
                 batteryLogger.logSnapshot("vpn_connected")
