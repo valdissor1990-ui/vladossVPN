@@ -415,10 +415,13 @@ class AutoSwitcher @Inject constructor(
 
     private fun isRussian(config: ParsedConfig): Boolean {
         val name = config.name.lowercase()
+        val provider = config.providerTag.lowercase()
         val sni = config.sni.orEmpty().lowercase()
-        return config.providerTag.equals("RU", ignoreCase = true) ||
-            config.providerTag.contains("🇷🇺") || config.name.contains("🇷🇺") ||
-            Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(name) ||
+        val ruToken = Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)")
+        return config.providerTag.contains("🇷🇺") ||
+            ruToken.containsMatchIn(provider) ||
+            config.name.contains("🇷🇺") ||
+            ruToken.containsMatchIn(name) ||
             name.contains(".ru") || sni.contains(".ru")
     }
 
@@ -448,6 +451,16 @@ class AutoSwitcher @Inject constructor(
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
                     .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+                if (ranked.isEmpty()) {
+                    val currentName = _currentServer.value?.config?.name ?: "unknown"
+                    logCollector.warn(
+                        TAG,
+                        "0 reachable servers — network may be blocked; keeping current server [$currentName], automatic switching suppressed"
+                    )
+                    // Preserve the previous ranking and current server. An empty probe result is not
+                    // evidence that a different server is healthy.
+                    return@launch
+                }
                 _rankedServers.value = ranked
                 logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
 
