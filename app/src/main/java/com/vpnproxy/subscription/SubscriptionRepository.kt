@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
@@ -82,8 +83,10 @@ class SubscriptionRepository @Inject constructor(
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
+        .readTimeout(1500, TimeUnit.MILLISECONDS)
+        .callTimeout(1500, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
         .build()
 
     private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
@@ -279,7 +282,9 @@ class SubscriptionRepository @Inject constructor(
                     if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
                         requestBuilder.header("If-None-Match", cachedEtag)
                     }
-                    httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                    runInterruptible(Dispatchers.IO) {
+                        httpClient.newCall(requestBuilder.build()).execute()
+                    }.use { response ->
                         if (response.code == 304) {
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
