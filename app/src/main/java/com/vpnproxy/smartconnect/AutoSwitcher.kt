@@ -297,7 +297,7 @@ class AutoSwitcher @Inject constructor(
             } else {
                 vpnService?.reconnectAfterSlowServerSwitch()
             }
-            logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
+            logCollector.info(TAG, "Slow-server switch succeeded; cooldown until ${decisionEngine.cooldownUntilMs}")
         } else {
             logCollector.warn(TAG, "Slow-server switch could not select a different server")
         }
