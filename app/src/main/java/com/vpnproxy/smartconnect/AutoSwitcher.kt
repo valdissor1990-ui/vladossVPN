@@ -194,7 +194,7 @@ class AutoSwitcher @Inject constructor(
             val speedMbps = result.speedMbps
             logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${result.elapsedMs}ms ($speedMbps Mbps)")
             if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
-                val last = recentEvidence.lastOrNull()
+                val last = decisionEngine.latestEvidence()
                 if (last != null && decisionEngine.shouldSwitch(
                     last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
                 )
@@ -210,7 +210,7 @@ class AutoSwitcher @Inject constructor(
             throw e
         } catch (e: Exception) {
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
-            val last = recentEvidence.lastOrNull()
+            val last = decisionEngine.latestEvidence()
             if (last != null && decisionEngine.shouldSwitch(
                 last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
             )
