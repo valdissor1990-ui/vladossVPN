@@ -56,4 +56,18 @@ class AutoSwitcherTest {
         assertTrue(engine.canAttemptSwitch(nowMs = 1_000L + AutoSwitcherConfig.switchWindowMs + 1))
     }
 
+    @Test
+    fun decisionEngine_discardsEvidenceOutsideHistoryWindow() {
+        val engine = SwitchDecisionEngine()
+        val old = ProbeResult(latencyMs = 25L, success = true)
+        val slow = ProbeResult(latencyMs = 900L, success = true)
+        engine.recordEvidence(old, slow, jitterMs = 10L, nowMs = 1_000L)
+
+        assertEquals(1_000L, engine.latestEvidence(nowMs = 1_000L)?.timestampMs)
+        assertEquals(
+            null,
+            engine.latestEvidence(nowMs = 1_000L + AutoSwitcherConfig.evidenceWindowMs + 1)
+        )
+    }
+
 }
