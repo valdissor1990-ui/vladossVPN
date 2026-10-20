@@ -9,6 +9,7 @@ import java.net.Socket
 import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -34,6 +35,10 @@ import javax.inject.Singleton
 
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
 
+internal enum class NetworkFaultKind { NONE, NETWORK_DEGRADATION, SERVER_DEGRADATION }
+internal data class ProbeResult(val latencyMs: Long, val success: Boolean)
+private data class ProbeEvidence(val directLatencyMs: Long, val directSuccess: Boolean, val vpnLatencyMs: Long, val vpnSuccess: Boolean, val jitterMs: Long, val timestampMs: Long = System.currentTimeMillis())
+
 @Singleton
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
@@ -54,7 +59,10 @@ class AutoSwitcher @Inject constructor(
         private const val DIRECT_PROBE_TIMEOUT_MS = 1_500
         private const val MICRO_PROBE_TIMEOUT_MS = 3_000
         private const val MICRO_PROBE_BYTES = 51_200L
-        private const val MICRO_PROBE_URL = "https://speed.cloudflare.com/__down?bytes=51200"
+        private const val MICRO_PROBE_URL = "https://proof.ovh.net/files/1Mb.dat"
+        private const val SERVER_DEGRADATION_CONFIRMATIONS = 2
+        private const val NETWORK_DEGRADATION_CONFIRMATIONS = 2
+        private const val EVIDENCE_WINDOW_MS = 10 * 60_000L
         private const val MAX_CONSECUTIVE_ERRORS = 3
         private const val RTT_DEGRADATION_FACTOR = 3.0
     }
@@ -75,6 +83,9 @@ class AutoSwitcher @Inject constructor(
     @Volatile private var state = AutoSwitchState.MONITORING
     private var cooldownUntilMs = 0L
     private val recentSwitchesMs = ArrayDeque<Long>()
+    private val recentEvidence = ArrayDeque<ProbeEvidence>()
+    private var consecutiveServerEvidence = 0
+    private var consecutiveNetworkEvidence = 0
     private val microProbeClient = OkHttpClient.Builder()
         .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
         .connectTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -162,8 +173,6 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
-    private data class ProbeResult(val latencyMs: Long, val success: Boolean)
-
     private suspend fun validateSlowServer(config: ParsedConfig, measuredRtt: Long, jitterMs: Long) {
         if (System.currentTimeMillis() < cooldownUntilMs || switching.get()) {
             transitionTo(AutoSwitchState.MONITORING, "cooldown or switch already active")
@@ -172,20 +181,52 @@ class AutoSwitcher @Inject constructor(
         transitionTo(AutoSwitchState.VALIDATING, "active direct-vs-VPN socket validation")
         val direct = probeSocket("1.1.1.1", 53, protectFromVpn = true)
         val vpn = probeSocket(config.address, config.port, protectFromVpn = false)
+        recentEvidence.addLast(ProbeEvidence(direct.latencyMs, direct.success, vpn.latencyMs, vpn.success, jitterMs))
+        val now = System.currentTimeMillis()
+        while (recentEvidence.isNotEmpty() && now - recentEvidence.peekFirst().timestampMs > EVIDENCE_WINDOW_MS) {
+            recentEvidence.removeFirst()
+        }
+        while (recentEvidence.size > 12) recentEvidence.removeFirst()
+
+        val classification = classifyFault(direct, vpn)
         logCollector.info(
             TAG,
             "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
-                "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms"
+                "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms; " +
+                "classification=$classification serverEvidence=$consecutiveServerEvidence networkEvidence=$consecutiveNetworkEvidence"
         )
-        when {
-            !direct.success || direct.latencyMs > SUSPECT_RTT_MS -> {
-                transitionTo(AutoSwitchState.MONITORING, "underlying network is slow; reconnect manager owns recovery")
+        when (classification) {
+            NetworkFaultKind.NETWORK_DEGRADATION -> {
+                consecutiveNetworkEvidence++
+                consecutiveServerEvidence = 0
+                transitionTo(AutoSwitchState.MONITORING, "underlying network degraded; automatic server switching suppressed")
             }
-            direct.latencyMs < DIRECT_FAST_RTT_MS && (!vpn.success || vpn.latencyMs > SUSPECT_RTT_MS) -> {
-                transitionTo(AutoSwitchState.MICRO_PROBE, "direct network fast, VPN endpoint probe slow")
-                runMicroProbe()
+            NetworkFaultKind.SERVER_DEGRADATION -> {
+                consecutiveServerEvidence++
+                consecutiveNetworkEvidence = 0
+                if (consecutiveServerEvidence < SERVER_DEGRADATION_CONFIRMATIONS) {
+                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $consecutiveServerEvidence/$SERVER_DEGRADATION_CONFIRMATIONS; awaiting independent confirmation")
+                } else {
+                    transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed twice; checking transport")
+                    runMicroProbe()
+                }
             }
-            else -> transitionTo(AutoSwitchState.MONITORING, "validation did not confirm VPN-specific degradation")
+            NetworkFaultKind.NONE -> {
+                consecutiveServerEvidence = 0
+                consecutiveNetworkEvidence = 0
+                transitionTo(AutoSwitchState.MONITORING, "validation did not confirm degradation")
+            }
+        }
+    }
+
+    internal fun classifyFault(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind {
+        val directBad = !direct.success || direct.latencyMs > SUSPECT_RTT_MS
+        val directFast = direct.success && direct.latencyMs < DIRECT_FAST_RTT_MS
+        val vpnBad = !vpn.success || vpn.latencyMs > SUSPECT_RTT_MS
+        return when {
+            directBad && !vpnBad -> NetworkFaultKind.NETWORK_DEGRADATION
+            directFast && vpnBad -> NetworkFaultKind.SERVER_DEGRADATION
+            else -> NetworkFaultKind.NONE
         }
     }
 
@@ -207,7 +248,7 @@ class AutoSwitcher @Inject constructor(
                         )
                         if (!protected) return@withContext ProbeResult(Long.MAX_VALUE, false)
                     }
-                    socket.connect(InetSocketAddress(host, port), DIRECT_PROBE_TIMEOUT_MS)
+                    runInterruptible(Dispatchers.IO) { socket.connect(InetSocketAddress(host, port), DIRECT_PROBE_TIMEOUT_MS) }
                     val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
                     ProbeResult(elapsed, true)
                 }
@@ -246,15 +287,29 @@ class AutoSwitcher @Inject constructor(
             val speedMbps = bytesRead * 8.0 / 1_000_000.0 / (elapsedMs / 1_000.0)
             logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${elapsedMs}ms ($speedMbps Mbps)")
             if (bytesRead < MICRO_PROBE_BYTES || speedMbps < MICRO_PROBE_MIN_MBPS) {
-                performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
+                val last = recentEvidence.lastOrNull()
+                if (last != null && last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS &&
+                    consecutiveServerEvidence >= SERVER_DEGRADATION_CONFIRMATIONS
+                ) {
+                    performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
+                } else {
+                    transitionTo(AutoSwitchState.MONITORING, "micro-probe low speed but direct path is not proven healthy")
+                }
             } else {
                 transitionTo(AutoSwitchState.MONITORING, "micro-probe recovered; transient glitch")
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logCollector.error(TAG, "Micro-probe timed out/failed; treating server as overloaded", e)
-            performSlowServerSwitch("micro-probe failed: ${e.message}")
+            logCollector.error(TAG, "Micro-probe timed out/failed", e)
+            val last = recentEvidence.lastOrNull()
+            if (last != null && last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS &&
+                consecutiveServerEvidence >= SERVER_DEGRADATION_CONFIRMATIONS
+            ) {
+                performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
+            } else {
+                transitionTo(AutoSwitchState.MONITORING, "micro-probe failed without sufficient direct-path evidence")
+            }
         }
     }
 
