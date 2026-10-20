@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,10 +30,25 @@ fun SettingsScreen(
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
     val updateInterval by viewModel.updateInterval.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
     var showIntervalDialog by remember { mutableStateOf(false) }
     var showSplitTunnelScreen by remember { mutableStateOf(false) }
     val intervals = listOf(1, 3, 6, 12, 24)
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        updateViewModel.feedback.collect { feedback ->
+            when (feedback) {
+                is UpdateViewModel.Feedback.UpToDate ->
+                    snackbarHostState.showSnackbar("У вас установлена последняя версия")
+                is UpdateViewModel.Feedback.Error ->
+                    snackbarHostState.showSnackbar(feedback.message)
+            }
+        }
+    }
 
     if (showSplitTunnelScreen) {
         SplitTunnelScreen(onBack = { showSplitTunnelScreen = false })
@@ -49,7 +65,8 @@ fun SettingsScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -107,7 +124,19 @@ fun SettingsScreen(
                     Text("Проверить обновления сейчас", style = MaterialTheme.typography.bodyLarge)
                     Text("Запросить GitHub Releases", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
-                TextButton(onClick = { updateViewModel.check(force = true) }) { Text("Проверить") }
+                TextButton(
+                    onClick = { updateViewModel.check(force = true) },
+                    enabled = !isCheckingUpdates
+                ) {
+                    if (isCheckingUpdates) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Проверить")
+                    }
+                }
             }
 
             Text("О ПРИЛОЖЕНИИ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
