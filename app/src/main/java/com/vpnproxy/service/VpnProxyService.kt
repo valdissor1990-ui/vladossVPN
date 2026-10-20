@@ -146,10 +146,16 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         cancelIdleStop()
+                        connectionCoordinator.currentSelectedServer()?.let { autoSwitcher.forceSelect(it) }
                         restartVpnForDesiredState(state)
+                    }
+                    is ConnectionState.Verifying -> {
+                        cancelIdleStop()
+                        updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
                         cancelIdleStop()
+                        autoSwitcher.startMonitoring()
                         if (!_isRunning.value && !startInProgress) {
                             restartVpnForDesiredState(state)
                         } else {
@@ -349,13 +355,12 @@ class VpnProxyService : VpnService() {
 
             trafficCollector.start()
             trafficCollector.resetSession()
-            autoSwitcher.startMonitoring()
 
             _isRunning.value = true
             isReconnecting.set(false)
-            promoteToForeground(getString(R.string.state_connected))
-            updateNotification(getString(R.string.state_connected))
-            logCollector.info(TAG, "Sing-box VPN started successfully")
+            promoteToForeground("Проверка интернет-трафика…")
+            updateNotification("Проверка интернет-трафика…")
+            logCollector.info(TAG, "Sing-box VPN started; validating actual traffic")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
             try {
                 batteryLogger.logSnapshot("vpn_connected")
