@@ -29,7 +29,7 @@ class HealthChecker @Inject constructor(
 ) {
     companion object {
         private const val TAG = "HealthChecker"
-        private const val LATENCY_TIMEOUT_MS = 3000
+        private const val LATENCY_TIMEOUT_MS = 1500
         private const val LATENCY_TEST_URL = "https://www.gstatic.com/generate_204"
         private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=1048576"
         private const val MAX_CONCURRENCY = 10
@@ -51,8 +51,8 @@ class HealthChecker @Inject constructor(
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .callTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
         .build()
 
     suspend fun testLatency(configs: List<ParsedConfig>): List<LatencyResult> =
@@ -71,11 +71,15 @@ class HealthChecker @Inject constructor(
                 withSingboxClient(config) { client ->
                     val startedAt = System.nanoTime()
                     val request = Request.Builder().url(LATENCY_TEST_URL).head().build()
-                    client.newCall(request).execute().use { response ->
-                        val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-                        LatencyResult(config, elapsed, success = response.code in 200..399)
+                    runInterruptible(Dispatchers.IO) {
+                        client.newCall(request).execute().use { response ->
+                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                            LatencyResult(config, elapsed, success = response.code in 200..399)
+                        }
                     }
                 }
+            } catch (c: CancellationException) {
+                throw c
             } catch (_: Exception) {
                 LatencyResult(config, Long.MAX_VALUE, success = false)
             }
@@ -91,21 +95,25 @@ class HealthChecker @Inject constructor(
     private suspend fun testSingleSpeed(config: ParsedConfig): SpeedResult =
         withContext(Dispatchers.IO) {
             try {
-                val action: (OkHttpClient) -> SpeedResult = { client ->
+                val action: suspend (OkHttpClient) -> SpeedResult = { client ->
                     val request = Request.Builder()
                         .url(SPEED_TEST_URL)
                         .header("User-Agent", "VPNProxy/1.0")
                         .build()
                     val startedAt = System.currentTimeMillis()
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
-                        val bytes = response.body?.bytes() ?: ByteArray(0)
-                        val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
-                        val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
-                        SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
+                    runInterruptible(Dispatchers.IO) {
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
+                            val bytes = response.body?.bytes() ?: ByteArray(0)
+                            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+                            val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
+                            SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
+                        }
                     }
                 }
                 withSingboxClient(config, action)
+            } catch (c: CancellationException) {
+                throw c
             } catch (_: Exception) {
                 SpeedResult(config, 0f, success = false)
             }
@@ -118,7 +126,7 @@ class HealthChecker @Inject constructor(
      */
     private suspend fun <T> withSingboxClient(
         config: ParsedConfig,
-        action: (OkHttpClient) -> T
+        action: suspend (OkHttpClient) -> T
     ): T {
         singboxProbeMutex.lock()
         try {
@@ -135,8 +143,8 @@ class HealthChecker @Inject constructor(
                 OkHttpClient.Builder()
                     .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
                     .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .callTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+                    .callTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
                     .retryOnConnectionFailure(false)
                     .build()
             } else {
