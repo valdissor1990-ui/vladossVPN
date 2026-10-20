@@ -10,7 +10,7 @@ class AutoSwitcherTest {
     @Test
     fun test_noSwitchIfNetworkIsBad() {
         val direct = ProbeResult(latencyMs = Long.MAX_VALUE, success = false)
-        val vpn = ProbeResult(latencyMs = 900, success = true)
+        val vpn = ProbeResult(latencyMs = 100, success = true)
 
         assertEquals(NetworkFaultKind.NETWORK_DEGRADATION, classifyProbeFault(direct, vpn))
         assertFalse(
