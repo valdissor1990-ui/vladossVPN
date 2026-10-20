@@ -163,30 +163,36 @@ class AutoSwitcher @Inject constructor(
     private suspend fun checkCurrentServer() {
         val current = _currentServer.value ?: return
         if (switching.get()) return
+
         try {
             val result = healthChecker.testLatency(listOf(current.config)).firstOrNull() ?: return
             val jitter = previousRtt?.let { kotlin.math.abs(result.latencyMs - it) } ?: 0L
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
-            val measuredRtt = if (result.success) result.latencyMs else Long.MAX_VALUE
-            if (measuredRtt > SUSPECT_RTT_MS || jitter > SUSPECT_JITTER_MS) {
-                if (state == AutoSwitchState.MONITORING) {
-                    transitionTo(AutoSwitchState.SUSPECT, "RTT=${measuredRtt}ms, jitter=${jitter}ms")
-                    validateSlowServer(current.config, measuredRtt, jitter)
-                    return
-                }
-            }
-            if (!result.success) {
+
+            if (!result.success || result.latencyMs == Long.MAX_VALUE) {
                 consecutiveErrors++
-                logCollector.warn(TAG, "Health check failed for ${current.config.name}", mapOf("errors" to consecutiveErrors))
+                logCollector.warn(
+                    TAG,
+                    "Health check failed for ${current.config.name}",
+                    mapOf("errors" to consecutiveErrors)
+                )
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                    logCollector.warn(TAG, "Max errors reached, re-selecting")
-                    reSelect()
+                    logCollector.warn(TAG, "Repeated health-check failures; require direct-vs-VPN validation before any switch")
                 }
-            } else {
-                consecutiveErrors = 0
-                if (baselineRtt > 0 && result.latencyMs > baselineRtt * RTT_DEGRADATION_FACTOR) {
-                    logCollector.warn(TAG, "RTT degraded: ${result.latencyMs}ms vs baseline ${baselineRtt}ms")
-                    reSelect()
+                if (state == AutoSwitchState.MONITORING) {
+                    transitionTo(AutoSwitchState.SUSPECT, "health check failed; errors=$consecutiveErrors")
+                    validateSlowServer(current.config, Long.MAX_VALUE, jitter)
+                }
+                return
+            }
+
+            consecutiveErrors = 0
+            val baselineDegraded = baselineRtt > 0 && result.latencyMs > baselineRtt * RTT_DEGRADATION_FACTOR
+            if (baselineDegraded || result.latencyMs > SUSPECT_RTT_MS || jitter > SUSPECT_JITTER_MS) {
+                if (state == AutoSwitchState.MONITORING) {
+                    val reason = "RTT=${result.latencyMs}ms, baseline=${baselineRtt}ms, jitter=${jitter}ms"
+                    transitionTo(AutoSwitchState.SUSPECT, reason)
+                    validateSlowServer(current.config, result.latencyMs, jitter)
                 }
             }
         } catch (e: CancellationException) {
