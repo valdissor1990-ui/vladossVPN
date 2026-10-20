@@ -82,6 +82,7 @@ class ConnectionCoordinator @Inject constructor(
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
     private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
+    private var trafficFailures: Int = 0
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
 
     @Volatile
@@ -254,6 +255,7 @@ class ConnectionCoordinator @Inject constructor(
                     .sortedBy { if (isRussianServer(it)) 0 else 1 }
                 fallbackIndex = -1
                 fallbackAttempts = 0
+                trafficFailures = 0
                 logI("Fallback candidates configured: ${fallbackCandidates.size}")
             }
 
@@ -376,13 +378,14 @@ class ConnectionCoordinator @Inject constructor(
                 if (event.success) {
                     retryCount = 0
                     fallbackAttempts = 0
+                    trafficFailures = 0
                     logI("Traffic validation passed for ${event.serverName}")
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
-                    fallbackAttempts++
-                    logW("Server does not pass traffic: ${event.serverName} (attempt $fallbackAttempts/$MAX_FALLBACK_ATTEMPTS)")
+                    trafficFailures++
+                    logW("Server does not pass traffic: ${event.serverName} (attempt $trafficFailures/$MAX_FALLBACK_ATTEMPTS)")
                     val next = fallbackCandidates.firstOrNull()
-                    if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS || next == null) {
+                    if (trafficFailures >= MAX_FALLBACK_ATTEMPTS || next == null) {
                         val message = "Все сервера недоступны"
                         logE("$message; traffic validation failed on ${event.serverName}")
                         isFatalErrorLocked = true
