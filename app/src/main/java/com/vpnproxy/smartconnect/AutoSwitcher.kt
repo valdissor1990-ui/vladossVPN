@@ -182,11 +182,11 @@ class AutoSwitcher @Inject constructor(
             TAG,
             "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
                 "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms; " +
-                "classification=$classification serverEvidence=${decisionEngine.consecutiveServerEvidence} networkEvidence=${decisionEngine.consecutiveNetworkEvidence}"
+                "classification=$classification serverEvidence=${decisionEngine.decisionEngine.consecutiveServerEvidence} networkEvidence=${decisionEngine.decisionEngine.consecutiveNetworkEvidence}"
         )
         when (classification) {
             NetworkFaultKind.NETWORK_DEGRADATION -> {
-                val networkConfirmations = decisionEngine.consecutiveNetworkEvidence
+                val networkConfirmations = decisionEngine.decisionEngine.consecutiveNetworkEvidence
                 val networkStatus = if (networkConfirmations >= AutoSwitcherConfig.networkDegradationConfirmations) {
                     "underlying network degradation confirmed $networkConfirmations times; automatic server switching suppressed"
                 } else {
@@ -195,7 +195,7 @@ class AutoSwitcher @Inject constructor(
                 transitionTo(AutoSwitchState.MONITORING, networkStatus)
             }
             NetworkFaultKind.SERVER_DEGRADATION -> {
-                val serverConfirmations = decisionEngine.consecutiveServerEvidence
+                val serverConfirmations = decisionEngine.decisionEngine.consecutiveServerEvidence
                 if (serverConfirmations < AutoSwitcherConfig.serverDegradationConfirmations) {
                     transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $serverConfirmations/${AutoSwitcherConfig.serverDegradationConfirmations}; awaiting independent confirmation")
                 } else {
@@ -243,8 +243,8 @@ class AutoSwitcher @Inject constructor(
             if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
                 val last = recentEvidence.lastOrNull()
                 if (last != null && shouldSwitchAfterEvidence(
-                    consecutiveServerEvidence,
-                    consecutiveNetworkEvidence,
+                    decisionEngine.consecutiveServerEvidence,
+                    decisionEngine.consecutiveNetworkEvidence,
                     last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
                 )
                 ) {
@@ -261,8 +261,8 @@ class AutoSwitcher @Inject constructor(
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
             val last = recentEvidence.lastOrNull()
             if (last != null && shouldSwitchAfterEvidence(
-                consecutiveServerEvidence,
-                consecutiveNetworkEvidence,
+                decisionEngine.consecutiveServerEvidence,
+                decisionEngine.consecutiveNetworkEvidence,
                 last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
             )
             ) {
