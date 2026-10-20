@@ -34,7 +34,7 @@ class SubscriptionUpdateWorker(
     companion object {
         const val WORK_NAME = "subscription_update"
 
-        fun schedule(context: Context, intervalHours: Int = 6) {
+        fun schedule(context: Context, intervalHours: Int = 1) {
             val hours = intervalHours.coerceIn(1, 24).toLong()
             val request = PeriodicWorkRequestBuilder<SubscriptionUpdateWorker>(
                 hours, TimeUnit.HOURS
