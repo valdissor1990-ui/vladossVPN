@@ -190,10 +190,13 @@ class HomeViewModel @Inject constructor(
 
     private fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean {
         val name = config.name.lowercase()
+        val provider = config.providerTag.lowercase()
         val sni = config.sni.orEmpty().lowercase()
-        return config.providerTag.equals("RU", ignoreCase = true) ||
-            config.providerTag.contains("🇷🇺") || name.contains("🇷🇺") ||
-            Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(name) ||
+        val ruToken = Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)")
+        return config.providerTag.contains("🇷🇺") ||
+            ruToken.containsMatchIn(provider) ||
+            name.contains("🇷🇺") ||
+            ruToken.containsMatchIn(name) ||
             name.contains(".ru") || sni.contains(".ru")
     }
 
