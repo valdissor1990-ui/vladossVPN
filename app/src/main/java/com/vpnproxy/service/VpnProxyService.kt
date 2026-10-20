@@ -291,6 +291,7 @@ class VpnProxyService : VpnService() {
                     throw c
                 } catch (t: Throwable) {
                     Log.e(TAG, "restartVpnForDesiredState failed", t)
+                    transitionServiceState(ServiceState.Failed(t.message ?: "restart failed"))
                     emitCoreError(t)
                 }
             }
@@ -449,6 +450,7 @@ class VpnProxyService : VpnService() {
             throw c
         } catch (t: Throwable) {
             logCollector.error(TAG, "Error stopping VPN", t)
+            transitionServiceState(ServiceState.Failed(t.message ?: "stop failed"))
         }
     }
 
