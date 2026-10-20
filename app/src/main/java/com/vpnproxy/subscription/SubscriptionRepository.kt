@@ -49,8 +49,6 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
-        private const val BOOTSTRAP_ASSET = "default_servers.txt"
-        const val BOOTSTRAP_TAG = "Bootstrap"
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
@@ -106,9 +104,6 @@ class SubscriptionRepository @Inject constructor(
     private val _lastRefreshUsedCache = MutableStateFlow(false)
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
-    private val _usingBootstrap = MutableStateFlow(false)
-    val usingBootstrap: StateFlow<Boolean> = _usingBootstrap.asStateFlow()
-
     private val refreshMutex = Mutex()
 
     init {
@@ -119,15 +114,9 @@ class SubscriptionRepository @Inject constructor(
             _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
                 "${it.address}|${it.port}|${it.uuid}"
             }
-            _usingBootstrap.value = false
             logCollector.info(TAG, "Cold start from cache: ${_allConfigs.value.size}")
         } else {
-            val boot = loadBootstrapConfigs()
-            if (boot.isNotEmpty()) {
-                _allConfigs.value = boot
-                _usingBootstrap.value = true
-                logCollector.info(TAG, "Cold start from bootstrap assets: ${boot.size}")
-            }
+            logCollector.warn(TAG, "No cached subscription configs available at cold start")
         }
     }
 
@@ -164,19 +153,6 @@ class SubscriptionRepository @Inject constructor(
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
             logCollector.info(TAG, "Default subscription added: $DEFAULT_SUBSCRIPTION_URL")
-        }
-    }
-
-    fun loadBootstrapConfigs(): List<ParsedConfig> {
-        return try {
-            val text = context.assets.open(BOOTSTRAP_ASSET).bufferedReader().use { it.readText() }
-            if (text.isBlank()) return emptyList()
-            val configs = parser.parse(text, providerTag = BOOTSTRAP_TAG)
-            logCollector.info(TAG, "Bootstrap configs loaded: ${configs.size}")
-            configs
-        } catch (e: Exception) {
-            logCollector.warn(TAG, "Bootstrap assets unavailable: ${e.message}")
-            emptyList()
         }
     }
 
@@ -245,19 +221,9 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            if (allConfigsList.isEmpty()) {
-                val boot = loadBootstrapConfigs()
-                if (boot.isNotEmpty()) {
-                    allConfigsList.addAll(boot)
-                    totalConfigs = boot.size
-                    _usingBootstrap.value = true
-                    logCollector.info(TAG, "Fallback to bootstrap assets: ${boot.size}")
-                }
-            } else if (anyNetworkSuccess) {
-                _usingBootstrap.value = false
+            if (allConfigsList.isNotEmpty() && anyNetworkSuccess) {
                 saveConfigsToCache(allConfigsList)
-            } else if (allConfigsList.isNotEmpty()) {
-                _usingBootstrap.value = false
+                logCollector.info(TAG, "Updated cached_configs.json from subscription source; configs=${allConfigsList.size}")
             }
 
             _allConfigs.value = allConfigsList.distinctBy {
@@ -298,6 +264,9 @@ class SubscriptionRepository @Inject constructor(
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
                             }
+                            if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
+                                throw IOException("Cached subscription body contains no valid server configs")
+                            }
                             logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
                             return@withContext cachedBody to sourceUrl
                         }
@@ -310,6 +279,9 @@ class SubscriptionRepository @Inject constructor(
                         if (body.isBlank()) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
                             throw IOException("Empty response body")
+                        }
+                        if (parser.parse(body, providerTag = sub.name).isEmpty()) {
+                            throw IOException("Subscription source returned no valid server configs")
                         }
                         val newEtag = response.header("ETag")
                         val editor = encryptedPrefs.edit().putString(bodyKey, body)
@@ -380,11 +352,10 @@ class SubscriptionRepository @Inject constructor(
         "${it.address}|${it.port}|${it.uuid}"
     }
 
-    fun getCachedConfigs(): List<ParsedConfig> {
-        val cached = loadConfigsFromCache().map { it.toParsedConfig() }
-        if (cached.isNotEmpty()) return cached
-        return loadBootstrapConfigs()
-    }
+    fun getCachedConfigs(): List<ParsedConfig> =
+        loadConfigsFromCache().map { it.toParsedConfig() }.distinctBy {
+            "${it.address}|${it.port}|${it.uuid}"
+        }
 
     @Serializable
     private data class CachedConfig(
@@ -420,7 +391,6 @@ class SubscriptionRepository @Inject constructor(
 
     private fun saveConfigsToCache(configs: List<ParsedConfig>) {
         try {
-            if (configs.all { it.providerTag == BOOTSTRAP_TAG }) return
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
             File(context.filesDir, CACHE_FILE).writeText(jsonStr)

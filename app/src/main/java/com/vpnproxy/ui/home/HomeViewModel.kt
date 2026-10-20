@@ -62,7 +62,6 @@ class HomeViewModel @Inject constructor(
         val serverCount: Int = 0,
         val isBusy: Boolean = false,
         val sessionStartedAt: Long? = null,
-        val usingBootstrap: Boolean = false,
         val isRefreshingSubscription: Boolean = false
     )
 
@@ -175,12 +174,6 @@ class HomeViewModel @Inject constructor(
         }
 
         startPinging()
-
-        viewModelScope.launch {
-            subscriptionRepository.usingBootstrap.collect { boot ->
-                _uiState.value = _uiState.value.copy(usingBootstrap = boot)
-            }
-        }
 
         viewModelScope.launch {
             subscriptionRepository.allConfigs.collect { configs ->
@@ -314,7 +307,9 @@ class HomeViewModel @Inject constructor(
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
                 var configs = subscriptionRepository.getAllConfigs()
-                if (configs.isEmpty() && hasNetwork) {
+                // Always attempt a fresh primary -> mirror update before choosing a cached server.
+                // If both sources fail, refreshAll retains/loads cached_configs.json as fallback.
+                if (hasNetwork) {
                     configs = try {
                         subscriptionRepository.refreshAll()
                         subscriptionRepository.getAllConfigs()
@@ -327,7 +322,7 @@ class HomeViewModel @Inject constructor(
                 }
                 if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
                 if (configs.isEmpty()) {
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов подписки"))
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов. Проверьте интернет и обновите подписку"))
                     return@launch
                 }
 
@@ -472,7 +467,7 @@ class HomeViewModel @Inject constructor(
                 val n = subscriptionRepository.refreshAll()
                 logCollector.info(
                     TAG,
-                    "Manual subscription refresh: $n configs, bootstrap=${subscriptionRepository.usingBootstrap.value}"
+                    "Manual subscription refresh: $n configs"
                 )
             } catch (c: CancellationException) {
                 throw c
@@ -481,7 +476,6 @@ class HomeViewModel @Inject constructor(
             } finally {
                 _uiState.value = _uiState.value.copy(
                     isRefreshingSubscription = false,
-                    usingBootstrap = subscriptionRepository.usingBootstrap.value,
                     serverCount = subscriptionRepository.getAllConfigs().size
                 )
             }
