@@ -6,6 +6,7 @@ import okhttp3.Request
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
+import java.util.ArrayDeque
 
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -172,7 +174,7 @@ class AutoSwitcher @Inject constructor(
         while (recentEvidence.isNotEmpty() && now - recentEvidence.peekFirst().timestampMs > AutoSwitcherConfig.evidenceWindowMs) {
             recentEvidence.removeFirst()
         }
-        while (recentEvidence.size > 12) recentEvidence.removeFirst()
+        while (recentEvidence.size > AutoSwitcherConfig.evidenceHistoryLimit) recentEvidence.removeFirst()
 
         val classification = classifyFault(direct, vpn)
         decisionEngine.record(classification)
@@ -180,32 +182,28 @@ class AutoSwitcher @Inject constructor(
             TAG,
             "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
                 "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms; " +
-                "classification=$classification serverEvidence=$decisionEngine.consecutiveServerEvidence networkEvidence=$decisionEngine.consecutiveNetworkEvidence"
+                "classification=$classification serverEvidence=${decisionEngine.consecutiveServerEvidence} networkEvidence=${decisionEngine.consecutiveNetworkEvidence}"
         )
         when (classification) {
             NetworkFaultKind.NETWORK_DEGRADATION -> {
-                consecutiveNetworkEvidence++
-                consecutiveServerEvidence = 0
-                val networkStatus = if (consecutiveNetworkEvidence >= AutoSwitcherConfig.networkDegradationConfirmations) {
-                    "underlying network degradation confirmed $consecutiveNetworkEvidence times; automatic server switching suppressed"
+                val networkConfirmations = decisionEngine.consecutiveNetworkEvidence
+                val networkStatus = if (networkConfirmations >= AutoSwitcherConfig.networkDegradationConfirmations) {
+                    "underlying network degradation confirmed $networkConfirmations times; automatic server switching suppressed"
                 } else {
-                    "underlying network degradation suspected ($consecutiveNetworkEvidence/$AutoSwitcherConfig.networkDegradationConfirmations); automatic server switching suppressed"
+                    "underlying network degradation suspected ($networkConfirmations/${AutoSwitcherConfig.networkDegradationConfirmations}); automatic server switching suppressed"
                 }
                 transitionTo(AutoSwitchState.MONITORING, networkStatus)
             }
             NetworkFaultKind.SERVER_DEGRADATION -> {
-                consecutiveServerEvidence++
-                consecutiveNetworkEvidence = 0
-                if (consecutiveServerEvidence < AutoSwitcherConfig.serverDegradationConfirmations) {
-                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $consecutiveServerEvidence/$AutoSwitcherConfig.serverDegradationConfirmations; awaiting independent confirmation")
+                val serverConfirmations = decisionEngine.consecutiveServerEvidence
+                if (serverConfirmations < AutoSwitcherConfig.serverDegradationConfirmations) {
+                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $serverConfirmations/${AutoSwitcherConfig.serverDegradationConfirmations}; awaiting independent confirmation")
                 } else {
                     transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed twice; checking transport")
                     runMicroProbe()
                 }
             }
             NetworkFaultKind.NONE -> {
-                consecutiveServerEvidence = 0
-                consecutiveNetworkEvidence = 0
                 transitionTo(AutoSwitchState.MONITORING, "validation did not confirm degradation")
             }
         }
