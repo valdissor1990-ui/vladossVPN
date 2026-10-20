@@ -49,6 +49,8 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
+        /** UI watchdog: if Connecting hangs without Connected/Error, request disconnect. */
+        private const val CONNECTING_UI_WATCHDOG_MS = 10_000L
     }
 
     data class UiState(
@@ -74,6 +76,7 @@ class HomeViewModel @Inject constructor(
     val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
 
     private var pingJob: Job? = null
+    private var connectingWatchdogJob: Job? = null
     private var vpnPermissionRequester: (() -> Unit)? = null
 
     init {
@@ -82,7 +85,7 @@ class HomeViewModel @Inject constructor(
                 when (state) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Disconnecting -> {
-                        // Clears Error banner when idle ForceDisconnected lands.
+                        cancelConnectingWatchdog()
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.DISCONNECTED,
                             isBusy = false,
@@ -95,8 +98,10 @@ class HomeViewModel @Inject constructor(
                             connectionState = ConnectionUiState.CONNECTING,
                             isBusy = true
                         )
+                        armConnectingWatchdog()
                     }
                     is ConnectionState.Connected -> {
+                        cancelConnectingWatchdog()
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) {
@@ -112,6 +117,7 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Error -> {
+                        cancelConnectingWatchdog()
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
@@ -162,6 +168,29 @@ class HomeViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(serverCount = configs.size)
             }
         }
+    }
+
+    private fun armConnectingWatchdog() {
+        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+                logCollector.warn(
+                    TAG,
+                    "UI connecting watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"
+                )
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(
+                    ConnectionEvent.ShowError("Превышено время подключения")
+                )
+            }
+        }
+    }
+
+    private fun cancelConnectingWatchdog() {
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = null
     }
 
     private fun startPinging() {
@@ -216,6 +245,7 @@ class HomeViewModel @Inject constructor(
             connectionState = ConnectionUiState.CONNECTING,
             isBusy = true
         )
+        armConnectingWatchdog()
         vpnPermissionRequester?.invoke()
     }
 
@@ -225,6 +255,7 @@ class HomeViewModel @Inject constructor(
         Log.i(TAG, "HomeVM: Starting connection flow (select server FIRST)...")
 
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
+        armConnectingWatchdog()
         ensureServiceRunning()
 
         viewModelScope.launch {
@@ -293,7 +324,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionDenied() {
-        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
+        cancelConnectingWatchdog()
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
             isBusy = false
@@ -301,8 +333,9 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        cancelConnectingWatchdog()
         VpnProxyService.clearError()
-        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
@@ -311,8 +344,9 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
+        cancelConnectingWatchdog()
         VpnProxyService.clearError()
-        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
