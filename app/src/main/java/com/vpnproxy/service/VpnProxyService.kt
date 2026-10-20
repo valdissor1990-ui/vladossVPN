@@ -39,8 +39,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -80,7 +78,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
     @Inject lateinit var batteryLogger: BatteryLogger
 
-    private var singBoxCore: SingBoxCore? = null
+    private var lifecycleController: VpnLifecycleController? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
@@ -94,7 +92,6 @@ class VpnProxyService : VpnService() {
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
 
-    private val lifecycleMutex = Mutex()
 
     override fun onCreate() {
         super.onCreate()
@@ -112,7 +109,8 @@ class VpnProxyService : VpnService() {
 
         try {
             autoSwitcher.attachVpnService(this)
-            singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            lifecycleController = VpnLifecycleController(core, logCollector)
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
             Log.e(TAG, "VpnProxyService.onCreate failed during Sing-box/service initialization", t)
@@ -183,7 +181,7 @@ class VpnProxyService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (_serviceState.value == ServiceState.Stopping) {
-            Log.w(TAG, "onStartCommand ignored — (_serviceState.value == ServiceState.Stopping) (action=${intent?.action})")
+            Log.w(TAG, "onStartCommand ignored — serviceState=${_serviceState.value} (action=${intent?.action})")
             return START_NOT_STICKY
         }
         Log.d("VpnService", "===== onStartCommand. Action: ${intent?.action} =====")
@@ -272,7 +270,7 @@ class VpnProxyService : VpnService() {
     private fun restartVpnForDesiredState(state: ConnectionState) {
         if ((_serviceState.value == ServiceState.Stopping)) return
         if ((_serviceState.value == ServiceState.Starting)) {
-            logCollector.debug(TAG, "restartVpn skipped: (_serviceState.value == ServiceState.Starting) for $state")
+            logCollector.debug(TAG, "restartVpn skipped: serviceState=${_serviceState.value} for $state")
             return
         }
         if (!connectionCoordinator.hasSelectedServer()) {
@@ -281,7 +279,7 @@ class VpnProxyService : VpnService() {
         }
         vpnJob?.cancel()
         vpnJob = scope.launch {
-            lifecycleMutex.withLock {
+            lifecycleController?.withLifecycleLock {
                 try {
                     if (_isRunning.value) {
                         stopVpnInternal("soft restart for $state", softRestart = true)
@@ -345,11 +343,11 @@ class VpnProxyService : VpnService() {
             }
 
             logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
-            val core = singBoxCore ?: error("Sing-box core was not initialized")
+            val controller = lifecycleController ?: error("VPN lifecycle controller was not initialized")
             try {
                 val configJson = SingboxConfigBuilder.buildVpn(parsed)
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
-                core.start(configJson)
+                controller.startCore(configJson)
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)
                 throw e
@@ -427,11 +425,11 @@ class VpnProxyService : VpnService() {
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
-            singBoxCore?.stop()
+            lifecycleController?.stopCore()
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            if (_serviceState.value !is ServiceState.Failed && !softRestart) transitionServiceState(ServiceState.Idle)
+            if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
             if (!softRestart) {
                 stopBatteryPeriodicLogging()
             }
@@ -522,7 +520,7 @@ class VpnProxyService : VpnService() {
 
     override fun onDestroy() {
         Log.e("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
-        _serviceState.value = ServiceState.Stopping
+        if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Stopping)
         try {
             connectionCoordinator.send(
                 ConnectionEvent.ForceDisconnected(reason = "Service destroyed by system")
@@ -544,13 +542,14 @@ class VpnProxyService : VpnService() {
         isReconnecting.set(false)
 
         try {
-            singBoxCore?.stop()
+            lifecycleController?.close()
         } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy singBoxCore.stop failed", t)
+            Log.e(TAG, "onDestroy lifecycle controller cleanup failed", t)
         }
         _isRunning.value = false
         scope.cancel()
-        singBoxCore = null
+        lifecycleController = null
+        if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
 
         super.onDestroy()
     }
