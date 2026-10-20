@@ -40,6 +40,7 @@ sealed class ConnectionEvent {
     /** UI requested connect (permission granted); selection may still be in progress. */
     data class ConnectRequested(val traceId: String) : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
+    data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
     data object Timeout : ConnectionEvent()
@@ -57,6 +58,7 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
+        private const val MAX_FALLBACK_ATTEMPTS = 5
         const val CONNECTING_TIMEOUT_MS = 18_000L
     }
 
@@ -74,6 +76,10 @@ class ConnectionCoordinator @Inject constructor(
     private var hasServerSelected: Boolean = false
 
     private var retryCount: Int = 0
+    private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
+    private var fallbackIndex: Int = -1
+    private var fallbackAttempts: Int = 0
+    private var activeScoredServer: ScoringEngine.ScoredServer? = null
 
     @Volatile
     var isFatalErrorLocked: Boolean = false
@@ -235,10 +241,27 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
 
+            is ConnectionEvent.SetFallbackCandidates -> {
+                fallbackCandidates = event.servers.distinctBy { "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid}" }
+                fallbackIndex = fallbackCandidates.indexOfFirst { candidate ->
+                    activeScoredServer?.config?.let { current ->
+                        candidate.config.address.equals(current.address, ignoreCase = true) && candidate.config.port == current.port && candidate.config.uuid == current.uuid
+                    } ?: false
+                }
+                fallbackAttempts = 0
+                logI("Fallback candidates configured: ${fallbackCandidates.size}")
+            }
+
             is ConnectionEvent.ServerSelected -> {
                 pendingServerName = event.server.config.name
+                activeScoredServer = event.server
                 hasServerSelected = true
                 retryCount = 0
+                fallbackIndex = fallbackCandidates.indexOfFirst { candidate ->
+                    candidate.config.address.equals(event.server.config.address, ignoreCase = true) &&
+                        candidate.config.port == event.server.config.port && candidate.config.uuid == event.server.config.uuid
+                }.takeIf { it >= 0 } ?: fallbackIndex
+                fallbackAttempts = 0
                 logI("ServerSelected: ${event.server.config.name}")
                 when (current) {
                     is ConnectionState.Disconnected,
@@ -285,8 +308,8 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.CoreError -> {
-                logE("CoreError: ${event.reason} (retry=$retryCount)")
-                handleFailure(event.reason, current)
+                logE("CoreError: ${event.reason} (retry=$retryCount; fallback=$fallbackAttempts/$MAX_FALLBACK_ATTEMPTS)")
+                if (!tryFallback(event.reason, current)) handleFailure(event.reason, current)
             }
 
             is ConnectionEvent.Timeout -> {
@@ -343,6 +366,38 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
+        if (!reason.isRetryable() || fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) return false
+        if (current !is ConnectionState.Connecting &&
+            current !is ConnectionState.Reconnecting &&
+            current !is ConnectionState.Connected
+        ) return false
+
+        var nextIndex = (fallbackIndex + 1).coerceAtLeast(0)
+        while (nextIndex < fallbackCandidates.size) {
+            val candidate = fallbackCandidates[nextIndex]
+            val active = activeScoredServer?.config
+            if (active == null ||
+                !candidate.config.address.equals(active.address, ignoreCase = true) ||
+                candidate.config.port != active.port || candidate.config.uuid != active.uuid
+            ) {
+                fallbackIndex = nextIndex
+                fallbackAttempts++
+                activeScoredServer = candidate
+                pendingServerName = candidate.config.name
+                hasServerSelected = true
+                retryCount = 0
+                isFatalErrorLocked = false
+                logW("Fallback attempt $fallbackAttempts/$MAX_FALLBACK_ATTEMPTS -> ${candidate.config.name} after $reason")
+                setState(ConnectionState.Reconnecting, reason = "fallback:$fallbackAttempts:${candidate.config.name}")
+                return true
+            }
+            nextIndex++
+        }
+        logW("Fallback exhausted: attempts=$fallbackAttempts candidates=${fallbackCandidates.size}")
+        return false
     }
 
     private fun handleFailure(reason: VpnFailureReason, current: ConnectionState) {
