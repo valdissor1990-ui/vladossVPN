@@ -251,15 +251,27 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun connect() {
-        activeTraceId = TraceId.newId()
-        Log.i(TAG, TraceId.format(TAG, "User clicked Connect", activeTraceId))
-        VpnProxyService.clearError()
-        _uiState.value = _uiState.value.copy(
-            connectionState = ConnectionUiState.CONNECTING,
-            isBusy = true
-        )
-        armConnectingWatchdog()
-        vpnPermissionRequester?.invoke()
+        Log.d(TAG, "1. Connect button clicked")
+        try {
+            activeTraceId = TraceId.newId()
+            Log.i(TAG, TraceId.format(TAG, "User clicked Connect", activeTraceId))
+            connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!))
+            Log.d(TAG, "4. Sent ConnectRequested to Actor")
+            VpnProxyService.clearError()
+            _uiState.value = _uiState.value.copy(
+                connectionState = ConnectionUiState.CONNECTING,
+                isBusy = true
+            )
+            armConnectingWatchdog()
+            vpnPermissionRequester?.invoke()
+        } catch (e: Exception) {
+            Log.e(TAG, "Connect failed critically", e)
+            connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
+            _uiState.value = _uiState.value.copy(
+                connectionState = ConnectionUiState.ERROR,
+                isBusy = false
+            )
+        }
     }
 
     fun onVpnPermissionGranted() {
@@ -271,11 +283,10 @@ class HomeViewModel @Inject constructor(
         armConnectingWatchdog()
         ensureServiceRunning()
 
-        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId))
-
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                Log.d(TAG, "2. Starting AutoSwitcher / selectBestServer")
                 logCollector.info(TAG, tmsg("Selecting best server (timeout ${SERVER_SELECTION_TIMEOUT_MS}ms)…"))
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
 
@@ -299,6 +310,7 @@ class HomeViewModel @Inject constructor(
                     autoSwitcher.selectBest(configs)
                 }
 
+                Log.d(TAG, "3. Server selection completed")
                 logCollector.info(
                     TAG,
                     tmsg(
