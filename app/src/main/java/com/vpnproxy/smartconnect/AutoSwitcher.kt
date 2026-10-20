@@ -226,7 +226,7 @@ class AutoSwitcher @Inject constructor(
                     val input = response.body?.byteStream()
                         ?: throw IllegalStateException("Empty micro-probe response")
                     input.use { stream ->
-                        val buffer = ByteArray(8 * 1024)
+                        val buffer = ByteArray(AutoSwitcherConfig.microProbeBufferBytes)
                         var total = 0L
                         while (total < AutoSwitcherConfig.microProbeBytes) {
                             val read = stream.read(buffer, 0, minOf(buffer.size.toLong(), AutoSwitcherConfig.microProbeBytes - total).toInt())
