@@ -176,7 +176,7 @@ class AutoSwitcher @Inject constructor(
         }
         while (recentEvidence.size > AutoSwitcherConfig.evidenceHistoryLimit) recentEvidence.removeFirst()
 
-        val classification = classifyFault(direct, vpn)
+        val classification = decisionEngine.classify(direct, vpn)
         decisionEngine.record(classification)
         logCollector.info(
             TAG,
@@ -242,11 +242,7 @@ class AutoSwitcher @Inject constructor(
             logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${elapsedMs}ms ($speedMbps Mbps)")
             if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
                 val last = recentEvidence.lastOrNull()
-                if (last != null && shouldSwitchAfterEvidence(
-                    decisionEngine.consecutiveServerEvidence,
-                    decisionEngine.consecutiveNetworkEvidence,
-                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
-                )
+                if (last != null && decisionEngine.shouldSwitch(last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs)
                 ) {
                     performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
                 } else {
@@ -260,11 +256,7 @@ class AutoSwitcher @Inject constructor(
         } catch (e: Exception) {
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
             val last = recentEvidence.lastOrNull()
-            if (last != null && shouldSwitchAfterEvidence(
-                decisionEngine.consecutiveServerEvidence,
-                decisionEngine.consecutiveNetworkEvidence,
-                last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
-            )
+            if (last != null && decisionEngine.shouldSwitch(last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs)
             ) {
                 performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
             } else {
