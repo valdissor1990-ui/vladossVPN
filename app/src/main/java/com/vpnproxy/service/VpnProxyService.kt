@@ -103,6 +103,11 @@ class VpnProxyService : VpnService() {
         Log.d("VpnService", "===== onCreate started =====")
         isStopping = false
 
+        // startForegroundService() must be promoted immediately, before any Sing-box
+        // initialization or other potentially slow work, to avoid the 5-second deadline.
+        createNotificationChannel()
+        promoteToForeground("Подключение...")
+
         if (uncaughtHandlerInstalled.compareAndSet(false, true)) {
             val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -111,15 +116,15 @@ class VpnProxyService : VpnService() {
             }
         }
 
-        createNotificationChannel()
-
         try {
             autoSwitcher.attachVpnService(this)
             singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
             Log.e(TAG, "VpnProxyService.onCreate failed during Sing-box/service initialization", t)
-            throw t
+            removeForegroundNotification()
+            stopSelf()
+            return
         }
 
         networkReconnector = NetworkAwareReconnector(
@@ -237,6 +242,19 @@ class VpnProxyService : VpnService() {
         } catch (t: Throwable) {
             Log.e("VpnService", "startForeground FAILED", t)
             throw t
+        }
+    }
+
+    private fun removeForegroundNotification() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to remove foreground notification", t)
         }
     }
 
@@ -358,8 +376,8 @@ class VpnProxyService : VpnService() {
 
             _isRunning.value = true
             isReconnecting.set(false)
-            promoteToForeground("Проверка интернет-трафика…")
-            updateNotification("Проверка интернет-трафика…")
+            // Replace the startup placeholder with the connected state using the same ID.
+            promoteToForeground("Подключено")
             logCollector.info(TAG, "Sing-box VPN started; validating actual traffic")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
             try {
@@ -376,6 +394,7 @@ class VpnProxyService : VpnService() {
             val reasonMsg = t.message ?: "start failed"
             _lastError.value = reasonMsg
             stopVpnInternal("startVpnSession failed", t)
+            removeForegroundNotification()
             emitCoreError(t)
             stopSelf()
         } finally {
