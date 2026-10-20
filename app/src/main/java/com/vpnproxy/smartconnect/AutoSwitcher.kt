@@ -1,11 +1,6 @@
 package com.vpnproxy.smartconnect
 
 import android.util.Log
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.util.concurrent.TimeUnit
 import java.util.ArrayDeque
 
 import com.vpnproxy.core.connection.ConnectionCoordinator
@@ -63,14 +58,6 @@ class AutoSwitcher @Inject constructor(
     @Volatile private var vpnService: VpnProxyService? = null
     @Volatile private var state = AutoSwitchState.MONITORING
     private val recentEvidence = ArrayDeque<ProbeEvidence>()
-    private val microProbeClient = OkHttpClient.Builder()
-        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
-        .connectTimeout(AutoSwitcherConfig.microProbeTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .readTimeout(AutoSwitcherConfig.microProbeTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .callTimeout(AutoSwitcherConfig.microProbeTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        .retryOnConnectionFailure(false)
-        .build()
-
     fun currentState(): AutoSwitchState = state
 
     fun attachVpnService(service: VpnProxyService) {
@@ -213,36 +200,16 @@ class AutoSwitcher @Inject constructor(
         classifyProbeFault(direct, vpn, AutoSwitcherConfig.suspectRttMs, AutoSwitcherConfig.directFastRttMs)
 
     private suspend fun runMicroProbe() {
-        val startedAt = System.nanoTime()
         try {
-            val request = Request.Builder()
-                .url(AutoSwitcherConfig.microProbeUrl)
-                .header("User-Agent", "VPNProxy/1.0")
-                .header("Cache-Control", "no-cache")
-                .build()
-            val bytesRead = withContext(Dispatchers.IO) {
-                microProbeClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw IllegalStateException("HTTP ${response.code}")
-                    val input = response.body?.byteStream()
-                        ?: throw IllegalStateException("Empty micro-probe response")
-                    input.use { stream ->
-                        val buffer = ByteArray(AutoSwitcherConfig.microProbeBufferBytes)
-                        var total = 0L
-                        while (total < AutoSwitcherConfig.microProbeBytes) {
-                            val read = stream.read(buffer, 0, minOf(buffer.size.toLong(), AutoSwitcherConfig.microProbeBytes - total).toInt())
-                            if (read < 0) break
-                            total += read
-                        }
-                        total
-                    }
-                }
-            }
-            val elapsedMs = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-            val speedMbps = bytesRead * 8.0 / 1_000_000.0 / (elapsedMs / 1_000.0)
-            logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${elapsedMs}ms ($speedMbps Mbps)")
+            val result = healthMonitor.probeMicroSpeed()
+            val bytesRead = result.bytesRead
+            val speedMbps = result.speedMbps
+            logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${result.elapsedMs}ms ($speedMbps Mbps)")
             if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
                 val last = recentEvidence.lastOrNull()
-                if (last != null && decisionEngine.shouldSwitch(last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs)
+                if (last != null && decisionEngine.shouldSwitch(
+                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+                )
                 ) {
                     performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
                 } else {
@@ -256,7 +223,9 @@ class AutoSwitcher @Inject constructor(
         } catch (e: Exception) {
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
             val last = recentEvidence.lastOrNull()
-            if (last != null && decisionEngine.shouldSwitch(last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs)
+            if (last != null && decisionEngine.shouldSwitch(
+                last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+            )
             ) {
                 performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
             } else {
