@@ -422,6 +422,10 @@ class VpnProxyService : VpnService() {
         throwable: Throwable? = null,
         softRestart: Boolean = false
     ) {
+        val serviceWasAlreadyStopping = _serviceState.value == ServiceState.Stopping
+        if (!serviceWasAlreadyStopping && _serviceState.value !is ServiceState.Failed) {
+            transitionServiceState(ServiceState.Stopping)
+        }
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
@@ -429,7 +433,7 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
+            if (!serviceWasAlreadyStopping && _serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
             if (!softRestart) {
                 stopBatteryPeriodicLogging()
             }
