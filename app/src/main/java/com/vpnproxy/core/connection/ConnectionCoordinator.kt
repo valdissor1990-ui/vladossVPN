@@ -18,7 +18,7 @@ import javax.inject.Singleton
 /**
  * Single source of truth for VPN connection lifecycle.
  * Actor pattern: events are processed sequentially via a Channel.
- * Does NOT depend on AutoSwitcher (Hilt-safe).
+ * Does NOT depend on AutoSwitcher (Hilt-safe — selection runs in UI / external job).
  *
  * Logging goes only through [LogCollector] so JVM unit tests do not need
  * android.util.Log mocks / Robolectric.
@@ -35,8 +35,10 @@ sealed class ConnectionState {
 sealed class ConnectionEvent {
     data object UserConnect : ConnectionEvent()
     data object UserDisconnect : ConnectionEvent()
-    /** Notification STOP / UI disconnect request — always goes through the actor. */
+    /** Notification STOP / UI disconnect — cancels selection + goes Disconnecting. */
     data object RequestDisconnect : ConnectionEvent()
+    /** UI requested connect (permission granted); selection may still be in progress. */
+    data class ConnectRequested(val traceId: String) : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
@@ -45,7 +47,6 @@ sealed class ConnectionEvent {
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
-    /** System kill / force teardown — clears flags and forces Disconnected. */
     data class ForceDisconnected(val reason: String = "") : ConnectionEvent()
 }
 
@@ -56,7 +57,6 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
-        /** Connecting/Reconnecting hard timeout — prevents zombie Connecting. */
         const val CONNECTING_TIMEOUT_MS = 18_000L
     }
 
@@ -75,15 +75,23 @@ class ConnectionCoordinator @Inject constructor(
 
     private var retryCount: Int = 0
 
-    /**
-     * After a fatal error, block auto-reconnect (NetworkChanged / ServerSelected)
-     * until the user explicitly sends UserConnect.
-     */
     @Volatile
     var isFatalErrorLocked: Boolean = false
         private set
 
+    @Volatile
+    var activeTraceId: String? = null
+        private set
+
     private var connectingTimeoutJob: Job? = null
+
+    /** UI registers selection job cancel so RequestDisconnect can abort ranking. */
+    @Volatile
+    private var selectionCancel: (() -> Unit)? = null
+
+    fun registerSelectionCancel(cancel: (() -> Unit)?) {
+        selectionCancel = cancel
+    }
 
     init {
         scope.launch {
@@ -95,7 +103,8 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     fun send(event: ConnectionEvent) {
-        logCollector.info(TAG, "Actor received event: $event")
+        val tid = activeTraceId
+        logCollector.info(TAG, TraceId.format(TAG, "Actor received event: $event", tid).removePrefix("$TAG | "))
         val result = events.trySend(event)
         if (!result.isSuccess) {
             logCollector.error(TAG, "Failed to enqueue event: $event")
@@ -106,16 +115,29 @@ class ConnectionCoordinator @Inject constructor(
 
     fun hasSelectedServer(): Boolean = hasServerSelected
 
-    /** Test / debug access to retry counter. */
     fun currentRetryCount(): Int = retryCount
+
+    private fun logI(message: String) {
+        logCollector.info(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
+    }
+
+    private fun logD(message: String) {
+        logCollector.debug(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
+    }
+
+    private fun logW(message: String) {
+        logCollector.warn(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
+    }
+
+    private fun logE(message: String) {
+        logCollector.error(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
+    }
 
     private fun setState(next: ConnectionState, reason: String = "") {
         val prev = _state.value
         if (prev == next) return
         _state.value = next
-        val msg =
-            "STATE: $prev -> $next | reason=$reason | retry=$retryCount | fatalLock=$isFatalErrorLocked"
-        logCollector.info(TAG, msg)
+        logI("STATE: $prev -> $next | reason=$reason | retry=$retryCount | fatalLock=$isFatalErrorLocked")
         onStateChanged(next)
     }
 
@@ -133,7 +155,7 @@ class ConnectionCoordinator @Inject constructor(
             delay(CONNECTING_TIMEOUT_MS)
             val s = _state.value
             if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
-                logCollector.error(TAG, "Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — FATAL lock + Error")
+                logE("Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — FATAL lock + Error")
                 applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
             }
         }
@@ -150,38 +172,61 @@ class ConnectionCoordinator @Inject constructor(
         setState(ConnectionState.Error(reason.userMessage()), reason = reason.toString())
     }
 
+    private fun cancelSelectionJob() {
+        try {
+            selectionCancel?.invoke()
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun handle(event: ConnectionEvent) {
         val current = _state.value
         when (event) {
+            is ConnectionEvent.ConnectRequested -> {
+                activeTraceId = event.traceId
+                TraceId.newId() // keep generator in sync if needed
+                // Force the known id from the event
+                // (TraceId object may have a newer id from UI; prefer event)
+                isFatalErrorLocked = false
+                retryCount = 0
+                logI("ConnectRequested — enter Connecting (selection may still run)")
+                when (current) {
+                    is ConnectionState.Disconnected,
+                    is ConnectionState.Disconnecting,
+                    is ConnectionState.Error -> setState(ConnectionState.Connecting, reason = "ConnectRequested")
+                    is ConnectionState.Connecting -> logD("ConnectRequested while already Connecting")
+                    is ConnectionState.Connected,
+                    is ConnectionState.Reconnecting -> logD("ConnectRequested ignored in $current")
+                }
+            }
+
             is ConnectionEvent.UserConnect -> {
                 isFatalErrorLocked = false
                 retryCount = 0
                 if (!hasServerSelected || pendingServerName == null) {
-                    logCollector.info(TAG, "UserConnect deferred — waiting for ServerSelected")
+                    logI("UserConnect deferred — waiting for ServerSelected")
                     return
                 }
                 when (current) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Disconnecting,
                     is ConnectionState.Error -> setState(ConnectionState.Connecting, reason = "UserConnect")
+                    is ConnectionState.Connecting -> logD("UserConnect while Connecting — keep")
                     is ConnectionState.Connected,
-                    is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting -> {
-                        logCollector.debug(TAG, "UserConnect ignored in state $current")
-                    }
+                    is ConnectionState.Reconnecting -> logD("UserConnect ignored in state $current")
                 }
             }
 
             is ConnectionEvent.UserDisconnect,
             is ConnectionEvent.RequestDisconnect -> {
-                // Notification STOP and UI disconnect both go through the actor.
                 val tag = if (event is ConnectionEvent.RequestDisconnect) "RequestDisconnect" else "UserDisconnect"
+                cancelSelectionJob()
                 when (current) {
                     is ConnectionState.Disconnected -> {
-                        logCollector.debug(TAG, "$tag ignored — already Disconnected")
+                        logD("$tag ignored — already Disconnected")
                     }
                     is ConnectionState.Disconnecting -> {
-                        logCollector.debug(TAG, "$tag while Disconnecting — stay")
+                        logD("$tag while Disconnecting — stay")
                     }
                     else -> {
                         retryCount = 0
@@ -194,13 +239,14 @@ class ConnectionCoordinator @Inject constructor(
                 pendingServerName = event.server.config.name
                 hasServerSelected = true
                 retryCount = 0
+                logI("ServerSelected: ${event.server.config.name}")
                 when (current) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Error -> {
-                        logCollector.debug(TAG, "ServerSelected while idle: ${event.server.config.name}")
+                        logD("ServerSelected while idle")
                     }
                     is ConnectionState.Connecting -> {
-                        logCollector.debug(TAG, "ServerSelected while Connecting: ${event.server.config.name}")
+                        logD("ServerSelected while Connecting")
                     }
                     is ConnectionState.Connected,
                     is ConnectionState.Reconnecting -> {
@@ -209,14 +255,14 @@ class ConnectionCoordinator @Inject constructor(
                         }
                     }
                     is ConnectionState.Disconnecting -> {
-                        logCollector.debug(TAG, "ServerSelected ignored while Disconnecting")
+                        logD("ServerSelected ignored while Disconnecting")
                     }
                 }
             }
 
             is ConnectionEvent.NetworkChanged -> {
                 if (isFatalErrorLocked) {
-                    logCollector.info(TAG, "NetworkChanged ignored — fatalErrorLocked")
+                    logI("NetworkChanged ignored — fatalErrorLocked")
                     return
                 }
                 when (current) {
@@ -229,32 +275,28 @@ class ConnectionCoordinator @Inject constructor(
                             retryCount = 0
                             setState(ConnectionState.Connecting, reason = "NetworkChanged")
                         } else {
-                            logCollector.debug(TAG, "NetworkChanged ignored — no server selected")
+                            logD("NetworkChanged ignored — no server selected")
                         }
                     }
                     is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting -> {
-                        logCollector.debug(TAG, "NetworkChanged while $current — stay in state")
-                    }
-                    is ConnectionState.Disconnecting -> {
-                        logCollector.debug(TAG, "NetworkChanged ignored while Disconnecting")
-                    }
+                    is ConnectionState.Reconnecting -> logD("NetworkChanged while $current — stay")
+                    is ConnectionState.Disconnecting -> logD("NetworkChanged ignored while Disconnecting")
                 }
             }
 
             is ConnectionEvent.CoreError -> {
-                logCollector.error(TAG, "CoreError: ${event.reason} (retry=$retryCount)")
+                logE("CoreError: ${event.reason} (retry=$retryCount)")
                 handleFailure(event.reason, current)
             }
 
             is ConnectionEvent.Timeout -> {
-                logCollector.warn(TAG, "Timeout in state $current (retry=$retryCount)")
+                logW("Timeout in state $current (retry=$retryCount)")
                 handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
             }
 
             is ConnectionEvent.ShowError -> {
                 if (current is ConnectionState.Error) {
-                    logCollector.debug(TAG, "ShowError ignored — already in Error: ${current.message}")
+                    logD("ShowError ignored — already in Error: ${current.message}")
                     return
                 }
                 retryCount = 0
@@ -263,16 +305,16 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ResetRetryCount -> {
                 retryCount = 0
-                logCollector.debug(TAG, "Retry count reset")
+                logD("Retry count reset")
             }
 
             is ConnectionEvent.ForceDisconnected -> {
                 val why = event.reason.ifBlank { "ForceDisconnected" }
+                cancelSelectionJob()
                 if (current is ConnectionState.Disconnected) {
-                    // Still clear flags even if already Disconnected
                     retryCount = 0
                     isFatalErrorLocked = false
-                    logCollector.debug(TAG, "ForceDisconnected ($why): already Disconnected, flags cleared")
+                    logD("ForceDisconnected ($why): already Disconnected, flags cleared")
                     return
                 }
                 retryCount = 0
@@ -293,16 +335,11 @@ class ConnectionCoordinator @Inject constructor(
                     is ConnectionState.Disconnecting,
                     is ConnectionState.Disconnected ->
                         setState(ConnectionState.Disconnected, reason = "ServiceStopped")
-                    is ConnectionState.Error -> {
-                        logCollector.debug(TAG, "ServiceStopped while Error — keep Error banner")
-                    }
+                    is ConnectionState.Error -> logD("ServiceStopped while Error — keep Error banner")
                     is ConnectionState.Reconnecting,
-                    is ConnectionState.Connecting -> {
-                        logCollector.debug(TAG, "ServiceStopped during $current — awaiting restart")
-                    }
-                    is ConnectionState.Connected -> {
+                    is ConnectionState.Connecting -> logD("ServiceStopped during $current — awaiting restart")
+                    is ConnectionState.Connected ->
                         handleFailure(VpnFailureReason.CoreError("Unexpected service stop"), current)
-                    }
                 }
             }
         }
@@ -319,20 +356,18 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionState.Connected -> {
                 retryCount++
                 if (retryCount < MAX_RETRIES && hasServerSelected && !isFatalErrorLocked) {
-                    logCollector.warn(TAG, "Retry $retryCount/$MAX_RETRIES after: $reason")
+                    logW("Retry $retryCount/$MAX_RETRIES after: $reason")
                     setState(ConnectionState.Reconnecting, reason = "retry:$reason")
                 } else {
                     val msg = "Connection failed after $MAX_RETRIES attempts: ${reason.userMessage()}"
-                    logCollector.error(TAG, msg)
+                    logE(msg)
                     retryCount = 0
                     if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
                         setState(ConnectionState.Error(msg), reason = "maxRetries:$reason")
                     }
                 }
             }
-            is ConnectionState.Error -> {
-                logCollector.debug(TAG, "Failure ignored — already in Error")
-            }
+            is ConnectionState.Error -> logD("Failure ignored — already in Error")
             else -> { }
         }
     }
