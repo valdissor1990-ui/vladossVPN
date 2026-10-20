@@ -269,7 +269,7 @@ class ConnectionCoordinator @Inject constructor(
                         logD("ServerSelected while idle")
                     }
                     is ConnectionState.Connecting -> {
-                        logD("ServerSelected while Connecting")
+                        setState(ConnectionState.Reconnecting, reason = "ServerSelected while Connecting")
                     }
                     is ConnectionState.Connected,
                     is ConnectionState.Reconnecting -> {
