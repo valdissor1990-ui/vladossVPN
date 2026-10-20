@@ -9,7 +9,13 @@ import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.logging.LogCollectorHolder
+import com.vpnproxy.subscription.SubscriptionRepository
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
@@ -31,6 +37,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var batteryLogger: BatteryLogger
     @Inject lateinit var batteryMonitor: BatteryMonitor
+    @Inject lateinit var subscriptionRepository: SubscriptionRepository
+
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -58,8 +67,21 @@ class VpnProxyApp : Application(), Configuration.Provider {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
         }
 
-        // Периодические задачи
-        SubscriptionUpdateWorker.schedule(this, intervalHours = 6)
+        // Try a fresh subscription immediately on every process start; repository keeps the cache on failure.
+        applicationScope.launch {
+            try {
+                val count = subscriptionRepository.refreshAll()
+                logCollector.info("VpnProxyApp", "Startup subscription refresh finished: configs=$count")
+                if (count == 0) {
+                    logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no bootstrap servers are available")
+                }
+            } catch (t: Throwable) {
+                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
+            }
+        }
+
+        // Refresh subscription hourly when network is available.
+        SubscriptionUpdateWorker.schedule(this, intervalHours = 1)
 
         // UpdateCheckWorker НЕ планируем здесь — он запускается:
         //   1) Вручную из Settings (force = true)
@@ -70,6 +92,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     }
 
     override fun onTerminate() {
+        applicationScope.cancel()
         try {
             batteryMonitor.unregister(this)
         } catch (_: Throwable) {
