@@ -113,6 +113,14 @@ class HomeViewModel @Inject constructor(
                     }
                     is ConnectionState.Connected -> {
                         cancelConnectingWatchdog()
+                        autoSwitcher.currentServer.value?.config?.let { server ->
+                            lastServerStore.save(
+                                address = server.address,
+                                port = server.port,
+                                name = server.name,
+                                uuid = server.uuid
+                            )
+                        }
                         pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
                             pendingRankingConfigs = emptyList()
                             autoSwitcher.rankInBackground(configs)
@@ -151,12 +159,6 @@ class HomeViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         currentServerName = server.config.name,
                         currentRtt = server.latencyMs
-                    )
-                    lastServerStore.save(
-                        address = server.config.address,
-                        port = server.config.port,
-                        name = server.config.name,
-                        uuid = server.config.uuid
                     )
                 }
             }
@@ -350,12 +352,6 @@ class HomeViewModel @Inject constructor(
                             else ScoringEngine.ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
                         }
                     )
-                )
-                lastServerStore.save(
-                    address = chosenConfig.address,
-                    port = chosenConfig.port,
-                    name = chosenConfig.name,
-                    uuid = chosenConfig.uuid
                 )
                 Log.i(TAG, "Instant connect to [${chosenConfig.name}]")
                 logCollector.info(TAG, tmsg("Instant connect to [${chosenConfig.name}]"))
