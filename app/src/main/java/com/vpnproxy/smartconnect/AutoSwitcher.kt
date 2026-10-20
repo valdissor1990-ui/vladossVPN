@@ -413,6 +413,68 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
+    private fun isRussian(config: ParsedConfig): Boolean {
+        val name = config.name.lowercase()
+        val sni = config.sni.orEmpty().lowercase()
+        return config.providerTag.equals("RU", ignoreCase = true) ||
+            config.providerTag.contains("🇷🇺") || config.name.contains("🇷🇺") ||
+            Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(name) ||
+            name.contains(".ru") || sni.contains(".ru")
+    }
+
+    private fun sameConfig(a: ParsedConfig, b: ParsedConfig): Boolean =
+        a.address.equals(b.address, ignoreCase = true) && a.port == b.port && a.uuid == b.uuid
+
+    /** Set the chosen server immediately; no latency probes run on the connection path. */
+    fun selectImmediate(config: ParsedConfig, candidates: List<ParsedConfig>): ScoredServer {
+        val selected = ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+        _currentServer.value = selected
+        _rankedServers.value = listOf(selected) + candidates
+            .filterNot { sameConfig(it, config) }
+            .map { ScoredServer(it, Long.MAX_VALUE, 0f, 0f, 0f) }
+        baselineRtt = 0L
+        consecutiveErrors = 0
+        logCollector.info(TAG, "Instant connect to [${config.name}] — background probing scheduled")
+        return selected
+    }
+
+    /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
+    fun rankInBackground(configs: List<ParsedConfig>) {
+        scope.launch {
+            try {
+                val russian = configs.filter(::isRussian)
+                val foreign = configs.filterNot(::isRussian)
+                val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
+                val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
+                val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                    .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+                _rankedServers.value = ranked
+                logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
+
+                val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < 200L }
+                val current = _currentServer.value
+                if (bestRussian != null && (current == null || !sameConfig(current.config, bestRussian.config)) &&
+                    connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
+                ) {
+                    _currentServer.value = bestRussian
+                    baselineRtt = bestRussian.latencyMs
+                    consecutiveErrors = 0
+                    _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
+                    connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+                    connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian))
+                    logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
+                } else if (bestRussian != null && current != null && sameConfig(current.config, bestRussian.config)) {
+                    _currentServer.value = bestRussian
+                    baselineRtt = bestRussian.latencyMs
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                logCollector.warn(TAG, "Background server ranking failed: ${t.message}")
+            }
+        }
+    }
+
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
         Log.i(TAG, "Starting server selection/ranking for ${configs.size} configs")
         val ranked = scoringEngine.rankAll(configs, healthChecker)

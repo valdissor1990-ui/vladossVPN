@@ -82,6 +82,8 @@ class HomeViewModel @Inject constructor(
     private var selectionJob: Job? = null
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
+    @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
+    @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
 
     init {
         connectionCoordinator.registerSelectionCancel {
@@ -111,6 +113,18 @@ class HomeViewModel @Inject constructor(
                     }
                     is ConnectionState.Connected -> {
                         cancelConnectingWatchdog()
+                        autoSwitcher.currentServer.value?.config?.let { server ->
+                            lastServerStore.save(
+                                address = server.address,
+                                port = server.port,
+                                name = server.name,
+                                uuid = server.uuid
+                            )
+                        }
+                        pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
+                            pendingRankingConfigs = emptyList()
+                            autoSwitcher.rankInBackground(configs)
+                        }
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) {
@@ -146,12 +160,6 @@ class HomeViewModel @Inject constructor(
                         currentServerName = server.config.name,
                         currentRtt = server.latencyMs
                     )
-                    lastServerStore.save(
-                        address = server.config.address,
-                        port = server.config.port,
-                        name = server.config.name,
-                        uuid = server.config.uuid
-                    )
                 }
             }
         }
@@ -179,6 +187,18 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    private fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean {
+        val name = config.name.lowercase()
+        val sni = config.sni.orEmpty().lowercase()
+        return config.providerTag.equals("RU", ignoreCase = true) ||
+            config.providerTag.contains("🇷🇺") || name.contains("🇷🇺") ||
+            Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(name) ||
+            name.contains(".ru") || sni.contains(".ru")
+    }
+
+    private fun sameConfig(a: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig, b: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
+        a.address.equals(b.address, ignoreCase = true) && a.port == b.port && a.uuid == b.uuid
 
     private fun tmsg(message: String): String =
         TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | ")
@@ -286,78 +306,70 @@ class HomeViewModel @Inject constructor(
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d(TAG, "2. Starting AutoSwitcher / selectBestServer")
-                logCollector.info(TAG, tmsg("Selecting best server (timeout ${SERVER_SELECTION_TIMEOUT_MS}ms)…"))
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
-
-                val best = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                    val hasNetwork = cm.activeNetwork != null
-                    var configs = subscriptionRepository.getAllConfigs()
-                    if (configs.isEmpty() && hasNetwork) {
-                        configs = try {
-                            subscriptionRepository.refreshAll()
-                            subscriptionRepository.getAllConfigs()
-                        } catch (c: CancellationException) {
-                            throw c
-                        } catch (e: Exception) {
-                            logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
-                            emptyList()
-                        }
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val hasNetwork = cm.activeNetwork != null
+                var configs = subscriptionRepository.getAllConfigs()
+                if (configs.isEmpty() && hasNetwork) {
+                    configs = try {
+                        subscriptionRepository.refreshAll()
+                        subscriptionRepository.getAllConfigs()
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (e: Exception) {
+                        logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
+                        emptyList()
                     }
-                    if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
-                    if (configs.isEmpty()) return@withTimeoutOrNull null
-                    autoSwitcher.selectBest(configs)
                 }
-
-                Log.d(TAG, "3. Server selection completed")
-                logCollector.info(
-                    TAG,
-                    tmsg(
-                        "Server selection finished in " +
-                            "${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; " +
-                            "best=${best?.config?.name}"
-                    )
-                )
-
-                if (best == null) {
-                    logCollector.warn(TAG, tmsg("Selection timeout or no candidate"))
-                    connectionCoordinator.send(
-                        ConnectionEvent.ShowError("Превышено время выбора сервера (5 сек).")
-                    )
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
+                if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
+                if (configs.isEmpty()) {
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов подписки"))
                     return@launch
                 }
 
-                lastServerStore.save(
-                    address = best.config.address,
-                    port = best.config.port,
-                    name = best.config.name,
-                    uuid = best.config.uuid
+                val validManual = manuallySelectedServer?.takeIf { manual ->
+                    configs.any { sameConfig(it, manual.config) }
+                }
+                val saved = lastServerStore.load()
+                val lastKnown = saved?.let { stored ->
+                    configs.firstOrNull {
+                        it.address.equals(stored.address, ignoreCase = true) &&
+                            it.port == stored.port && (stored.uuid.isBlank() || it.uuid == stored.uuid)
+                    }
+                }
+                val russian = configs.firstOrNull(::isRussianServer)
+                val chosenConfig = validManual?.config ?: lastKnown ?: russian ?: configs.first()
+                val candidates = buildList {
+                    add(chosenConfig)
+                    configs.filter(::isRussianServer).filterNot { sameConfig(it, chosenConfig) }.forEach(::add)
+                    configs.filterNot(::isRussianServer).filterNot { sameConfig(it, chosenConfig) }.forEach(::add)
+                }.distinctBy { "${it.address.lowercase()}:${it.port}:${it.uuid}" }
+                val best = autoSwitcher.selectImmediate(chosenConfig, candidates)
+                connectionCoordinator.send(
+                    ConnectionEvent.SetFallbackCandidates(
+                        candidates.map { config ->
+                            if (sameConfig(config, chosenConfig)) best
+                            else ScoringEngine.ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+                        }
+                    )
                 )
+                Log.i(TAG, "Instant connect to [${chosenConfig.name}]")
+                logCollector.info(TAG, tmsg("Instant connect to [${chosenConfig.name}]"))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
                 connectionCoordinator.send(ConnectionEvent.UserConnect)
                 logCollector.info(
                     TAG,
-                    tmsg(
-                        "ServerSelected+UserConnect after " +
-                            "${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt}ms"
-                    )
+                    tmsg("ServerSelected+UserConnect after ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms")
                 )
+                pendingRankingConfigs = candidates
             } catch (c: CancellationException) {
                 logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
             } catch (e: Exception) {
-                Log.d(TAG, "3. Server selection completed (error)")
-                logCollector.error(TAG, tmsg("Server selection failed: ${e.message}"), e)
-                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "selection failed"))
-                _uiState.value = _uiState.value.copy(
-                    connectionState = ConnectionUiState.ERROR,
-                    isBusy = false
-                )
+                Log.e(TAG, "Instant server selection failed", e)
+                logCollector.error(TAG, tmsg("Instant server selection failed: ${e.message}"), e)
+                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось выбрать сервер"))
+                _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
             }
         }
     }
@@ -483,6 +495,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
+        manuallySelectedServer = server
         viewModelScope.launch {
             try {
                 autoSwitcher.forceSelect(server)
