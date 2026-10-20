@@ -223,7 +223,12 @@ class AutoSwitcher @Inject constructor(
             NetworkFaultKind.NETWORK_DEGRADATION -> {
                 consecutiveNetworkEvidence++
                 consecutiveServerEvidence = 0
-                transitionTo(AutoSwitchState.MONITORING, "underlying network degraded; automatic server switching suppressed")
+                val networkStatus = if (consecutiveNetworkEvidence >= NETWORK_DEGRADATION_CONFIRMATIONS) {
+                    "underlying network degradation confirmed $consecutiveNetworkEvidence times; automatic server switching suppressed"
+                } else {
+                    "underlying network degradation suspected ($consecutiveNetworkEvidence/$NETWORK_DEGRADATION_CONFIRMATIONS); automatic server switching suppressed"
+                }
+                transitionTo(AutoSwitchState.MONITORING, networkStatus)
             }
             NetworkFaultKind.SERVER_DEGRADATION -> {
                 consecutiveServerEvidence++
