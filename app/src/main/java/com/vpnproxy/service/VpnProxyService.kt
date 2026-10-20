@@ -153,6 +153,7 @@ class VpnProxyService : VpnService() {
                         updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
+                        if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
                         autoSwitcher.startMonitoring()
                         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
