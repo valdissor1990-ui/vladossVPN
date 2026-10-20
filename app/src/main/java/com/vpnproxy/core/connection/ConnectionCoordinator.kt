@@ -209,7 +209,8 @@ class ConnectionCoordinator @Inject constructor(
                     is ConnectionState.Error -> setState(ConnectionState.Connecting, reason = "ConnectRequested")
                     is ConnectionState.Connecting -> logD("ConnectRequested while already Connecting")
                     is ConnectionState.Connected,
-                    is ConnectionState.Reconnecting -> logD("ConnectRequested ignored in $current")
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> logD("ConnectRequested ignored in $current")
                 }
             }
 
@@ -424,7 +425,8 @@ class ConnectionCoordinator @Inject constructor(
         if (!reason.isRetryable() || fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
-            current !is ConnectionState.Connected
+            current !is ConnectionState.Connected &&
+            current !is ConnectionState.Verifying
         ) return false
 
         var nextIndex = (fallbackIndex + 1).coerceAtLeast(0)
@@ -435,8 +437,12 @@ class ConnectionCoordinator @Inject constructor(
                 !candidate.config.address.equals(active.address, ignoreCase = true) ||
                 candidate.config.port != active.port || candidate.config.uuid != active.uuid
             ) {
-                fallbackIndex = nextIndex
                 fallbackAttempts++
+                fallbackCandidates = fallbackCandidates.filterNot {
+                    it.config.address.equals(candidate.config.address, ignoreCase = true) &&
+                        it.config.port == candidate.config.port && it.config.uuid == candidate.config.uuid
+                }
+                fallbackIndex = -1
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
