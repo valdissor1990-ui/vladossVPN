@@ -83,6 +83,7 @@ class HomeViewModel @Inject constructor(
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
+    @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
 
     init {
         connectionCoordinator.registerSelectionCancel {
@@ -112,6 +113,10 @@ class HomeViewModel @Inject constructor(
                     }
                     is ConnectionState.Connected -> {
                         cancelConnectingWatchdog()
+                        pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
+                            pendingRankingConfigs = emptyList()
+                            autoSwitcher.rankInBackground(configs)
+                        }
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) {
@@ -360,7 +365,7 @@ class HomeViewModel @Inject constructor(
                     TAG,
                     tmsg("ServerSelected+UserConnect after ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms")
                 )
-                autoSwitcher.rankInBackground(candidates)
+                pendingRankingConfigs = candidates
             } catch (c: CancellationException) {
                 logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
