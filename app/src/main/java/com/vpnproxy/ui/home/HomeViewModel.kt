@@ -327,23 +327,13 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                val validManual = manuallySelectedServer?.takeIf { manual ->
-                    configs.any { sameConfig(it, manual.config) }
+                // Stable priority sort happens before choosing the instant-connect server.
+                // Russian servers must win even when a foreign server was used previously.
+                val prioritizedConfigs = configs.sortedBy { if (isRussianServer(it)) 0 else 1 }
+                val chosenConfig = prioritizedConfigs.first()
+                val candidates = prioritizedConfigs.distinctBy {
+                    "${it.address.lowercase()}:${it.port}:${it.uuid}"
                 }
-                val saved = lastServerStore.load()
-                val lastKnown = saved?.let { stored ->
-                    configs.firstOrNull {
-                        it.address.equals(stored.address, ignoreCase = true) &&
-                            it.port == stored.port && (stored.uuid.isBlank() || it.uuid == stored.uuid)
-                    }
-                }
-                val russian = configs.firstOrNull(::isRussianServer)
-                val chosenConfig = validManual?.config ?: lastKnown ?: russian ?: configs.first()
-                val candidates = buildList {
-                    add(chosenConfig)
-                    configs.filter(::isRussianServer).filterNot { sameConfig(it, chosenConfig) }.forEach(::add)
-                    configs.filterNot(::isRussianServer).filterNot { sameConfig(it, chosenConfig) }.forEach(::add)
-                }.distinctBy { "${it.address.lowercase()}:${it.port}:${it.uuid}" }
                 val best = autoSwitcher.selectImmediate(chosenConfig, candidates)
                 connectionCoordinator.send(
                     ConnectionEvent.SetFallbackCandidates(
