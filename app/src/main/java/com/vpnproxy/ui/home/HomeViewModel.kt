@@ -307,7 +307,9 @@ class HomeViewModel @Inject constructor(
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
                 var configs = subscriptionRepository.getAllConfigs()
-                if (configs.isEmpty() && hasNetwork) {
+                // Always attempt a fresh primary -> mirror update before choosing a cached server.
+                // If both sources fail, refreshAll retains/loads cached_configs.json as fallback.
+                if (hasNetwork) {
                     configs = try {
                         subscriptionRepository.refreshAll()
                         subscriptionRepository.getAllConfigs()
