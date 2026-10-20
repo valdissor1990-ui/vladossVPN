@@ -182,10 +182,6 @@ class SubscriptionParser @Inject constructor(
     private fun String?.isTruthy(): Boolean =
         this?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } == true
 
-    /**
-     * Parse query components with java.net.URI so these protocol parsers also work
-     * in local JVM unit tests, where android.net.Uri methods are mocked.
-     */
     private fun parseUriQuery(rawQuery: String?): Map<String, String> =
         rawQuery.orEmpty()
             .split("&")
@@ -200,22 +196,38 @@ class SubscriptionParser @Inject constructor(
     private fun decodeUriComponent(value: String): String =
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
 
+    /**
+     * Optional XHTTP `extra`:
+     * - missing / blank / literal "null" → silent null (no WARN, no CPU parse)
+     * - valid JSON object → normalized string
+     * - present but invalid / non-object → WARN once and null
+     */
     private fun normalizeXhttpExtra(rawValue: String?): String? {
-        if (rawValue.isNullOrBlank()) return null
+        if (rawValue == null) return null
         val decoded = try {
             URLDecoder.decode(rawValue, "UTF-8")
         } catch (_: IllegalArgumentException) {
             rawValue
         }
         val trimmed = decoded.trim()
-        if (trimmed.isEmpty()) return null
+        // Absent / empty optional field — do not log and do not parse.
+        if (trimmed.isEmpty() ||
+            trimmed.equals("null", ignoreCase = true) ||
+            trimmed.equals("undefined", ignoreCase = true) ||
+            trimmed == "{}"
+        ) {
+            return null
+        }
         return try {
             val element = Json.parseToJsonElement(trimmed)
-            if (element !is JsonObject) {
-                logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
-                return null
+            when (element) {
+                is JsonObject -> element.toString()
+                is JsonNull -> null // optional absent payload — silent
+                else -> {
+                    logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
+                    null
+                }
             }
-            element.toString()
         } catch (e: Exception) {
             logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.message}")
             null
