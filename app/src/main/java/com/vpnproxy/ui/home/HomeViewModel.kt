@@ -32,7 +32,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -272,7 +271,6 @@ class HomeViewModel @Inject constructor(
         armConnectingWatchdog()
         ensureServiceRunning()
 
-        // Actor enters Connecting immediately; selection runs with hard 5s timeout.
         connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId))
 
         selectionJob?.cancel()
@@ -282,7 +280,6 @@ class HomeViewModel @Inject constructor(
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
 
                 val best = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    // selectBest is suspend; wrap blocking rank internals via interruption where possible
                     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                     val hasNetwork = cm.activeNetwork != null
                     var configs = subscriptionRepository.getAllConfigs()
@@ -299,13 +296,6 @@ class HomeViewModel @Inject constructor(
                     }
                     if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
                     if (configs.isEmpty()) return@withTimeoutOrNull null
-                    // rankAll may block on sockets — interruptible boundary
-                    runInterruptible(Dispatchers.IO) {
-                        // Bridge: selectBest is suspend, call via runBlocking is bad;
-                        // instead call ranking path that is suspend without nested runBlocking
-                        null as ScoringEngine.ScoredServer?
-                    }
-                    // Prefer suspend selectBest directly (cancellable by withTimeout)
                     autoSwitcher.selectBest(configs)
                 }
 
