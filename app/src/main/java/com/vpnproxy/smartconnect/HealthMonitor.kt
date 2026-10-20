@@ -32,10 +32,6 @@ internal class HealthMonitor(
             Socket(socketProxy).use { socket ->
                 if (protectFromVpn) {
                     val protected = protectSocket(socket)
-                    logCollector.info(
-                        "AutoSwitcher",
-                        "Direct probe protect(socket) invoked: result=$protected, target=$host:$port"
-                    )
                     if (!protected) return@withContext ProbeResult(Long.MAX_VALUE, false)
                 }
                 runInterruptible(Dispatchers.IO) {
