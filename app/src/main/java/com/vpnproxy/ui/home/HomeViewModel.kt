@@ -104,7 +104,8 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting -> {
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> {
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.CONNECTING,
                             isBusy = true
