@@ -5,6 +5,10 @@ import android.os.Build
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.core.diagnostics.DeviceIdManager
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionEvent
+import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,6 +29,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,7 +41,8 @@ class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val parser: SubscriptionParser,
     private val logCollector: LogCollector,
-    private val deviceIdManager: DeviceIdManager
+    private val deviceIdManager: DeviceIdManager,
+    private val connectionCoordinator: ConnectionCoordinator
 ) {
     companion object {
         private const val TAG = "SubRepo"
@@ -264,6 +272,7 @@ class SubscriptionRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             val sources = if (sub.url == PRIMARY_URL) FALLBACK_CHAIN else listOf(sub.url)
             var lastFailure: Exception? = null
+            var sawTransportFailure = false
             for (sourceUrl in sources) {
                 try {
                     val hwid = deviceIdManager.getHwid()
@@ -314,11 +323,32 @@ class SubscriptionRepository @Inject constructor(
                     throw c
                 } catch (e: Exception) {
                     lastFailure = e
+                    if (isTransportFailure(e)) sawTransportFailure = true
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
+            if (sawTransportFailure && connectionCoordinator.state.value is ConnectionState.Connected) {
+                val message = "Сервер не пропускает трафик"
+                logCollector.warn(TAG, "Connected state but subscription request timed out/failed at transport layer; requesting fallback")
+                connectionCoordinator.send(
+                    ConnectionEvent.CoreError(VpnFailureReason.CoreError(message))
+                )
+            }
             throw IOException("All sources failed", lastFailure)
         }
+
+    private fun isTransportFailure(error: Throwable?): Boolean {
+        var current = error
+        val seen = HashSet<Throwable>()
+        while (current != null && seen.add(current)) {
+            if (current is ConnectException ||
+                current is SocketTimeoutException ||
+                current is TimeoutException
+            ) return true
+            current = current.cause
+        }
+        return false
+    }
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
         val (body, sourceUrl) = fetchWithFallback(sub)
