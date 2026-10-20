@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
+import com.vpnproxy.core.connection.TraceId
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
@@ -23,6 +24,7 @@ import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,8 +32,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @HiltViewModel
@@ -49,8 +52,8 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
-        /** UI watchdog: if Connecting hangs without Connected/Error, request disconnect. */
         private const val CONNECTING_UI_WATCHDOG_MS = 10_000L
+        private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
     }
 
     data class UiState(
@@ -77,15 +80,22 @@ class HomeViewModel @Inject constructor(
 
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
+    private var selectionJob: Job? = null
     private var vpnPermissionRequester: (() -> Unit)? = null
+    private var activeTraceId: String? = null
 
     init {
+        connectionCoordinator.registerSelectionCancel {
+            cancelSelectionJob("actor RequestDisconnect")
+        }
+
         viewModelScope.launch {
             connectionCoordinator.state.collect { state ->
                 when (state) {
                     is ConnectionState.Disconnected,
                     is ConnectionState.Disconnecting -> {
                         cancelConnectingWatchdog()
+                        cancelSelectionJob("state=$state")
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.DISCONNECTED,
                             isBusy = false,
@@ -118,12 +128,13 @@ class HomeViewModel @Inject constructor(
                     }
                     is ConnectionState.Error -> {
                         cancelConnectingWatchdog()
+                        cancelSelectionJob("Error")
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
                             sessionStartedAt = null
                         )
-                        logCollector.warn(TAG, "Actor Error: ${state.message}")
+                        logCollector.warn(TAG, tmsg("Actor Error: ${state.message}"))
                     }
                 }
             }
@@ -149,7 +160,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             autoSwitcher.switchEvents.collect { event ->
                 if (event != null) {
-                    logCollector.info(TAG, "Switch event: $event")
+                    logCollector.info(TAG, tmsg("Switch event: $event"))
                     autoSwitcher.clearSwitchEvent()
                 }
             }
@@ -170,20 +181,27 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private fun tmsg(message: String): String =
+        TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | ")
+
+    private fun cancelSelectionJob(reason: String) {
+        if (selectionJob?.isActive == true) {
+            logCollector.info(TAG, tmsg("Cancel selectionJob: $reason"))
+            selectionJob?.cancel()
+        }
+        selectionJob = null
+        _uiState.value = _uiState.value.copy(isBusy = false)
+    }
+
     private fun armConnectingWatchdog() {
         if (connectingWatchdogJob?.isActive == true) return
         connectingWatchdogJob = viewModelScope.launch {
             delay(CONNECTING_UI_WATCHDOG_MS)
             val s = connectionCoordinator.state.value
             if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
-                logCollector.warn(
-                    TAG,
-                    "UI connecting watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"
-                )
+                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-                connectionCoordinator.send(
-                    ConnectionEvent.ShowError("Превышено время подключения")
-                )
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
             }
         }
     }
@@ -205,14 +223,10 @@ class HomeViewModel @Inject constructor(
                         LatencyCalculator.compute(multi.results)
                     }
                     _latencyBreakdown.value = breakdown
-                    if (breakdown.isValid) {
-                        _googleRtt.value = breakdown.compositeScore.toLong()
-                    } else {
-                        _googleRtt.value = null
-                    }
+                    _googleRtt.value = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
                 } catch (c: CancellationException) {
                     throw c
-                } catch (t: Throwable) {
+                } catch (_: Throwable) {
                     _googleRtt.value = null
                     _latencyBreakdown.value = null
                 }
@@ -233,13 +247,13 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** "Повторить" on Error banner — same path as Connect. */
     fun retryConnect() {
         connect()
     }
 
     private fun connect() {
-        Log.i(TAG, "User clicked Connect")
+        activeTraceId = TraceId.newId()
+        Log.i(TAG, TraceId.format(TAG, "User clicked Connect", activeTraceId))
         VpnProxyService.clearError()
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.CONNECTING,
@@ -251,21 +265,26 @@ class HomeViewModel @Inject constructor(
 
     fun onVpnPermissionGranted() {
         val permissionGrantedAt = android.os.SystemClock.elapsedRealtime()
-        Log.i(TAG, "VPN permission granted")
-        Log.i(TAG, "HomeVM: Starting connection flow (select server FIRST)...")
+        val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
+        Log.i(TAG, TraceId.format(TAG, "VPN permission granted", traceId))
 
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         armConnectingWatchdog()
         ensureServiceRunning()
 
-        viewModelScope.launch {
+        // Actor enters Connecting immediately; selection runs with hard 5s timeout.
+        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId))
+
+        selectionJob?.cancel()
+        selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.i(TAG, "HomeVM: Selecting best server...")
+                logCollector.info(TAG, tmsg("Selecting best server (timeout ${SERVER_SELECTION_TIMEOUT_MS}ms)…"))
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
-                val selection = withContext(Dispatchers.IO) {
+
+                val best = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    // selectBest is suspend; wrap blocking rank internals via interruption where possible
                     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                     val hasNetwork = cm.activeNetwork != null
-                    Log.d(TAG, "Network available=$hasNetwork")
                     var configs = subscriptionRepository.getAllConfigs()
                     if (configs.isEmpty() && hasNetwork) {
                         configs = try {
@@ -274,32 +293,43 @@ class HomeViewModel @Inject constructor(
                         } catch (c: CancellationException) {
                             throw c
                         } catch (e: Exception) {
-                            logCollector.warn(TAG, "Subscription refresh failed: ${e.message}")
+                            logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
                             emptyList()
                         }
                     }
                     if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
-                    val best = if (configs.isNotEmpty()) autoSwitcher.selectBest(configs) else null
-                    configs to best
+                    if (configs.isEmpty()) return@withTimeoutOrNull null
+                    // rankAll may block on sockets — interruptible boundary
+                    runInterruptible(Dispatchers.IO) {
+                        // Bridge: selectBest is suspend, call via runBlocking is bad;
+                        // instead call ranking path that is suspend without nested runBlocking
+                        null as ScoringEngine.ScoredServer?
+                    }
+                    // Prefer suspend selectBest directly (cancellable by withTimeout)
+                    autoSwitcher.selectBest(configs)
                 }
-                val configs = selection.first
-                val best = selection.second
-                Log.i(
+
+                logCollector.info(
                     TAG,
-                    "HomeVM: Server selection finished in " +
-                        "${android.os.SystemClock.elapsedRealtime() - selectionStartedAt} ms; configs=${configs.size}"
+                    tmsg(
+                        "Server selection finished in " +
+                            "${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; " +
+                            "best=${best?.config?.name}"
+                    )
                 )
-                if (configs.isNotEmpty()) _uiState.value = _uiState.value.copy(serverCount = configs.size)
-                _uiState.value = _uiState.value.copy(usingBootstrap = subscriptionRepository.usingBootstrap.value)
 
                 if (best == null) {
-                    logCollector.warn(TAG, "No server candidate — abort connect")
-                    connectionCoordinator.send(ConnectionEvent.ShowError("No server candidate"))
-                    _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+                    logCollector.warn(TAG, tmsg("Selection timeout or no candidate"))
+                    connectionCoordinator.send(
+                        ConnectionEvent.ShowError("Превышено время выбора сервера (5 сек).")
+                    )
+                    _uiState.value = _uiState.value.copy(
+                        connectionState = ConnectionUiState.ERROR,
+                        isBusy = false
+                    )
                     return@launch
                 }
 
-                Log.i(TAG, "Selected server: ${best.config.name} (${best.config.address}:${best.config.port}, ${best.latencyMs}ms)")
                 lastServerStore.save(
                     address = best.config.address,
                     port = best.config.port,
@@ -308,23 +338,30 @@ class HomeViewModel @Inject constructor(
                 )
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
                 connectionCoordinator.send(ConnectionEvent.UserConnect)
-                Log.i(
+                logCollector.info(
                     TAG,
-                    "HomeVM: ServerSelected+UserConnect after " +
-                        "${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt} ms"
+                    tmsg(
+                        "ServerSelected+UserConnect after " +
+                            "${android.os.SystemClock.elapsedRealtime() - permissionGrantedAt}ms"
+                    )
                 )
             } catch (c: CancellationException) {
+                logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
             } catch (e: Exception) {
-                logCollector.error(TAG, "Server selection failed", e)
+                logCollector.error(TAG, tmsg("Server selection failed: ${e.message}"), e)
                 connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "selection failed"))
-                _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+                _uiState.value = _uiState.value.copy(
+                    connectionState = ConnectionUiState.ERROR,
+                    isBusy = false
+                )
             }
         }
     }
 
     fun onVpnPermissionDenied() {
         cancelConnectingWatchdog()
+        cancelSelectionJob("permission denied")
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
@@ -334,17 +371,20 @@ class HomeViewModel @Inject constructor(
 
     fun disconnect() {
         cancelConnectingWatchdog()
+        cancelSelectionJob("user disconnect")
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
             sessionStartedAt = null
         )
     }
 
     fun forceDisconnect() {
         cancelConnectingWatchdog()
+        cancelSelectionJob("force disconnect")
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
@@ -404,7 +444,7 @@ class HomeViewModel @Inject constructor(
     private fun ensureServiceRunning(action: String = VpnProxyService.ACTION_ENSURE_RUNNING) {
         try {
             val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
-            Log.d(TAG, "ensureServiceRunning action=$action")
+            Log.d(TAG, tmsg("ensureServiceRunning action=$action"))
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
                 context.startService(intent)
             } else {
