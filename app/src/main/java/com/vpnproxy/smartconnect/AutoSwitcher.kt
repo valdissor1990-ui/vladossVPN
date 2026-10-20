@@ -1,1 +1,1 @@
-FILE_FROM_DISK
+LOAD_FROM_/tmp/AutoSwitcher.kt
