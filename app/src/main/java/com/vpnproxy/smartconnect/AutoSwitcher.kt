@@ -1,8 +1,6 @@
 package com.vpnproxy.smartconnect
 
 import android.util.Log
-import java.util.ArrayDeque
-
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.service.VpnProxyService
@@ -25,8 +23,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
-
-private data class ProbeEvidence(val directLatencyMs: Long, val directSuccess: Boolean, val vpnLatencyMs: Long, val vpnSuccess: Boolean, val jitterMs: Long, val timestampMs: Long = System.currentTimeMillis())
 
 @Singleton
 class AutoSwitcher @Inject constructor(
@@ -55,7 +51,6 @@ class AutoSwitcher @Inject constructor(
     private var previousRtt: Long? = null
     @Volatile private var vpnService: VpnProxyService? = null
     @Volatile private var state = AutoSwitchState.MONITORING
-    private val recentEvidence = ArrayDeque<ProbeEvidence>()
     fun currentState(): AutoSwitchState = state
 
     fun attachVpnService(service: VpnProxyService) {
@@ -154,12 +149,7 @@ class AutoSwitcher @Inject constructor(
             protected
         }
         val vpn = healthMonitor.probeSocket(config.address, config.port, protectFromVpn = false) { false }
-        recentEvidence.addLast(ProbeEvidence(direct.latencyMs, direct.success, vpn.latencyMs, vpn.success, jitterMs))
-        val now = System.currentTimeMillis()
-        while (recentEvidence.isNotEmpty() && now - recentEvidence.peekFirst().timestampMs > AutoSwitcherConfig.evidenceWindowMs) {
-            recentEvidence.removeFirst()
-        }
-        while (recentEvidence.size > AutoSwitcherConfig.evidenceHistoryLimit) recentEvidence.removeFirst()
+        decisionEngine.recordEvidence(direct, vpn, jitterMs)
 
         val classification = decisionEngine.classify(direct, vpn)
         decisionEngine.record(classification)
