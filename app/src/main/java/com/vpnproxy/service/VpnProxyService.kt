@@ -146,10 +146,16 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         cancelIdleStop()
+                        connectionCoordinator.currentSelectedServer()?.let { autoSwitcher.forceSelect(it) }
                         restartVpnForDesiredState(state)
+                    }
+                    is ConnectionState.Verifying -> {
+                        cancelIdleStop()
+                        updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
                         cancelIdleStop()
+                        autoSwitcher.startMonitoring()
                         if (!_isRunning.value && !startInProgress) {
                             restartVpnForDesiredState(state)
                         } else {
@@ -349,7 +355,6 @@ class VpnProxyService : VpnService() {
 
             trafficCollector.start()
             trafficCollector.resetSession()
-            autoSwitcher.startMonitoring()
 
             _isRunning.value = true
             isReconnecting.set(false)
