@@ -24,12 +24,8 @@ object AutoSwitcherConfig {
     const val microProbeBufferBytes = 8 * 1_024
     const val directProbePort = 53
     const val evidenceHistoryLimit = 12
-    const val microProbeCallTimeoutSeconds = 6L
-    const val microProbeLogSwitchLimit = 3
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
-    const val reconnectGraceDelayMs = 5_000L
-    const val watchdogDelayMs = 15_000L
     const val ruTokenPattern = "(^|[^a-z0-9])ru([^a-z0-9]|$)"
     const val microProbeUrl = "https://proof.ovh.net/files/1Mb.dat"
 }
