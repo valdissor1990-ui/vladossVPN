@@ -351,6 +351,7 @@ class HomeViewModel @Inject constructor(
                 logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
             } catch (e: Exception) {
+                Log.d(TAG, "3. Server selection completed (error)")
                 logCollector.error(TAG, tmsg("Server selection failed: ${e.message}"), e)
                 connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "selection failed"))
                 _uiState.value = _uiState.value.copy(
