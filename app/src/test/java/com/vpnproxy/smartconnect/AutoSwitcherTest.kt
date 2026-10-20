@@ -31,6 +31,7 @@ class AutoSwitcherTest {
         assertFalse(shouldSwitchAfterEvidence(1, 0, directPathHealthy = true))
         assertTrue(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
     }
+
     @Test
     fun decisionEngine_tracksIndependentEvidenceAndCooldown() {
         val engine = SwitchDecisionEngine()
@@ -69,5 +70,4 @@ class AutoSwitcherTest {
             engine.latestEvidence(nowMs = 1_000L + AutoSwitcherConfig.evidenceWindowMs + 1)
         )
     }
-
 }

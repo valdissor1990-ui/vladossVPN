@@ -28,12 +28,7 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /**
-     * Full VPN configuration for libbox 1.14.3+.
-     *
-     * Legacy inbound fields (`sniff`, `sniff_override_destination`, `domain_strategy`)
-     * were removed in sing-box 1.13.0 — sniffing is done via route rule action instead.
-     */
+    /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildVpn(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject { put("level", "warn") })
         put("dns", buildJsonObject {
@@ -62,8 +57,6 @@ object SingboxConfigBuilder {
                 put("auto_route", true)
                 put("strict_route", true)
                 put("stack", "system")
-                // Do NOT set sniff / sniff_override_destination / domain_strategy here:
-                // removed in sing-box 1.13.0 → use route action "sniff".
             })
             add(buildJsonObject {
                 put("type", "mixed")
@@ -80,11 +73,7 @@ object SingboxConfigBuilder {
         put("route", buildJsonObject {
             put("auto_detect_interface", true)
             put("rules", buildJsonArray {
-                // Protocol sniff before other rules (replaces inbound.sniff)
-                add(buildJsonObject {
-                    put("action", "sniff")
-                })
-                // Hijack DNS to sing-box DNS module
+                add(buildJsonObject { put("action", "sniff") })
                 add(buildJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
@@ -98,7 +87,6 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildMulti(configs: List<ParsedConfig>, ports: List<Int>): String {
         require(configs.isNotEmpty()) { "At least one Sing-box config is required" }
         require(configs.size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
@@ -129,6 +117,17 @@ object SingboxConfigBuilder {
                 })
             })
         }.toString()
+    }
+
+    private fun parseXhttpExtra(rawExtra: String?): JsonObject? {
+        if (rawExtra.isNullOrBlank()) return null
+        val element = try {
+            Json.parseToJsonElement(rawExtra)
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid XHTTP extra JSON: ${e.message}", e)
+        }
+        val obj = element as? JsonObject ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
+        return obj
     }
 
     fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
@@ -188,24 +187,12 @@ object SingboxConfigBuilder {
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
                 "xhttp" -> put("transport", buildJsonObject {
-                    // sing-box-lx exposes XHTTP options as direct transport fields, not an "extra" wrapper.
-                    config.extra?.takeIf { it.isNotBlank() }?.let { rawExtra ->
-                        val extraObject = try {
-                            Json.parseToJsonElement(rawExtra) as? JsonObject
-                                ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
-                        } catch (e: IllegalArgumentException) {
-                            throw e
-                        } catch (e: Exception) {
-                            throw IllegalArgumentException("Invalid XHTTP extra JSON: \${e.message}", e)
-                        }
-                        extraObject.forEach { (key, value) ->
-                            if (key !in setOf("type", "host", "path", "mode")) put(key, value)
-                        }
-                    }
+                    val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                     config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
                     put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
+                    if (extraObject != null) put("extra", extraObject)
                 })
             }
 

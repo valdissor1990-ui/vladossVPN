@@ -60,8 +60,6 @@ class SubscriptionParser @Inject constructor(
                 transport.equals("hy2", ignoreCase = true) ||
                 transport.equals("tuic", ignoreCase = true) ||
                 transport.equals("xhttp", ignoreCase = true)
-
-
     }
 
     fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
@@ -202,9 +200,30 @@ class SubscriptionParser @Inject constructor(
     private fun decodeUriComponent(value: String): String =
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
 
+    private fun normalizeXhttpExtra(rawValue: String?): String? {
+        if (rawValue.isNullOrBlank()) return null
+        val decoded = try {
+            URLDecoder.decode(rawValue, "UTF-8")
+        } catch (_: IllegalArgumentException) {
+            rawValue
+        }
+        val trimmed = decoded.trim()
+        if (trimmed.isEmpty()) return null
+        return try {
+            val element = Json.parseToJsonElement(trimmed)
+            if (element !is JsonObject) {
+                logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
+                return null
+            }
+            element.toString()
+        } catch (e: Exception) {
+            logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.message}")
+            null
+        }
+    }
+
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
-            // java.net.URI keeps this parser usable in JVM unit tests and preserves encoded URI components.
             val parsed = URI(uri)
             val uuid = parsed.rawUserInfo?.takeIf { it.isNotBlank() }?.let(::decodeUriComponent) ?: return null
             val address = parsed.host ?: return null
@@ -230,7 +249,7 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
-                extra = params["extra"]?.takeIf { it.isNotBlank() }
+                extra = normalizeXhttpExtra(params["extra"])
             )
             if (!config.isValid()) {
                 logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))

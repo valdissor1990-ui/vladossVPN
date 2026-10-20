@@ -3,8 +3,8 @@ package com.vpnproxy.smartconnect
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
-import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,6 +39,7 @@ class AutoSwitcher @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val healthMonitor = HealthMonitor(logCollector, healthChecker)
     private val decisionEngine = SwitchDecisionEngine()
+    private val serverBlacklist = ConcurrentHashMap<String, Long>()
     private var healthCheckJob: Job? = null
 
     private val _currentServer = MutableStateFlow<ScoredServer?>(null)
@@ -74,6 +76,34 @@ class AutoSwitcher @Inject constructor(
 
     fun isSwitching(): Boolean = switching.get()
 
+    private fun serverKey(config: ParsedConfig): String =
+        "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
+
+    private fun pruneBlacklist(nowMs: Long = System.currentTimeMillis()) {
+        serverBlacklist.entries.removeIf { it.value <= nowMs }
+    }
+
+    fun isBlacklisted(config: ParsedConfig?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val target = config ?: return false
+        pruneBlacklist(nowMs)
+        val expiresAt = serverBlacklist[serverKey(target)] ?: return false
+        if (expiresAt <= nowMs) {
+            serverBlacklist.remove(serverKey(target))
+            return false
+        }
+        return true
+    }
+
+    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        val key = serverKey(target)
+        serverBlacklist[key] = nowMs + ttlMs
+        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
+    }
+
+    private fun filterUsableServers(configs: List<ParsedConfig>): List<ParsedConfig> =
+        configs.filterNot { isBlacklisted(it) }
+
     fun startMonitoring() {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
@@ -96,6 +126,10 @@ class AutoSwitcher @Inject constructor(
     private suspend fun checkCurrentServer() {
         val current = _currentServer.value ?: return
         if (switching.get()) return
+        if (isBlacklisted(current.config)) {
+            logCollector.info(TAG, "Current server is blacklisted; monitoring pause for ${current.config.name}")
+            return
+        }
 
         try {
             val result = healthMonitor.checkSelectedServer(current.config) ?: return
@@ -196,8 +230,8 @@ class AutoSwitcher @Inject constructor(
             if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
                 val last = decisionEngine.latestEvidence()
                 if (last != null && decisionEngine.shouldSwitch(
-                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
-                )
+                        last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+                    )
                 ) {
                     performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
                 } else {
@@ -212,8 +246,8 @@ class AutoSwitcher @Inject constructor(
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
             val last = decisionEngine.latestEvidence()
             if (last != null && decisionEngine.shouldSwitch(
-                last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
-            )
+                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+                )
             ) {
                 performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
             } else {
@@ -260,7 +294,7 @@ class AutoSwitcher @Inject constructor(
         }
         try {
             val current = _currentServer.value
-            val ranked = _rankedServers.value
+            val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
             val best = ranked.firstOrNull { !sameServer(current?.config, it.config) }
                 ?: ranked.firstOrNull()?.takeIf { current == null }
                 ?: return null
@@ -293,9 +327,10 @@ class AutoSwitcher @Inject constructor(
 
     /** Set the chosen server immediately; no latency probes run on the connection path. */
     fun selectImmediate(config: ParsedConfig, candidates: List<ParsedConfig>): ScoredServer {
+        val filtered = candidates.filterNot { isBlacklisted(it) }
         val selected = ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
         _currentServer.value = selected
-        _rankedServers.value = listOf(selected) + candidates
+        _rankedServers.value = listOf(selected) + filtered
             .filterNot { sameConfig(it, config) }
             .map { ScoredServer(it, Long.MAX_VALUE, 0f, 0f, 0f) }
         baselineRtt = 0L
@@ -306,10 +341,15 @@ class AutoSwitcher @Inject constructor(
 
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
+        val allowed = filterUsableServers(configs)
+        if (allowed.isEmpty()) {
+            logCollector.warn(TAG, "All candidate servers are blacklisted; background ranking skipped")
+            return
+        }
         scope.launch {
             try {
-                val russian = configs.filter(::isRussian)
-                val foreign = configs.filterNot(::isRussian)
+                val russian = allowed.filter(::isRussian)
+                val foreign = allowed.filterNot(::isRussian)
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
@@ -320,8 +360,6 @@ class AutoSwitcher @Inject constructor(
                         TAG,
                         "0 reachable servers — network may be blocked; keeping current server [$currentName], automatic switching suppressed"
                     )
-                    // Preserve the previous ranking and current server. An empty probe result is not
-                    // evidence that a different server is healthy.
                     return@launch
                 }
                 _rankedServers.value = ranked
@@ -352,8 +390,13 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
-        Log.i(TAG, "Starting server selection/ranking for ${configs.size} configs")
-        val ranked = scoringEngine.rankAll(configs, healthChecker)
+        val allowed = filterUsableServers(configs)
+        if (allowed.isEmpty()) {
+            logCollector.warn(TAG, "No non-blacklisted servers available for ranking")
+            return null
+        }
+        Log.i(TAG, "Starting server selection/ranking for ${allowed.size} configs")
+        val ranked = scoringEngine.rankAll(allowed, healthChecker)
         Log.i(TAG, "Server ranking completed: ${ranked.size} candidates")
         _rankedServers.value = ranked
         val best = ranked.firstOrNull()
@@ -368,7 +411,7 @@ class AutoSwitcher @Inject constructor(
             )
             Log.i(TAG, "Selected server: ${best.config.name} at ${best.config.address}:${best.config.port}; rtt=${best.latencyMs}ms score=${best.score}")
         } else {
-            Log.w(TAG, "Server selection produced no candidate from ${configs.size} configs")
+            Log.w(TAG, "Server selection produced no candidate from ${allowed.size} configs")
         }
         return best
     }
@@ -396,7 +439,7 @@ class AutoSwitcher @Inject constructor(
             return null
         }
         try {
-            val ranked = _rankedServers.value
+            val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
             val current = _currentServer.value
             if (ranked.isEmpty()) return null
             val currentIndex = ranked.indexOfFirst {
@@ -425,7 +468,7 @@ class AutoSwitcher @Inject constructor(
 
     private fun reSelect() {
         if (switching.get()) return
-        val ranked = _rankedServers.value
+        val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
         val best = ranked.firstOrNull() ?: return
         val current = _currentServer.value
         if (sameServer(current?.config, best.config)) {

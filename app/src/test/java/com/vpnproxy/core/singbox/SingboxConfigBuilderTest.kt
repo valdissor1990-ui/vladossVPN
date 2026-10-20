@@ -5,7 +5,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.boolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -66,6 +65,7 @@ class SingboxConfigBuilderTest {
         assertEquals("native", outbound["udp_relay_mode"]!!.jsonPrimitive.content)
         assertTrue(outbound["tls"]!!.jsonObject["alpn"]!!.jsonArray.isNotEmpty())
     }
+
     @Test
     fun multiServerConfigPinsEachInboundToItsOwnOutbound() {
         val hy2 = config("hysteria2", "hy2-secret")
@@ -125,7 +125,7 @@ class SingboxConfigBuilderTest {
             path = "/xhttp", host = "www.example.org", mode = "stream-one",
             fingerprint = "chrome", publicKey = "public-key", shortId = "a1b2",
             flow = "", name = "xhttp",
-            extra = """{"x_padding_bytes":"100-200","headers":{"X-Test":"yes"}}"""
+            extra = """{"xPaddingBytes":"100-200","headers":{"X-Test":"yes"}}"""
         )
         val outbound = kotlinx.serialization.json.Json.parseToJsonElement(SingboxConfigBuilder.build(config))
             .jsonObject["outbounds"]!!.jsonArray.first().jsonObject
@@ -134,12 +134,12 @@ class SingboxConfigBuilderTest {
         assertEquals("www.example.org", transport["host"]!!.jsonPrimitive.content)
         assertEquals("/xhttp", transport["path"]!!.jsonPrimitive.content)
         assertEquals("stream-one", transport["mode"]!!.jsonPrimitive.content)
-        assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
-        assertEquals("yes", transport["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("xPaddingBytes"))
+        assertEquals("100-200", transport["extra"]!!.jsonObject["xPaddingBytes"]!!.jsonPrimitive.content)
+        assertEquals("yes", transport["extra"]!!.jsonObject["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
         val tls = outbound["tls"]!!.jsonObject
         assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)
         assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
         assertEquals("a1b2", tls["reality"]!!.jsonObject["short_id"]!!.jsonPrimitive.content)
     }
-
 }
