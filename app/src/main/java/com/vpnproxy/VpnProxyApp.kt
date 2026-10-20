@@ -73,7 +73,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
                 val count = subscriptionRepository.refreshAll()
                 logCollector.info("VpnProxyApp", "Startup subscription refresh finished: configs=$count")
                 if (count == 0) {
-                    logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no bootstrap servers are available")
+                    logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
                 }
             } catch (t: Throwable) {
                 logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
