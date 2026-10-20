@@ -50,8 +50,8 @@ internal class SwitchDecisionEngine {
     private val recentSwitchesMs = ArrayDeque<Long>()
     private val recentEvidence = ArrayDeque<ProbeEvidence>()
 
-    val consecutiveServerEvidence: Int get() = serverEvidence
-    val consecutiveNetworkEvidence: Int get() = networkEvidence
+    val consecutiveServerEvidence: Int get() = synchronized(this) { serverEvidence }
+    val consecutiveNetworkEvidence: Int get() = synchronized(this) { networkEvidence }
     val cooldownUntilMs: Long get() = synchronized(this) { cooldownUntil }
 
     fun classify(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
@@ -76,6 +76,7 @@ internal class SwitchDecisionEngine {
         }
     }
 
+    @Synchronized
     fun shouldSwitch(directPathHealthy: Boolean): Boolean =
         shouldSwitchAfterEvidence(serverEvidence, networkEvidence, directPathHealthy)
 
