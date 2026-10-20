@@ -407,7 +407,7 @@ class VpnProxyService : VpnService() {
         Log.e("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
         vpnJob?.cancel()
         vpnJob = scope.launch {
-            lifecycleMutex.withLock {
+            lifecycleController?.withLifecycleLock {
                 stopVpnInternal(reason)
                 connectionCoordinator.send(ConnectionEvent.ServiceStopped)
                 if (_serviceState.value != ServiceState.Stopping) {
@@ -496,7 +496,7 @@ class VpnProxyService : VpnService() {
         }
 
         scope.launch(Dispatchers.IO) {
-            lifecycleMutex.withLock {
+            lifecycleController?.withLifecycleLock {
                 try {
                     stopVpnInternal("forceStop: $reason")
                 } catch (t: Throwable) {
