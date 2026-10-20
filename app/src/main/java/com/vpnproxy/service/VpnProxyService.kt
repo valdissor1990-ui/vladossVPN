@@ -280,20 +280,23 @@ class VpnProxyService : VpnService() {
         }
         vpnJob?.cancel()
         vpnJob = scope.launch {
-            lifecycleController?.withLifecycleLock {
-                try {
-                    if (_isRunning.value) {
+            try {
+                val controller = lifecycleController
+                    ?: error("VPN lifecycle controller was not initialized")
+                controller.restartSession(
+                    coreIsRunning = { _isRunning.value },
+                    stopSession = {
                         stopVpnInternal("soft restart for $state", softRestart = true)
-                        delay(300)
-                    }
-                    startVpnSession()
-                } catch (c: kotlinx.coroutines.CancellationException) {
-                    throw c
-                } catch (t: Throwable) {
-                    Log.e(TAG, "restartVpnForDesiredState failed", t)
-                    transitionServiceState(ServiceState.Failed(t.message ?: "restart failed"))
-                    emitCoreError(t)
-                }
+                    },
+                    startSession = { startVpnSession() },
+                    restartDelayMs = 300L
+                )
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                Log.e(TAG, "restartVpnForDesiredState failed", t)
+                transitionServiceState(ServiceState.Failed(t.message ?: "restart failed"))
+                emitCoreError(t)
             }
         }
     }
