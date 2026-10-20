@@ -1,19 +1,8 @@
 package com.vpnproxy.smartconnect
 
 import android.util.Log
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.net.Socket
-import java.util.ArrayDeque
-import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.runInterruptible
-
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
-import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
@@ -35,34 +24,6 @@ import javax.inject.Singleton
 
 enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITCHING }
 
-internal enum class NetworkFaultKind { NONE, NETWORK_DEGRADATION, SERVER_DEGRADATION }
-internal data class ProbeResult(val latencyMs: Long, val success: Boolean)
-
-internal fun classifyProbeFault(
-    direct: ProbeResult,
-    vpn: ProbeResult,
-    suspectRttMs: Long = 500L,
-    directFastRttMs: Long = 100L
-): NetworkFaultKind {
-    val directBad = !direct.success || direct.latencyMs > suspectRttMs
-    val directFast = direct.success && direct.latencyMs < directFastRttMs
-    val vpnBad = !vpn.success || vpn.latencyMs > suspectRttMs
-    return when {
-        directBad && !vpnBad -> NetworkFaultKind.NETWORK_DEGRADATION
-        directFast && vpnBad -> NetworkFaultKind.SERVER_DEGRADATION
-        else -> NetworkFaultKind.NONE
-    }
-}
-
-internal fun shouldSwitchAfterEvidence(
-    serverConfirmations: Int,
-    networkConfirmations: Int,
-    directPathHealthy: Boolean
-): Boolean = directPathHealthy &&
-    serverConfirmations >= 2 &&
-    networkConfirmations < 2
-private data class ProbeEvidence(val directLatencyMs: Long, val directSuccess: Boolean, val vpnLatencyMs: Long, val vpnSuccess: Boolean, val jitterMs: Long, val timestampMs: Long = System.currentTimeMillis())
-
 @Singleton
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
@@ -72,26 +33,11 @@ class AutoSwitcher @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
-        private const val HEALTH_CHECK_INTERVAL_MS = 150_000L
-        private const val SUSPECT_RTT_MS = 500L
-        private const val SUSPECT_JITTER_MS = 150L
-        private const val DIRECT_FAST_RTT_MS = 100L
-        private const val MICRO_PROBE_MIN_MBPS = 1.0
-        private const val SWITCH_COOLDOWN_MS = 5 * 60_000L
-        private const val SWITCH_WINDOW_MS = 15 * 60_000L
-        private const val MAX_SWITCHES_PER_WINDOW = 3
-        private const val DIRECT_PROBE_TIMEOUT_MS = 1_500
-        private const val MICRO_PROBE_TIMEOUT_MS = 3_000
-        private const val MICRO_PROBE_BYTES = 51_200L
-        private const val MICRO_PROBE_URL = "https://proof.ovh.net/files/1Mb.dat"
-        private const val SERVER_DEGRADATION_CONFIRMATIONS = 2
-        private const val NETWORK_DEGRADATION_CONFIRMATIONS = 2
-        private const val EVIDENCE_WINDOW_MS = 10 * 60_000L
-        private const val MAX_CONSECUTIVE_ERRORS = 3
-        private const val RTT_DEGRADATION_FACTOR = 3.0
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val healthMonitor = HealthMonitor(logCollector, healthChecker)
+    private val decisionEngine = SwitchDecisionEngine()
     private var healthCheckJob: Job? = null
 
     private val _currentServer = MutableStateFlow<ScoredServer?>(null)
@@ -105,19 +51,6 @@ class AutoSwitcher @Inject constructor(
     private var previousRtt: Long? = null
     @Volatile private var vpnService: VpnProxyService? = null
     @Volatile private var state = AutoSwitchState.MONITORING
-    private var cooldownUntilMs = 0L
-    private val recentSwitchesMs = ArrayDeque<Long>()
-    private val recentEvidence = ArrayDeque<ProbeEvidence>()
-    private var consecutiveServerEvidence = 0
-    private var consecutiveNetworkEvidence = 0
-    private val microProbeClient = OkHttpClient.Builder()
-        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
-        .connectTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-        .readTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-        .callTimeout(MICRO_PROBE_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
-        .retryOnConnectionFailure(false)
-        .build()
-
     fun currentState(): AutoSwitchState = state
 
     fun attachVpnService(service: VpnProxyService) {
@@ -145,8 +78,8 @@ class AutoSwitcher @Inject constructor(
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
-                delay(HEALTH_CHECK_INTERVAL_MS)
-                if (System.currentTimeMillis() < cooldownUntilMs) {
+                delay(AutoSwitcherConfig.healthCheckIntervalMs)
+                if (decisionEngine.isInCooldown()) {
                     logCollector.debug(TAG, "Slow-server checks skipped during switch cooldown")
                     continue
                 }
@@ -165,8 +98,8 @@ class AutoSwitcher @Inject constructor(
         if (switching.get()) return
 
         try {
-            val result = healthChecker.testLatency(listOf(current.config)).firstOrNull() ?: return
-            val jitter = previousRtt?.let { kotlin.math.abs(result.latencyMs - it) } ?: 0L
+            val result = healthMonitor.checkSelectedServer(current.config) ?: return
+            val jitter = healthMonitor.calculateJitter(previousRtt, result.latencyMs)
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
 
             if (!result.success || result.latencyMs == Long.MAX_VALUE) {
@@ -176,7 +109,7 @@ class AutoSwitcher @Inject constructor(
                     "Health check failed for ${current.config.name}",
                     mapOf("errors" to consecutiveErrors)
                 )
-                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                if (consecutiveErrors >= AutoSwitcherConfig.maxConsecutiveErrors) {
                     logCollector.warn(TAG, "Repeated health-check failures; require direct-vs-VPN validation before any switch")
                 }
                 if (state == AutoSwitchState.MONITORING) {
@@ -187,8 +120,8 @@ class AutoSwitcher @Inject constructor(
             }
 
             consecutiveErrors = 0
-            val baselineDegraded = baselineRtt > 0 && result.latencyMs > baselineRtt * RTT_DEGRADATION_FACTOR
-            if (baselineDegraded || result.latencyMs > SUSPECT_RTT_MS || jitter > SUSPECT_JITTER_MS) {
+            val baselineDegraded = baselineRtt > 0 && result.latencyMs > baselineRtt * AutoSwitcherConfig.rttDegradationFactor
+            if (baselineDegraded || result.latencyMs > AutoSwitcherConfig.suspectRttMs || jitter > AutoSwitcherConfig.suspectJitterMs) {
                 if (state == AutoSwitchState.MONITORING) {
                     val reason = "RTT=${result.latencyMs}ms, baseline=${baselineRtt}ms, jitter=${jitter}ms"
                     transitionTo(AutoSwitchState.SUSPECT, reason)
@@ -204,123 +137,66 @@ class AutoSwitcher @Inject constructor(
     }
 
     private suspend fun validateSlowServer(config: ParsedConfig, measuredRtt: Long, jitterMs: Long) {
-        if (System.currentTimeMillis() < cooldownUntilMs || switching.get()) {
+        if (decisionEngine.isInCooldown() || switching.get()) {
             transitionTo(AutoSwitchState.MONITORING, "cooldown or switch already active")
             return
         }
         transitionTo(AutoSwitchState.VALIDATING, "active direct-vs-VPN socket validation")
-        val direct = probeSocket("1.1.1.1", 53, protectFromVpn = true)
-        val vpn = probeSocket(config.address, config.port, protectFromVpn = false)
-        recentEvidence.addLast(ProbeEvidence(direct.latencyMs, direct.success, vpn.latencyMs, vpn.success, jitterMs))
-        val now = System.currentTimeMillis()
-        while (recentEvidence.isNotEmpty() && now - recentEvidence.peekFirst().timestampMs > EVIDENCE_WINDOW_MS) {
-            recentEvidence.removeFirst()
+        val direct = healthMonitor.probeSocket("1.1.1.1", AutoSwitcherConfig.directProbePort, protectFromVpn = true) { socket ->
+            val service = vpnService
+            val protected = service?.protect(socket) == true
+            logCollector.info(TAG, "Direct probe protect(socket) invoked: serviceAvailable=${service != null}, result=$protected, target=1.1.1.1:${AutoSwitcherConfig.directProbePort}")
+            protected
         }
-        while (recentEvidence.size > 12) recentEvidence.removeFirst()
+        val vpn = healthMonitor.probeSocket(config.address, config.port, protectFromVpn = false) { false }
+        decisionEngine.recordEvidence(direct, vpn, jitterMs)
 
-        val classification = classifyFault(direct, vpn)
+        val classification = decisionEngine.classify(direct, vpn)
+        decisionEngine.record(classification)
         logCollector.info(
             TAG,
             "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
                 "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms; " +
-                "classification=$classification serverEvidence=$consecutiveServerEvidence networkEvidence=$consecutiveNetworkEvidence"
+                "classification=$classification serverEvidence=${decisionEngine.consecutiveServerEvidence} networkEvidence=${decisionEngine.consecutiveNetworkEvidence}"
         )
         when (classification) {
             NetworkFaultKind.NETWORK_DEGRADATION -> {
-                consecutiveNetworkEvidence++
-                consecutiveServerEvidence = 0
-                val networkStatus = if (consecutiveNetworkEvidence >= NETWORK_DEGRADATION_CONFIRMATIONS) {
-                    "underlying network degradation confirmed $consecutiveNetworkEvidence times; automatic server switching suppressed"
+                val networkConfirmations = decisionEngine.consecutiveNetworkEvidence
+                val networkStatus = if (networkConfirmations >= AutoSwitcherConfig.networkDegradationConfirmations) {
+                    "underlying network degradation confirmed $networkConfirmations times; automatic server switching suppressed"
                 } else {
-                    "underlying network degradation suspected ($consecutiveNetworkEvidence/$NETWORK_DEGRADATION_CONFIRMATIONS); automatic server switching suppressed"
+                    "underlying network degradation suspected ($networkConfirmations/${AutoSwitcherConfig.networkDegradationConfirmations}); automatic server switching suppressed"
                 }
                 transitionTo(AutoSwitchState.MONITORING, networkStatus)
             }
             NetworkFaultKind.SERVER_DEGRADATION -> {
-                consecutiveServerEvidence++
-                consecutiveNetworkEvidence = 0
-                if (consecutiveServerEvidence < SERVER_DEGRADATION_CONFIRMATIONS) {
-                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $consecutiveServerEvidence/$SERVER_DEGRADATION_CONFIRMATIONS; awaiting independent confirmation")
+                val serverConfirmations = decisionEngine.consecutiveServerEvidence
+                if (serverConfirmations < AutoSwitcherConfig.serverDegradationConfirmations) {
+                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $serverConfirmations/${AutoSwitcherConfig.serverDegradationConfirmations}; awaiting independent confirmation")
                 } else {
                     transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed twice; checking transport")
                     runMicroProbe()
                 }
             }
             NetworkFaultKind.NONE -> {
-                consecutiveServerEvidence = 0
-                consecutiveNetworkEvidence = 0
                 transitionTo(AutoSwitchState.MONITORING, "validation did not confirm degradation")
             }
         }
     }
 
     internal fun classifyFault(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
-        classifyProbeFault(direct, vpn, SUSPECT_RTT_MS, DIRECT_FAST_RTT_MS)
-
-    private suspend fun probeSocket(host: String, port: Int, protectFromVpn: Boolean): ProbeResult =
-        withContext(Dispatchers.IO) {
-            val start = System.nanoTime()
-            try {
-                val socketProxy = if (protectFromVpn) Proxy.NO_PROXY else Proxy(
-                    Proxy.Type.SOCKS,
-                    InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
-                )
-                Socket(socketProxy).use { socket ->
-                    if (protectFromVpn) {
-                        val service = vpnService
-                        val protected = service?.protect(socket) == true
-                        logCollector.info(
-                            TAG,
-                            "Direct probe protect(socket) invoked: serviceAvailable=${service != null}, result=$protected, target=$host:$port"
-                        )
-                        if (!protected) return@withContext ProbeResult(Long.MAX_VALUE, false)
-                    }
-                    runInterruptible(Dispatchers.IO) { socket.connect(InetSocketAddress(host, port), DIRECT_PROBE_TIMEOUT_MS) }
-                    val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                    ProbeResult(elapsed, true)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                logCollector.warn(TAG, "Socket probe failed for $host:$port protect=$protectFromVpn: ${e.message}")
-                ProbeResult(Long.MAX_VALUE, false)
-            }
-        }
+        classifyProbeFault(direct, vpn, AutoSwitcherConfig.suspectRttMs, AutoSwitcherConfig.directFastRttMs)
 
     private suspend fun runMicroProbe() {
-        val startedAt = System.nanoTime()
         try {
-            val request = Request.Builder()
-                .url(MICRO_PROBE_URL)
-                .header("User-Agent", "VPNProxy/1.0")
-                .header("Cache-Control", "no-cache")
-                .build()
-            val bytesRead = withContext(Dispatchers.IO) {
-                microProbeClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw IllegalStateException("HTTP ${response.code}")
-                    val input = response.body?.byteStream()
-                        ?: throw IllegalStateException("Empty micro-probe response")
-                    input.use { stream ->
-                        val buffer = ByteArray(8 * 1024)
-                        var total = 0L
-                        while (total < MICRO_PROBE_BYTES) {
-                            val read = stream.read(buffer, 0, minOf(buffer.size.toLong(), MICRO_PROBE_BYTES - total).toInt())
-                            if (read < 0) break
-                            total += read
-                        }
-                        total
-                    }
-                }
-            }
-            val elapsedMs = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-            val speedMbps = bytesRead * 8.0 / 1_000_000.0 / (elapsedMs / 1_000.0)
-            logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${elapsedMs}ms ($speedMbps Mbps)")
-            if (bytesRead < MICRO_PROBE_BYTES || speedMbps < MICRO_PROBE_MIN_MBPS) {
-                val last = recentEvidence.lastOrNull()
-                if (last != null && shouldSwitchAfterEvidence(
-                    consecutiveServerEvidence,
-                    consecutiveNetworkEvidence,
-                    last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS
+            val result = healthMonitor.probeMicroSpeed()
+            val bytesRead = result.bytesRead
+            val speedMbps = result.speedMbps
+            logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${result.elapsedMs}ms ($speedMbps Mbps)")
+            if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
+                val last = decisionEngine.latestEvidence()
+                if (last != null && decisionEngine.shouldSwitch(
+                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
                 )
                 ) {
                     performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
@@ -334,11 +210,9 @@ class AutoSwitcher @Inject constructor(
             throw e
         } catch (e: Exception) {
             logCollector.error(TAG, "Micro-probe timed out/failed", e)
-            val last = recentEvidence.lastOrNull()
-            if (last != null && shouldSwitchAfterEvidence(
-                consecutiveServerEvidence,
-                consecutiveNetworkEvidence,
-                last.directSuccess && last.directLatencyMs < DIRECT_FAST_RTT_MS
+            val last = decisionEngine.latestEvidence()
+            if (last != null && decisionEngine.shouldSwitch(
+                last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
             )
             ) {
                 performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
@@ -351,29 +225,18 @@ class AutoSwitcher @Inject constructor(
     private suspend fun performSlowServerSwitch(reason: String) {
         transitionTo(AutoSwitchState.SWITCHING, reason)
         val now = System.currentTimeMillis()
-        synchronized(recentSwitchesMs) {
-            while (recentSwitchesMs.isNotEmpty() && now - recentSwitchesMs.peekFirst() > SWITCH_WINDOW_MS) {
-                recentSwitchesMs.removeFirst()
-            }
-            if (recentSwitchesMs.size >= MAX_SWITCHES_PER_WINDOW) {
-                transitionTo(AutoSwitchState.MONITORING, "switch limit reached; suppressing further automatic switches")
-                vpnService?.showUnstableNetworkNotification()
-                return
-            }
+        if (!decisionEngine.canAttemptSwitch(now)) {
+            transitionTo(AutoSwitchState.MONITORING, "switch limit reached; suppressing further automatic switches")
+            vpnService?.showUnstableNetworkNotification()
+            return
         }
         val switched = switchToBest() != null
         if (switched) {
             val switchedAt = System.currentTimeMillis()
-            synchronized(recentSwitchesMs) {
-                recentSwitchesMs.addLast(switchedAt)
-                while (recentSwitchesMs.isNotEmpty() && switchedAt - recentSwitchesMs.peekFirst() > SWITCH_WINDOW_MS) {
-                    recentSwitchesMs.removeFirst()
-                }
-                cooldownUntilMs = switchedAt + SWITCH_COOLDOWN_MS
-                if (recentSwitchesMs.size >= MAX_SWITCHES_PER_WINDOW) {
-                    vpnService?.showUnstableNetworkNotification()
-                    logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
-                }
+            val switchLimitReached = decisionEngine.recordSuccessfulSwitch(switchedAt)
+            if (switchLimitReached) {
+                vpnService?.showUnstableNetworkNotification()
+                logCollector.warn(TAG, "Three automatic switches in 15 minutes; user notification shown")
             }
             val server = _currentServer.value
             if (server != null) {
@@ -383,7 +246,7 @@ class AutoSwitcher @Inject constructor(
             } else {
                 vpnService?.reconnectAfterSlowServerSwitch()
             }
-            logCollector.info(TAG, "Slow-server switch succeeded; cooldown until $cooldownUntilMs")
+            logCollector.info(TAG, "Slow-server switch succeeded; cooldown until ${decisionEngine.cooldownUntilMs}")
         } else {
             logCollector.warn(TAG, "Slow-server switch could not select a different server")
         }
@@ -417,7 +280,7 @@ class AutoSwitcher @Inject constructor(
         val name = config.name.lowercase()
         val provider = config.providerTag.lowercase()
         val sni = config.sni.orEmpty().lowercase()
-        val ruToken = Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)")
+        val ruToken = Regex(AutoSwitcherConfig.ruTokenPattern)
         return config.providerTag.contains("🇷🇺") ||
             ruToken.containsMatchIn(provider) ||
             config.name.contains("🇷🇺") ||
@@ -464,7 +327,7 @@ class AutoSwitcher @Inject constructor(
                 _rankedServers.value = ranked
                 logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
 
-                val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < 200L }
+                val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < AutoSwitcherConfig.ruFastServerRttMs }
                 val current = _currentServer.value
                 if (bestRussian != null && (current == null || !sameConfig(current.config, bestRussian.config)) &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
@@ -553,7 +416,7 @@ class AutoSwitcher @Inject constructor(
             consecutiveErrors = 0
             _switchEvents.value = "Переключено на ${next.config.name}"
             logCollector.info(TAG, "Manual switch to: ${next.config.name}")
-            delay(50)
+            delay(AutoSwitcherConfig.manualSwitchDelayMs)
             return next
         } finally {
             switching.set(false)
