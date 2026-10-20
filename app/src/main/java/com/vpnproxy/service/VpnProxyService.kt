@@ -92,7 +92,6 @@ class VpnProxyService : VpnService() {
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
 
-
     override fun onCreate() {
         super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
@@ -106,6 +105,10 @@ class VpnProxyService : VpnService() {
         }
 
         createNotificationChannel()
+        // HARD RULE: startForeground MUST run before any heavy work (Sing-box, collectors).
+        // Android kills the process with ForegroundServiceDidNotStartInTimeException after ~5s.
+        promoteToForeground(getString(R.string.state_connecting))
+        Log.d("VpnService", "startForeground (Connecting) done BEFORE heavy init")
 
         try {
             autoSwitcher.attachVpnService(this)
@@ -114,6 +117,14 @@ class VpnProxyService : VpnService() {
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
             Log.e(TAG, "VpnProxyService.onCreate failed during Sing-box/service initialization", t)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (_: Throwable) { }
             throw t
         }
 
@@ -145,6 +156,7 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connecting,
                     is ConnectionState.Reconnecting -> {
                         cancelIdleStop()
+                        promoteToForeground(getString(R.string.state_connecting))
                         connectionCoordinator.currentSelectedServer()?.let { autoSwitcher.forceSelect(it) }
                         restartVpnForDesiredState(state)
                     }
@@ -181,6 +193,10 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Re-assert foreground on every start — covers process restart / missed onCreate path.
+        if (_serviceState.value != ServiceState.Stopping) {
+            promoteToForeground(getString(R.string.state_connecting))
+        }
         if (_serviceState.value == ServiceState.Stopping) {
             Log.w(TAG, "onStartCommand ignored — serviceState=${_serviceState.value} (action=${intent?.action})")
             return START_NOT_STICKY
@@ -233,7 +249,7 @@ class VpnProxyService : VpnService() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-            Log.d("VpnService", "startForeground successful")
+            Log.d("VpnService", "startForeground successful: $text")
         } catch (t: Throwable) {
             Log.e("VpnService", "startForeground FAILED", t)
             throw t
@@ -367,9 +383,9 @@ class VpnProxyService : VpnService() {
             _isRunning.value = true
             transitionServiceState(ServiceState.Active)
             isReconnecting.set(false)
-            promoteToForeground("Проверка интернет-трафика…")
-            updateNotification("Проверка интернет-трафика…")
-            logCollector.info(TAG, "Sing-box VPN started; validating actual traffic")
+            promoteToForeground(getString(R.string.state_connected))
+            updateNotification(getString(R.string.state_connected))
+            logCollector.info(TAG, "Sing-box VPN started successfully")
             connectionCoordinator.send(ConnectionEvent.ServiceReady(parsed.name))
             try {
                 batteryLogger.logSnapshot("vpn_connected")
@@ -387,9 +403,16 @@ class VpnProxyService : VpnService() {
             transitionServiceState(ServiceState.Failed(reasonMsg))
             stopVpnInternal("startVpnSession failed", t)
             emitCoreError(t)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (_: Throwable) { }
             stopSelf()
         } finally {
-
             isReconnecting.set(false)
         }
     }
@@ -427,10 +450,6 @@ class VpnProxyService : VpnService() {
         throwable: Throwable? = null,
         softRestart: Boolean = false
     ) {
-        val serviceWasAlreadyStopping = _serviceState.value == ServiceState.Stopping
-        if (!serviceWasAlreadyStopping && _serviceState.value !is ServiceState.Failed) {
-            transitionServiceState(ServiceState.Stopping)
-        }
         try {
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
@@ -438,7 +457,6 @@ class VpnProxyService : VpnService() {
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false
-            if (!serviceWasAlreadyStopping && _serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
             if (!softRestart) {
                 stopBatteryPeriodicLogging()
             }
@@ -453,12 +471,6 @@ class VpnProxyService : VpnService() {
             throw c
         } catch (t: Throwable) {
             logCollector.error(TAG, "Error stopping VPN", t)
-            transitionServiceState(ServiceState.Failed(t.message ?: "stop failed"))
-        } finally {
-            // Cancellation during a soft restart must not strand the next start in Stopping.
-            if (!serviceWasAlreadyStopping && _serviceState.value == ServiceState.Stopping) {
-                transitionServiceState(ServiceState.Idle)
-            }
         }
     }
 
@@ -483,10 +495,6 @@ class VpnProxyService : VpnService() {
         batteryPeriodicJob = null
     }
 
-    /**
-     * Immediate teardown without runBlocking.
-     * Idempotent via the explicit service lifecycle state.
-     */
     private fun forceStopService(reason: String) {
         if (_serviceState.value == ServiceState.Stopping) {
             Log.d(TAG, "forceStopService already in progress, skip ($reason)")
@@ -503,7 +511,6 @@ class VpnProxyService : VpnService() {
             watchdogJob = null
             cancelIdleStop()
             stopBatteryPeriodicLogging()
-
             isReconnecting.set(false)
             networkReconnector?.stop()
         } catch (t: Throwable) {
@@ -511,12 +518,10 @@ class VpnProxyService : VpnService() {
         }
 
         scope.launch(Dispatchers.IO) {
-            lifecycleController?.withLifecycleLock {
-                try {
-                    stopVpnInternal("forceStop: $reason")
-                } catch (t: Throwable) {
-                    Log.e(TAG, "forceStopService stopVpnInternal failed", t)
-                }
+            try {
+                stopVpnInternal("forceStop: $reason")
+            } catch (t: Throwable) {
+                Log.e(TAG, "forceStopService stopVpnInternal failed", t)
             }
             connectionCoordinator.send(ConnectionEvent.ForceDisconnected(reason = "forceStopService: $reason"))
             try {
@@ -535,7 +540,7 @@ class VpnProxyService : VpnService() {
 
     override fun onDestroy() {
         Log.e("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
-        if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Stopping)
+        transitionServiceState(ServiceState.Stopping)
         try {
             connectionCoordinator.send(
                 ConnectionEvent.ForceDisconnected(reason = "Service destroyed by system")
@@ -555,17 +560,14 @@ class VpnProxyService : VpnService() {
         vpnJob = null
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
-
         try {
-            lifecycleController?.close()
+            lifecycleController?.stopCore()
         } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy lifecycle controller cleanup failed", t)
+            Log.e(TAG, "onDestroy stopCore failed", t)
         }
         _isRunning.value = false
         scope.cancel()
         lifecycleController = null
-        if (_serviceState.value !is ServiceState.Failed) transitionServiceState(ServiceState.Idle)
-
         super.onDestroy()
     }
 
@@ -613,13 +615,13 @@ class VpnProxyService : VpnService() {
     }
 
     private fun updateNotification(state: String) {
-        if ((_serviceState.value == ServiceState.Stopping)) return
+        if (_serviceState.value == ServiceState.Stopping) return
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(state))
     }
 
     fun reconnectAfterSlowServerSwitch() {
-        if ((_serviceState.value == ServiceState.Stopping)) return
+        if (_serviceState.value == ServiceState.Stopping) return
         val server = autoSwitcher.currentServer.value
         if (server != null) {
             connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
