@@ -14,6 +14,7 @@ import com.vpnproxy.core.connection.TraceId
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.logging.LogCollector
@@ -40,6 +41,7 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val subscriptionRepository: SubscriptionRepository,
+    private val serverScanner: ServerScanner,
     private val autoSwitcher: AutoSwitcher,
     private val scoringEngine: ScoringEngine,
     private val trafficCollector: TrafficStatsCollector,
@@ -62,7 +64,8 @@ class HomeViewModel @Inject constructor(
         val serverCount: Int = 0,
         val isBusy: Boolean = false,
         val sessionStartedAt: Long? = null,
-        val isRefreshingSubscription: Boolean = false
+        val isRefreshingSubscription: Boolean = false,
+        val isScanningServers: Boolean = false
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -178,6 +181,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             subscriptionRepository.allConfigs.collect { configs ->
                 _uiState.value = _uiState.value.copy(serverCount = configs.size)
+            }
+        }
+        viewModelScope.launch {
+            serverScanner.isScanning.collect { scanning ->
+                _uiState.value = _uiState.value.copy(isScanningServers = scanning)
             }
         }
     }
@@ -307,12 +315,15 @@ class HomeViewModel @Inject constructor(
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
                 var configs = subscriptionRepository.getAllConfigs()
-                // Always attempt a fresh primary -> mirror update before choosing a cached server.
-                // If both sources fail, refreshAll retains/loads cached_configs.json as fallback.
+                var refreshedSubscription = false
+                // Refresh subscription before selecting a server; scanner results are invalidated with it.
                 if (hasNetwork) {
                     configs = try {
                         subscriptionRepository.refreshAll()
-                        subscriptionRepository.getAllConfigs()
+                        subscriptionRepository.getAllConfigs().also { refreshed ->
+                            serverScanner.scanAfterSubscriptionUpdate(refreshed)
+                            refreshedSubscription = true
+                        }
                     } catch (c: CancellationException) {
                         throw c
                     } catch (e: Exception) {
@@ -326,31 +337,33 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Stable priority sort happens before choosing the instant-connect server.
-                // Russian servers must win even when a foreign server was used previously.
-                val prioritizedConfigs = configs.sortedBy { if (isRussianServer(it)) 0 else 1 }
-                val chosenConfig = prioritizedConfigs.first()
-                val candidates = prioritizedConfigs.distinctBy {
-                    "${it.address.lowercase()}:${it.port}:${it.uuid}"
+                if (!serverScanner.isScanCurrent(configs)) {
+                    serverScanner.scanAll(configs, force = !refreshedSubscription)
                 }
-                val best = autoSwitcher.selectImmediate(chosenConfig, candidates)
-                connectionCoordinator.send(
-                    ConnectionEvent.SetFallbackCandidates(
-                        candidates.map { config ->
-                            if (sameConfig(config, chosenConfig)) best
-                            else ScoringEngine.ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
-                        }
-                    )
-                )
-                Log.i(TAG, "Instant connect to [${chosenConfig.name}]")
-                logCollector.info(TAG, tmsg("Instant connect to [${chosenConfig.name}]"))
+                val available = serverScanner.availableServers()
+                val russian = available.filter { serverScanner.isRussianServer(it.config) }
+                    .sortedBy { it.latencyMs }
+                val foreign = available.filterNot { serverScanner.isRussianServer(it.config) }
+                    .sortedBy { it.latencyMs }
+                val candidates = russian + foreign
+                if (candidates.isEmpty()) {
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Не найдено доступных серверов. Проверьте сеть и повторите поиск"))
+                    _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
+                    return@launch
+                }
+
+                val chosen = candidates.first()
+                val best = autoSwitcher.selectScanned(chosen, candidates)
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
+                Log.i(TAG, "Connecting to fastest scanned server [${chosen.config.name}] rtt=${chosen.latencyMs}ms")
+                logCollector.info(TAG, tmsg("Scanned server selected: ${chosen.config.name}; available=${candidates.size}"))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
                 connectionCoordinator.send(ConnectionEvent.UserConnect)
                 logCollector.info(
                     TAG,
                     tmsg("ServerSelected+UserConnect after ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms")
                 )
-                pendingRankingConfigs = candidates
+                pendingRankingConfigs = candidates.map { it.config }
             } catch (c: CancellationException) {
                 logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
@@ -465,9 +478,10 @@ class HomeViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
             try {
                 val n = subscriptionRepository.refreshAll()
+                serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
                 logCollector.info(
                     TAG,
-                    "Manual subscription refresh: $n configs"
+                    "Manual subscription refresh: $n configs; scan refreshed"
                 )
             } catch (c: CancellationException) {
                 throw c
