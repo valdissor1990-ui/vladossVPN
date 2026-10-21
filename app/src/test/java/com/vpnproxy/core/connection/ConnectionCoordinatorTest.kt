@@ -155,7 +155,7 @@ class ConnectionCoordinatorTest {
             coordinator.isFatalErrorLocked
         }
 
-        sendAndWait(ConnectionEvent.UserConnect) {
+        sendAndWait(ConnectionEvent.UserConnect(userInitiated = true)) {
             !coordinator.isFatalErrorLocked &&
                 coordinator.state.value is ConnectionState.Connecting
         }
