@@ -40,7 +40,7 @@ sealed class ConnectionEvent {
     data object RequestDisconnect : ConnectionEvent()
     /** UI requested connect (permission granted); selection may still be in progress. */
     data class ConnectRequested(val traceId: String, val userInitiated: Boolean = false) : ConnectionEvent()
-    data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
+    data class ServerSelected(val server: ScoringEngine.ScoredServer, val traceId: String? = null) : ConnectionEvent()
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
@@ -274,6 +274,10 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.ServerSelected -> {
+                if (event.traceId != null && event.traceId != activeTraceId) {
+                    logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                    return
+                }
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
                 hasServerSelected = true
