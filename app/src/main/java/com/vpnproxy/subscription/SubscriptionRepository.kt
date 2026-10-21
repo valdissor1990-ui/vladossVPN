@@ -386,18 +386,32 @@ class SubscriptionRepository @Inject constructor(
         val shortId: String? = null,
         val flow: String? = null,
         val name: String,
-        val providerTag: String = ""
+        val providerTag: String = "",
+        val password: String? = null,
+        val insecure: Boolean = false,
+        val alpn: List<String> = emptyList(),
+        val obfsType: String? = null,
+        val obfsPassword: String? = null,
+        val pinSHA256: String? = null,
+        val congestionControl: String = "bbr",
+        val extra: String? = null
     ) {
         fun toParsedConfig() = ParsedConfig(
             uuid = uuid, address = address, port = port, transport = transport, security = security,
             sni = sni, path = path, host = host, mode = mode, fingerprint = fingerprint,
-            publicKey = publicKey, shortId = shortId, flow = flow, name = name, providerTag = providerTag
+            publicKey = publicKey, shortId = shortId, flow = flow, name = name, providerTag = providerTag,
+            password = password, insecure = insecure, alpn = alpn, obfsType = obfsType,
+            obfsPassword = obfsPassword, pinSHA256 = pinSHA256,
+            congestionControl = congestionControl, extra = extra
         )
         companion object {
             fun from(c: ParsedConfig) = CachedConfig(
                 uuid = c.uuid, address = c.address, port = c.port, transport = c.transport, security = c.security,
                 sni = c.sni, path = c.path, host = c.host, mode = c.mode, fingerprint = c.fingerprint,
-                publicKey = c.publicKey, shortId = c.shortId, flow = c.flow, name = c.name, providerTag = c.providerTag
+                publicKey = c.publicKey, shortId = c.shortId, flow = c.flow, name = c.name, providerTag = c.providerTag,
+                password = c.password, insecure = c.insecure, alpn = c.alpn, obfsType = c.obfsType,
+                obfsPassword = c.obfsPassword, pinSHA256 = c.pinSHA256,
+                congestionControl = c.congestionControl, extra = c.extra
             )
         }
     }
