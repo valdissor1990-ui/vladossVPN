@@ -79,6 +79,11 @@ class ServersListViewModel @Inject constructor(
     private val deepProbeEngine: DeepProbeEngine
 ) : ViewModel() {
 
+    val isScanningServers: StateFlow<Boolean> = serverScanner.isScanning
+    val scanResults: StateFlow<List<ScoredServer>> = serverScanner.scannedServers
+    fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
+        serverScanner.isRussianServer(config)
+
     private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
     val servers: StateFlow<List<ScoredServer>> = _servers.asStateFlow()
 
@@ -182,8 +187,8 @@ fun ServerListContent(
     val servers by viewModel.servers.collectAsStateWithLifecycle()
     val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
     val deepProbeRunning by viewModel.deepProbeRunning.collectAsStateWithLifecycle()
-    val scanningServers by viewModel.serverScanner.isScanning.collectAsStateWithLifecycle()
-    val scanResults by viewModel.serverScanner.scannedServers.collectAsStateWithLifecycle()
+    val scanningServers by viewModel.isScanningServers.collectAsStateWithLifecycle()
+    val scanResults by viewModel.scanResults.collectAsStateWithLifecycle()
     val deepProbeResults by viewModel.deepProbeResults.collectAsStateWithLifecycle()
     val deepProbeError by viewModel.deepProbeError.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -235,7 +240,7 @@ fun ServerListContent(
             .padding(bottom = 24.dp)
     ) {
         Text(
-            text = "Найдено ${scanResults.count { it.successRate > 0.5f }} доступных серверов (${scanResults.count { it.successRate > 0.5f && viewModel.serverScanner.isRussianServer(it.config) }} RU)",
+            text = "Найдено ${scanResults.count { it.successRate > 0.5f }} доступных серверов (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU)",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
