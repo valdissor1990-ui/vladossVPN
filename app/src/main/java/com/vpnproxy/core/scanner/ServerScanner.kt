@@ -79,15 +79,18 @@ class ServerScanner @Inject constructor(
                 val russianConfigs = unique.filter(::isRussianServer)
                 val otherConfigs = unique.filterNot(::isRussianServer)
                 val results = coroutineScope {
-                    suspend fun probeBatch(batch: List<ParsedConfig>): List<ScoredServer> =
-                        batch.map { config ->
-                            async(Dispatchers.IO) {
-                                semaphore.withPermit { probe(config) }
-                            }
-                        }.awaitAll()
-
                     // Probe every RU entry first; only then scan the remaining subscription entries.
-                    (probeBatch(russianConfigs) + probeBatch(otherConfigs))
+                    val russianResults = russianConfigs.map { config ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit { probe(config) }
+                        }
+                    }.awaitAll()
+                    val otherResults = otherConfigs.map { config ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit { probe(config) }
+                        }
+                    }.awaitAll()
+                    russianResults + otherResults
                 }.sortedWith(
                     compareBy<ScoredServer>(
                         { if (it.successRate > 0.5f) 0 else 1 },
