@@ -145,6 +145,7 @@ class HomeViewModel @Inject constructor(
                     is ConnectionState.Error -> {
                         cancelConnectingWatchdog()
                         cancelSelectionJob("Error")
+                        pendingRankingConfigs = emptyList()
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
@@ -180,7 +181,9 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             subscriptionRepository.allConfigs.collect { configs ->
-                _uiState.value = _uiState.value.copy(serverCount = configs.size)
+                _uiState.value = _uiState.value.copy(
+                    serverCount = configs.distinctBy { it.connectionKey() }.size
+                )
             }
         }
         viewModelScope.launch {
@@ -203,7 +206,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun sameConfig(a: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig, b: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
-        a.address.equals(b.address, ignoreCase = true) && a.port == b.port && a.uuid == b.uuid
+        a.connectionKey() == b.connectionKey()
 
     private fun tmsg(message: String): String =
         TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | ")
@@ -280,7 +283,7 @@ class HomeViewModel @Inject constructor(
         try {
             activeTraceId = TraceId.newId()
             Log.i(TAG, TraceId.format(TAG, "User clicked Connect", activeTraceId))
-            connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!))
+            connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
             Log.d(TAG, "4. Sent ConnectRequested to Actor")
             VpnProxyService.clearError()
             _uiState.value = _uiState.value.copy(
@@ -416,6 +419,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun switchServer() {
+        if (connectionCoordinator.isFatalErrorLocked) {
+            logCollector.warn(TAG, "Automatic/manual quick switch ignored while fatal lock is active; select a server or reconnect explicitly")
+            return
+        }
         if (autoSwitcher.isSwitching()) return
         viewModelScope.launch {
             try {
@@ -491,7 +498,7 @@ class HomeViewModel @Inject constructor(
             } finally {
                 _uiState.value = _uiState.value.copy(
                     isRefreshingSubscription = false,
-                    serverCount = subscriptionRepository.getAllConfigs().size
+                    serverCount = subscriptionRepository.getAllConfigs().distinctBy { it.connectionKey() }.size
                 )
             }
         }
@@ -501,6 +508,14 @@ class HomeViewModel @Inject constructor(
         manuallySelectedServer = server
         viewModelScope.launch {
             try {
+                // Explicit server selection is a manual action and may release the fatal lock.
+                if (connectionCoordinator.isFatalErrorLocked) {
+                    val traceId = TraceId.newId()
+                    activeTraceId = traceId
+                    connectionCoordinator.send(
+                        ConnectionEvent.ConnectRequested(traceId, userInitiated = true)
+                    )
+                }
                 autoSwitcher.forceSelect(server)
                 lastServerStore.save(
                     address = server.config.address,
