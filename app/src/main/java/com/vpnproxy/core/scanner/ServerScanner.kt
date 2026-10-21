@@ -106,7 +106,7 @@ class ServerScanner @Inject constructor(
                 val ruAvailable = available.count { isRussianServer(it.config) }
                 logCollector.info(
                     TAG,
-                    "Scan complete: ${available.size}/${unique.size} unique reachable profiles, RU=$ruAvailable (input=${configs.size})"
+                    "TCP probe complete: ${available.size}/${unique.size} unique TCP-reachable profiles, RU=$ruAvailable (input=${configs.size})"
                 )
                 results
             } finally {
