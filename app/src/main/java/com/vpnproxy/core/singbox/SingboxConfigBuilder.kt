@@ -195,7 +195,7 @@ object SingboxConfigBuilder {
                             // Subscription links use Xray's camelCase names; sing-box JSON
                             // uses snake_case. Passing xPaddingBytes verbatim makes libbox
                             // 1.14.3 reject the entire outbound as an unknown field.
-                            val singBoxKey = key.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").lowercase()
+                            val singBoxKey = key.replace(Regex("([a-z0-9])([A-Z])")) { match -> "${match.groupValues[1]}_${match.groupValues[2]}" }.lowercase()
                             put(singBoxKey, value)
                         }
                     }
