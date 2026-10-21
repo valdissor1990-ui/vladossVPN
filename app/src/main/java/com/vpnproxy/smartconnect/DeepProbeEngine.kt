@@ -10,6 +10,8 @@ import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
@@ -18,9 +20,9 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.max
 
 /**
  * Deep probe runs entirely on Sing-box in proxy-only mode. It refuses to replace an active VPN
@@ -97,82 +99,118 @@ class DeepProbeEngine @Inject constructor(
         val normalizedScore: Double = 0.0
     )
 
-    suspend fun run(configs: List<ParsedConfig>): List<ProbeMetrics> = withContext(Dispatchers.IO) {
-        check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
-        require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
+    private val running = AtomicBoolean(false)
 
-        val ports = allocatePorts(configs.size)
-        val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
-        check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
-        logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
-        check(SingboxProxyClient.start(context, configJson)) {
-            "Не удалось запустить Sing-box для глубокого анализа"
+    /** Cancel any in-flight probe; safe to call from service stop / disconnect. */
+    fun cancel() {
+        if (running.compareAndSet(true, false)) {
+            runCatching { SingboxProxyClient.stop(context) }
+            logCollector.info(TAG, "DeepProbe cancelled — temporary core stopped")
         }
+    }
 
+    suspend fun run(configs: List<ParsedConfig>): List<ProbeMetrics> = withContext(Dispatchers.IO) {
+        if (!running.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "DeepProbe already running — skip")
+            return@withContext emptyList()
+        }
         try {
-            val results = configs.mapIndexed { index, config ->
-                try {
-                    val client = OkHttpClient.Builder()
-                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
-                        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                        .callTimeout(6, TimeUnit.SECONDS)
-                        .retryOnConnectionFailure(false)
-                        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-                        .build()
+            check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+            require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
+            ensureActive()
 
-                    val samples = mutableListOf<Long>()
-                    var failures = 0
-                    repeat(LATENCY_SAMPLES) {
+            val ports = allocatePorts(configs.size)
+            val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
+            ensureActive()
+            check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+            if (!running.get() || !isActive) {
+                logCollector.info(TAG, "DeepProbe aborted before core start")
+                return@withContext emptyList()
+            }
+            logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
+            val started = try {
+                SingboxProxyClient.start(context, configJson)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                logCollector.error(TAG, "Sing-box start failed for DeepProbe — no retry", t)
+                return@withContext emptyList()
+            }
+            if (!started) {
+                logCollector.error(TAG, "Sing-box failed to start for DeepProbe — no retry")
+                return@withContext emptyList()
+            }
+
+            try {
+                val results = configs.mapIndexed { index, config ->
+                    ensureActive()
+                    if (!running.get()) throw CancellationException("DeepProbe cancelled")
+                    try {
+                        val client = OkHttpClient.Builder()
+                            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
+                            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                            .callTimeout(6, TimeUnit.SECONDS)
+                            .retryOnConnectionFailure(false)
+                            .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+                            .build()
+
+                        val samples = mutableListOf<Long>()
+                        var failures = 0
+                        repeat(LATENCY_SAMPLES) {
+                            ensureActive()
+                            try {
+                                val request = Request.Builder().url(LATENCY_URL).head().build()
+                                val start = System.nanoTime()
+                                client.newCall(request).execute().use { response ->
+                                    val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                    if (response.code in 200..399) samples += elapsed else failures++
+                                }
+                            } catch (_: Exception) {
+                                failures++
+                            }
+                        }
+
+                        val median = if (samples.isEmpty()) Long.MAX_VALUE else samples.sorted()[samples.size / 2]
+                        val jitter = if (samples.size < 2) Long.MAX_VALUE else samples.maxOrNull()!! - samples.minOrNull()!!
+                        var speed = 0.0
+                        var speedOk = false
                         try {
-                            val request = Request.Builder().url(LATENCY_URL).head().build()
+                            val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
                             val start = System.nanoTime()
                             client.newCall(request).execute().use { response ->
-                                val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                                if (response.code in 200..399) samples += elapsed else failures++
+                                if (response.isSuccessful) {
+                                    val bytes = response.body?.bytes()?.size ?: 0
+                                    val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
+                                    speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
+                                    speedOk = bytes > 0
+                                }
                             }
                         } catch (_: Exception) {
-                            failures++
+                            speedOk = false
                         }
+                        ProbeMetrics(
+                            config = config,
+                            medianLatencyMs = median,
+                            speedMbps = speed,
+                            jitterMs = jitter,
+                            lossRate = failures.toDouble() / LATENCY_SAMPLES,
+                            healthOk = samples.size >= 2 && speedOk
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Probe failed for ${config.name}", t)
+                        ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                     }
-
-                    val median = if (samples.isEmpty()) Long.MAX_VALUE else samples.sorted()[samples.size / 2]
-                    val jitter = if (samples.size < 2) Long.MAX_VALUE else samples.maxOrNull()!! - samples.minOrNull()!!
-                    var speed = 0.0
-                    var speedOk = false
-                    try {
-                        val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
-                        val start = System.nanoTime()
-                        client.newCall(request).execute().use { response ->
-                            if (response.isSuccessful) {
-                                val bytes = response.body?.bytes()?.size ?: 0
-                                val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
-                                speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
-                                speedOk = bytes > 0
-                            }
-                        }
-                    } catch (_: Exception) {
-                        speedOk = false
-                    }
-                    ProbeMetrics(
-                        config = config,
-                        medianLatencyMs = median,
-                        speedMbps = speed,
-                        jitterMs = jitter,
-                        lossRate = failures.toDouble() / LATENCY_SAMPLES,
-                        healthOk = samples.size >= 2 && speedOk
-                    )
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Probe failed for ${config.name}", t)
-                    ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                 }
+                scoreMetrics(results)
+            } finally {
+                SingboxProxyClient.stop(context)
+                logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
             }
-            scoreMetrics(results)
         } finally {
-            SingboxProxyClient.stop(context)
-            logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
+            running.set(false)
         }
     }
 

@@ -74,7 +74,19 @@ class AutoSwitcher @Inject constructor(
 
     private val switching = AtomicBoolean(false)
 
+    @Volatile private var connectedAtMs: Long = 0L
+
     fun isSwitching(): Boolean = switching.get()
+
+    fun markConnected() {
+        connectedAtMs = System.currentTimeMillis()
+        logCollector.info(TAG, "Warmup started ${AutoSwitcherConfig.postConnectWarmupMs}ms")
+    }
+
+    fun isInPostConnectWarmup(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (connectedAtMs <= 0L) return false
+        return nowMs - connectedAtMs < AutoSwitcherConfig.postConnectWarmupMs
+    }
 
     private fun serverKey(config: ParsedConfig): String =
         "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
@@ -105,10 +117,15 @@ class AutoSwitcher @Inject constructor(
         configs.filterNot { isBlacklisted(it) }
 
     fun startMonitoring() {
+        markConnected()
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
                 delay(AutoSwitcherConfig.healthCheckIntervalMs)
+                if (isInPostConnectWarmup()) {
+                    logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
+                    continue
+                }
                 if (decisionEngine.isInCooldown()) {
                     logCollector.debug(TAG, "Slow-server checks skipped during switch cooldown")
                     continue
@@ -257,6 +274,11 @@ class AutoSwitcher @Inject constructor(
     }
 
     private suspend fun performSlowServerSwitch(reason: String) {
+        if (isInPostConnectWarmup()) {
+            logCollector.info(TAG, "Slow-server switch ignored during warmup: $reason")
+            transitionTo(AutoSwitchState.MONITORING, "warmup")
+            return
+        }
         transitionTo(AutoSwitchState.SWITCHING, reason)
         val now = System.currentTimeMillis()
         if (!decisionEngine.canAttemptSwitch(now)) {
@@ -288,6 +310,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToBest(): ScoredServer? {
+        if (isInPostConnectWarmup()) {
+            logCollector.info(TAG, "switchToBest ignored — post-connect warmup")
+            return null
+        }
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "switchToBest ignored — already switching")
             return null
@@ -310,16 +336,40 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
+    /**
+     * Explicit RU filter:
+     * - 🇷🇺 flag or explicit Russia/RU tokens → true
+     * - Germany / EU markers → never RU
+     */
     private fun isRussian(config: ParsedConfig): Boolean {
-        val name = config.name.lowercase()
-        val provider = config.providerTag.lowercase()
+        val name = config.name
+        val provider = config.providerTag
+        val lowerName = name.lowercase()
+        val lowerProvider = provider.lowercase()
         val sni = config.sni.orEmpty().lowercase()
-        val ruToken = Regex(AutoSwitcherConfig.ruTokenPattern)
-        return config.providerTag.contains("🇷🇺") ||
-            ruToken.containsMatchIn(provider) ||
-            config.name.contains("🇷🇺") ||
-            ruToken.containsMatchIn(name) ||
-            name.contains(".ru") || sni.contains(".ru")
+
+        // Hard exclude Germany / common EU false-positives
+        if (name.contains("🇩🇪") ||
+            lowerName.contains("germany") ||
+            lowerName.contains("deutschland") ||
+            lowerName.contains(" berlin") ||
+            lowerProvider.contains("germany") ||
+            lowerName.contains("de-") ||
+            lowerName.startsWith("de ")
+        ) {
+            return false
+        }
+
+        // Explicit RU markers only
+        if (name.contains("🇷🇺") || provider.contains("🇷🇺")) return true
+        if (lowerName.contains("russia") || lowerName.contains("россий") || lowerName.contains("москва") || lowerName.contains("moscow")) return true
+        if (lowerProvider.contains("russia") || lowerProvider.contains("россий")) return true
+        if (Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(lowerName) ||
+            Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)").containsMatchIn(lowerProvider)
+        ) return true
+        if (lowerName.contains(".ru") || sni.contains(".ru")) return true
+
+        return false
     }
 
     private fun sameConfig(a: ParsedConfig, b: ParsedConfig): Boolean =
@@ -367,24 +417,32 @@ class AutoSwitcher @Inject constructor(
 
                 val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < AutoSwitcherConfig.ruFastServerRttMs }
                 val current = _currentServer.value
-                if (bestRussian != null && (current == null || !sameConfig(current.config, bestRussian.config)) &&
+                if (bestRussian != null && current != null && sameConfig(current.config, bestRussian.config)) {
+                    _currentServer.value = bestRussian
+                    baselineRtt = bestRussian.latencyMs
+                } else if (bestRussian != null &&
+                    (current == null || !sameConfig(current.config, bestRussian.config)) &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
                 ) {
-                    _currentServer.value = bestRussian
-                    baselineRtt = bestRussian.latencyMs
-                    consecutiveErrors = 0
-                    _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
-                    connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                    connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian))
-                    logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
-                } else if (bestRussian != null && current != null && sameConfig(current.config, bestRussian.config)) {
-                    _currentServer.value = bestRussian
-                    baselineRtt = bestRussian.latencyMs
+                    if (isInPostConnectWarmup()) {
+                        logCollector.info(
+                            TAG,
+                            "Fast RU server found (${bestRussian.latencyMs}ms: ${bestRussian.config.name}) — ignored during warmup"
+                        )
+                    } else {
+                        _currentServer.value = bestRussian
+                        baselineRtt = bestRussian.latencyMs
+                        consecutiveErrors = 0
+                        _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
+                        connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian))
+                        logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
+                    }
                 }
             } catch (c: CancellationException) {
                 throw c
-            } catch (t: Throwable) {
-                logCollector.warn(TAG, "Background server ranking failed: ${t.message}")
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Background ranking failed", e)
             }
         }
     }
@@ -392,27 +450,22 @@ class AutoSwitcher @Inject constructor(
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
         val allowed = filterUsableServers(configs)
         if (allowed.isEmpty()) {
-            logCollector.warn(TAG, "No non-blacklisted servers available for ranking")
+            logCollector.warn(TAG, "selectBest: all candidates blacklisted")
             return null
         }
-        Log.i(TAG, "Starting server selection/ranking for ${allowed.size} configs")
-        val ranked = scoringEngine.rankAll(allowed, healthChecker)
-        Log.i(TAG, "Server ranking completed: ${ranked.size} candidates")
+        val russian = allowed.filter(::isRussian)
+        val foreign = allowed.filterNot(::isRussian)
+        val ordered = russian + foreign
+        val results = healthChecker.testLatency(ordered)
+        val ranked = scoringEngine.computeScore(results)
+            .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
         _rankedServers.value = ranked
-        val best = ranked.firstOrNull()
-        if (best != null) {
-            _currentServer.value = best
-            baselineRtt = best.latencyMs
-            consecutiveErrors = 0
-            logCollector.info(
-                TAG,
-                "Selected best server: ${best.config.name}",
-                mapOf("rtt" to best.latencyMs, "score" to best.score)
-            )
-            Log.i(TAG, "Selected server: ${best.config.name} at ${best.config.address}:${best.config.port}; rtt=${best.latencyMs}ms score=${best.score}")
-        } else {
-            Log.w(TAG, "Server selection produced no candidate from ${allowed.size} configs")
-        }
+        val best = ranked.firstOrNull() ?: return null
+        _currentServer.value = best
+        baselineRtt = best.latencyMs
+        consecutiveErrors = 0
+        previousRtt = null
+        logCollector.info(TAG, "selectBest -> ${best.config.name} (${best.latencyMs}ms)")
         return best
     }
 
@@ -423,10 +476,10 @@ class AutoSwitcher @Inject constructor(
         }
         try {
             _currentServer.value = server
-            baselineRtt = server.latencyMs
+            baselineRtt = server.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
+            previousRtt = null
             consecutiveErrors = 0
-            _switchEvents.value = "Переключено на ${server.config.name}"
-            logCollector.info(TAG, "Force select: ${server.config.name}")
+            logCollector.info(TAG, "forceSelect -> ${server.config.name}")
             return true
         } finally {
             switching.set(false)
@@ -439,36 +492,34 @@ class AutoSwitcher @Inject constructor(
             return null
         }
         try {
-            val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
             val current = _currentServer.value
+            val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
             if (ranked.isEmpty()) return null
-            val currentIndex = ranked.indexOfFirst {
-                it.config.address == current?.config?.address
+            val idx = ranked.indexOfFirst { sameServer(current?.config, it.config) }
+            val next = when {
+                idx < 0 -> ranked.first()
+                idx + 1 < ranked.size -> ranked[idx + 1]
+                else -> ranked.first()
             }
-            val nextIndex = (currentIndex + 1).coerceAtLeast(0) % ranked.size
-            val next = ranked[nextIndex]
-            if (sameServer(current?.config, next.config)) {
-                _currentServer.value = next
-                baselineRtt = next.latencyMs
-                consecutiveErrors = 0
-                logCollector.info(TAG, "Manual switch skipped — already on ${next.config.name}; metrics refreshed")
-                return next
+            if (sameServer(current?.config, next.config) && ranked.size == 1) {
+                logCollector.info(TAG, "switchToNext: only one server available")
+                return current
             }
             _currentServer.value = next
             baselineRtt = next.latencyMs
+            previousRtt = null
             consecutiveErrors = 0
-            _switchEvents.value = "Переключено на ${next.config.name}"
-            logCollector.info(TAG, "Manual switch to: ${next.config.name}")
-            delay(AutoSwitcherConfig.manualSwitchDelayMs)
+            _switchEvents.value = "Переключение на ${next.config.name}"
+            logCollector.info(TAG, "switchToNext -> ${next.config.name}")
             return next
         } finally {
             switching.set(false)
         }
     }
 
-    private fun reSelect() {
-        if (switching.get()) return
+    fun autoReselectIfNeeded() {
         val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
+        if (ranked.isEmpty()) return
         val best = ranked.firstOrNull() ?: return
         val current = _currentServer.value
         if (sameServer(current?.config, best.config)) {

@@ -90,10 +90,12 @@ class ServersListViewModel @Inject constructor(
     val deepProbeResults: StateFlow<List<DeepProbeEngine.ProbeMetrics>> = _deepProbeResults.asStateFlow()
     private val _deepProbeError = MutableStateFlow<String?>(null)
     val deepProbeError: StateFlow<String?> = _deepProbeError.asStateFlow()
+    private var deepProbeJob: kotlinx.coroutines.Job? = null
 
     fun runDeepProbe() {
         if (_deepProbeRunning.value) return
-        viewModelScope.launch {
+        deepProbeJob?.cancel()
+        deepProbeJob = viewModelScope.launch {
             _deepProbeRunning.value = true
             _deepProbeError.value = null
             try {
@@ -101,12 +103,21 @@ class ServersListViewModel @Inject constructor(
                 val results = deepProbeEngine.run(configs)
                 _deepProbeResults.value = results
                 Toast.makeText(context, "Глубокий анализ завершен", Toast.LENGTH_SHORT).show()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                deepProbeEngine.cancel()
+                throw e
             } catch (e: Exception) {
                 _deepProbeError.value = e.message ?: e.toString()
             } finally {
                 _deepProbeRunning.value = false
             }
         }
+    }
+
+    override fun onCleared() {
+        deepProbeJob?.cancel()
+        deepProbeEngine.cancel()
+        super.onCleared()
     }
 
     init {
