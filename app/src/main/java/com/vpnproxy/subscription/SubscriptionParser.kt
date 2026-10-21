@@ -203,26 +203,26 @@ class SubscriptionParser @Inject constructor(
      * - present but invalid / non-object → WARN once and null
      */
     private fun normalizeXhttpExtra(rawValue: String?): String? {
-        if (rawValue == null) return null
+        if (rawValue == null) return "{}"
         val decoded = try {
             URLDecoder.decode(rawValue, "UTF-8")
         } catch (_: IllegalArgumentException) {
             rawValue
         }
         val trimmed = decoded.trim()
-        // Absent / empty optional field — do not log and do not parse.
+        // Missing/null optional payloads are normalized to an empty object without WARN logs.
         if (trimmed.isEmpty() ||
             trimmed.equals("null", ignoreCase = true) ||
-            trimmed.equals("undefined", ignoreCase = true) ||
-            trimmed == "{}"
+            trimmed.equals("undefined", ignoreCase = true)
         ) {
-            return null
+            return "{}"
         }
+        if (trimmed == "{}") return "{}"
         return try {
             val element = Json.parseToJsonElement(trimmed)
             when (element) {
                 is JsonObject -> element.toString()
-                is JsonNull -> null // optional absent payload — silent
+                is JsonNull -> "{}"
                 else -> {
                     logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
                     null
