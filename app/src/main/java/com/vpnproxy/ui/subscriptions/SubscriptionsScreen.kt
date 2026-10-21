@@ -107,6 +107,13 @@ fun SubscriptionsScreen(
                     }
                 }
             }
+            item(key = "unique-server-summary") {
+                Text(
+                    text = "Уникальных серверов всего: ${configs.distinctBy { it.connectionKey() }.size}",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                )
+            }
             if (subs.isEmpty()) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -119,7 +126,10 @@ fun SubscriptionsScreen(
                 }
             }
             items(subs, key = { it.id }) { sub ->
-                val countForSub = configs.count { it.providerTag == sub.name }
+                val countForSub = configs.asSequence()
+                    .filter { it.providerTag == sub.name }
+                    .distinctBy { it.connectionKey() }
+                    .count()
                 val canRemove = sub.id != SubscriptionRepository.DEFAULT_SUBSCRIPTION_ID
                 Card(
                     modifier = Modifier.fillMaxWidth(),
