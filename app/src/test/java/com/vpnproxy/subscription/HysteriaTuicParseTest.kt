@@ -100,6 +100,17 @@ class HysteriaTuicParseTest {
     }
 
     @Test
+    fun xhttpExtraIsDecodedOnlyOnceAndPreservesPercentSequences() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=tls&extra=%7B%22headers%22%3A%7B%22X-Test%22%3A%22A%252BB%252520C%22%7D%7D#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertTrue(cfg!!.extra.orEmpty().contains("A%2BB%20C"))
+        assertFalse(cfg.extra.orEmpty().contains("A+B C"))
+    }
+
+    @Test
     fun parsesVlessXhttpRealityUriAndExtraWithoutThrowing() {
         val cfg = parser.parseVlessUri(
             "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
