@@ -54,6 +54,7 @@ import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingRegion
 import com.vpnproxy.core.ping.PingService
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -73,7 +74,7 @@ import kotlin.math.roundToInt
 class ServersListViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: SubscriptionRepository,
-    private val autoSwitcher: AutoSwitcher,
+    private val serverScanner: ServerScanner,
     private val pingService: PingService,
     private val deepProbeEngine: DeepProbeEngine
 ) : ViewModel() {
@@ -91,6 +92,28 @@ class ServersListViewModel @Inject constructor(
     private val _deepProbeError = MutableStateFlow<String?>(null)
     val deepProbeError: StateFlow<String?> = _deepProbeError.asStateFlow()
     private var deepProbeJob: kotlinx.coroutines.Job? = null
+    private var currentConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
+    private var currentScanResults: List<ScoredServer> = emptyList()
+
+    private fun updateServerRows() {
+        val scanned = currentScanResults.associateBy {
+            "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid.lowercase()}"
+        }
+        _servers.value = currentConfigs.map { config ->
+            val key = "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
+            scanned[key] ?: ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f)
+        }.sortedWith(compareBy<ScoredServer>({
+            when { it.successRate > 0.5f -> 0; it.successRate == 0f -> 1; else -> 2 }
+        }, { it.latencyMs }))
+    }
+
+    fun rescanServers() {
+        if (serverScanner.isScanning.value) return
+        viewModelScope.launch {
+            val configs = repository.getAllConfigs()
+            serverScanner.scanAll(configs, force = true)
+        }
+    }
 
     fun runDeepProbe() {
         if (_deepProbeRunning.value) return
@@ -123,16 +146,20 @@ class ServersListViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             repository.allConfigs.collect { configs ->
-                if (configs.isNotEmpty() && autoSwitcher.rankedServers.value.isEmpty()) {
-                    autoSwitcher.selectBest(configs)
-                }
-                _servers.value = autoSwitcher.rankedServers.value
+                currentConfigs = configs
+                updateServerRows()
             }
         }
         viewModelScope.launch {
-            autoSwitcher.rankedServers.collect { _servers.value = it }
+            serverScanner.scannedServers.collect { results ->
+                currentScanResults = results
+                updateServerRows()
+            }
         }
-        viewModelScope.launch { repository.refreshAll() }
+        viewModelScope.launch {
+            val count = repository.refreshAll()
+            serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+        }
         viewModelScope.launch {
             runCatching {
                 val region = PingTargets.detectRegion(context)
@@ -155,6 +182,8 @@ fun ServerListContent(
     val servers by viewModel.servers.collectAsStateWithLifecycle()
     val breakdown by viewModel.breakdown.collectAsStateWithLifecycle()
     val deepProbeRunning by viewModel.deepProbeRunning.collectAsStateWithLifecycle()
+    val scanningServers by viewModel.serverScanner.isScanning.collectAsStateWithLifecycle()
+    val scanResults by viewModel.serverScanner.scannedServers.collectAsStateWithLifecycle()
     val deepProbeResults by viewModel.deepProbeResults.collectAsStateWithLifecycle()
     val deepProbeError by viewModel.deepProbeError.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -206,9 +235,14 @@ fun ServerListContent(
             .padding(bottom = 24.dp)
     ) {
         Text(
+            text = "Найдено ${scanResults.count { it.successRate > 0.5f }} доступных серверов (${scanResults.count { it.successRate > 0.5f && viewModel.serverScanner.isRussianServer(it.config) }} RU)",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        Text(
             text = "Серверы (${servers.size})",
             style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
         OutlinedTextField(
@@ -246,12 +280,18 @@ fun ServerListContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Button(
+                onClick = { viewModel.rescanServers() },
+                enabled = !scanningServers && servers.isNotEmpty()
+            ) {
+                Text("Пересканировать")
+            }
+            Button(
                 onClick = { viewModel.runDeepProbe() },
                 enabled = !deepProbeRunning && servers.isNotEmpty()
             ) {
                 Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ")
             }
-            if (deepProbeRunning) {
+            if (scanningServers || deepProbeRunning) {
                 CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
             }
         }
