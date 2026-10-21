@@ -61,7 +61,7 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
-        const val CONNECTING_TIMEOUT_MS = 18_000L
+        const val CONNECTING_TIMEOUT_MS = 60_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
