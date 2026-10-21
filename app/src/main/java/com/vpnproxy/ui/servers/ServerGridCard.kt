@@ -55,6 +55,16 @@ fun ServerGridCard(
         score <= 300.0 -> Color(0xFFF9A825)
         else -> Color(0xFFE53935)
     }
+    val statusSymbol = when {
+        server.successRate > 0.5f -> "●"
+        server.successRate == 0f -> "✕"
+        else -> "●"
+    }
+    val statusColor = when {
+        server.successRate > 0.5f -> Color(0xFF43A047)
+        server.successRate == 0f -> Color(0xFFE53935)
+        else -> Color(0xFF9E9E9E)
+    }
 
     Card(
         onClick = onClick,
@@ -69,6 +79,12 @@ fun ServerGridCard(
                     Text(text = flag, fontSize = 18.sp)
                     Spacer(Modifier.width(6.dp))
                 }
+                Text(
+                    text = statusSymbol,
+                    color = statusColor,
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.width(5.dp))
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,

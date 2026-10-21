@@ -3,6 +3,7 @@ package com.vpnproxy.ui.subscriptions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -15,6 +16,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SubscriptionsViewModel @Inject constructor(
     private val repository: SubscriptionRepository,
+    private val serverScanner: ServerScanner,
     private val logCollector: LogCollector
 ) : ViewModel() {
 
@@ -67,8 +69,9 @@ class SubscriptionsViewModel @Inject constructor(
             _isRefreshing.value = true
             try {
                 val count = repository.refreshAll()
-                _message.value = "Загружено серверов: $count"
-                logCollector.info("SubscriptionsVM", "Refreshed: $count")
+                serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+                _message.value = "Загружено серверов: $count; проверка завершена"
+                logCollector.info("SubscriptionsVM", "Refreshed: $count; server scan completed")
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

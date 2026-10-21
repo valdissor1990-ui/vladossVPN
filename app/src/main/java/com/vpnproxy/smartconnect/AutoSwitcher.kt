@@ -113,6 +113,11 @@ class AutoSwitcher @Inject constructor(
         logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
     }
 
+    fun clearBlacklist() {
+        serverBlacklist.clear()
+        logCollector.info(TAG, "Server blacklist cleared after subscription update")
+    }
+
     private fun filterUsableServers(configs: List<ParsedConfig>): List<ParsedConfig> =
         configs.filterNot { isBlacklisted(it) }
 
@@ -386,6 +391,17 @@ class AutoSwitcher @Inject constructor(
         baselineRtt = 0L
         consecutiveErrors = 0
         logCollector.info(TAG, "Instant connect to [${config.name}] — background probing scheduled")
+        return selected
+    }
+
+    fun selectScanned(server: ScoredServer, candidates: List<ScoredServer>): ScoredServer {
+        val filtered = candidates.filterNot { isBlacklisted(it.config) }
+        val selected = filtered.firstOrNull { sameConfig(it.config, server.config) } ?: server
+        _currentServer.value = selected
+        _rankedServers.value = listOf(selected) + filtered.filterNot { sameConfig(it.config, selected.config) }
+        baselineRtt = selected.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
+        consecutiveErrors = 0
+        logCollector.info(TAG, "Instant scanned-server selection -> ${selected.config.name} (${selected.latencyMs}ms)")
         return selected
     }
 

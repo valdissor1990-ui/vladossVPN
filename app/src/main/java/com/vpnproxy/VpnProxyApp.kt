@@ -3,6 +3,7 @@ package com.vpnproxy
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
@@ -38,6 +39,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var batteryLogger: BatteryLogger
     @Inject lateinit var batteryMonitor: BatteryMonitor
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+    @Inject lateinit var serverScanner: ServerScanner
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -78,10 +80,19 @@ class VpnProxyApp : Application(), Configuration.Provider {
             } catch (t: Throwable) {
                 logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
             }
+
+            // Scan the repository's current snapshot even if the network refresh failed;
+            // SubscriptionRepository has already loaded its persisted cache on cold start.
+            try {
+                serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
+                serverScanner.scanInBackground(applicationScope)
+            } catch (t: Throwable) {
+                logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
+            }
         }
 
-        // Refresh subscription hourly when network is available.
-        SubscriptionUpdateWorker.schedule(this, intervalHours = 1)
+        // Refresh subscription every 30 minutes when network is available.
+        SubscriptionUpdateWorker.schedule(this, intervalMinutes = 30)
 
         // UpdateCheckWorker НЕ планируем здесь — он запускается:
         //   1) Вручную из Settings (force = true)

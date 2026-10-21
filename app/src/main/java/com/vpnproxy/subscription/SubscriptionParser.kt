@@ -198,31 +198,31 @@ class SubscriptionParser @Inject constructor(
 
     /**
      * Optional XHTTP `extra`:
-     * - missing / blank / literal "null" → silent null (no WARN, no CPU parse)
+     * - missing / blank / literal "null" → empty JSON object without WARN
      * - valid JSON object → normalized string
      * - present but invalid / non-object → WARN once and null
      */
     private fun normalizeXhttpExtra(rawValue: String?): String? {
-        if (rawValue == null) return null
+        if (rawValue == null) return "{}"
         val decoded = try {
             URLDecoder.decode(rawValue, "UTF-8")
         } catch (_: IllegalArgumentException) {
             rawValue
         }
         val trimmed = decoded.trim()
-        // Absent / empty optional field — do not log and do not parse.
+        // Missing/null optional payloads are normalized to an empty object without WARN logs.
         if (trimmed.isEmpty() ||
             trimmed.equals("null", ignoreCase = true) ||
-            trimmed.equals("undefined", ignoreCase = true) ||
-            trimmed == "{}"
+            trimmed.equals("undefined", ignoreCase = true)
         ) {
-            return null
+            return "{}"
         }
+        if (trimmed == "{}") return "{}"
         return try {
             val element = Json.parseToJsonElement(trimmed)
             when (element) {
                 is JsonObject -> element.toString()
-                is JsonNull -> null // optional absent payload — silent
+                is JsonNull -> "{}"
                 else -> {
                     logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
                     null
@@ -261,7 +261,7 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
-                extra = normalizeXhttpExtra(params["extra"])
+                extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"]) else null
             )
             if (!config.isValid()) {
                 logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))

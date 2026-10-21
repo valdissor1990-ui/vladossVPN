@@ -61,8 +61,7 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
-        private const val MAX_FALLBACK_ATTEMPTS = 5
-        const val CONNECTING_TIMEOUT_MS = 18_000L
+        const val CONNECTING_TIMEOUT_MS = 60_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -322,7 +321,7 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.CoreError -> {
-                logE("CoreError: ${event.reason} (retry=$retryCount; fallback=$fallbackAttempts/$MAX_FALLBACK_ATTEMPTS)")
+                logE("CoreError: ${event.reason} (retry=$retryCount; fallbackAttempts=$fallbackAttempts; remainingCandidates=${fallbackCandidates.size})")
                 if (!tryFallback(event.reason, current)) handleFailure(event.reason, current)
             }
 
@@ -384,9 +383,9 @@ class ConnectionCoordinator @Inject constructor(
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     trafficFailures++
-                    logW("Server does not pass traffic: ${event.serverName} (attempt $trafficFailures/$MAX_FALLBACK_ATTEMPTS)")
+                    logW("Server does not pass traffic: ${event.serverName} (failures=$trafficFailures; remainingCandidates=${fallbackCandidates.size})")
                     val next = fallbackCandidates.firstOrNull()
-                    if (trafficFailures >= MAX_FALLBACK_ATTEMPTS || next == null) {
+                    if (next == null) {
                         val message = "Все сервера недоступны"
                         logE("$message; traffic validation failed on ${event.serverName}")
                         isFatalErrorLocked = true
@@ -422,7 +421,7 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
-        if (!reason.isRetryable() || fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) return false
+        if (!reason.isRetryable() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected &&
@@ -448,7 +447,7 @@ class ConnectionCoordinator @Inject constructor(
                 hasServerSelected = true
                 retryCount = 0
                 isFatalErrorLocked = false
-                logW("Fallback attempt $fallbackAttempts/$MAX_FALLBACK_ATTEMPTS -> ${candidate.config.name} after $reason")
+                logW("Fallback attempt $fallbackAttempts -> ${candidate.config.name} after $reason")
                 setState(ConnectionState.Reconnecting, reason = "fallback:$fallbackAttempts:${candidate.config.name}")
                 return true
             }
