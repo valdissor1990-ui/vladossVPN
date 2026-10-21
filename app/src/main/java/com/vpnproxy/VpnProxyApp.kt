@@ -77,10 +77,17 @@ class VpnProxyApp : Application(), Configuration.Provider {
                 if (count == 0) {
                     logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
                 }
+            } catch (t: Throwable) {
+                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
+            }
+
+            // Scan the repository's current snapshot even if the network refresh failed;
+            // SubscriptionRepository has already loaded its persisted cache on cold start.
+            try {
                 serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
                 serverScanner.scanInBackground(applicationScope)
             } catch (t: Throwable) {
-                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
+                logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
             }
         }
 
