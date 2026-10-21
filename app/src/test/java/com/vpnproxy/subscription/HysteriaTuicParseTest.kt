@@ -2,12 +2,30 @@ package com.vpnproxy.subscription
 
 import com.vpnproxy.logging.LogCollector
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HysteriaTuicParseTest {
     private val parser = SubscriptionParser(LogCollector())
+
+    @Test
+    fun connectionKeyKeepsTransportVariantsButIgnoresProviderAndDisplayName() {
+        val config = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@same.example.org:443" +
+                "?type=tcp&security=tls&sni=same.example.org#Primary",
+            providerTag = "Default"
+        )!!
+        val sameProfileFromAnotherProvider = config.copy(
+            name = "Renamed",
+            providerTag = "Provider 2"
+        )
+        val differentTransport = config.copy(transport = "xhttp", extra = "{}")
+
+        assertEquals(config.connectionKey(), sameProfileFromAnotherProvider.connectionKey())
+        assertFalse(config.connectionKey() == differentTransport.connectionKey())
+    }
 
     @Test
     fun parsesHysteria2Uri() {
