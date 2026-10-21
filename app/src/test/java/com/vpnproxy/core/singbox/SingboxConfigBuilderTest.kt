@@ -135,9 +135,9 @@ class SingboxConfigBuilderTest {
         assertEquals("www.example.org", transport["host"]!!.jsonPrimitive.content)
         assertEquals("/xhttp", transport["path"]!!.jsonPrimitive.content)
         assertEquals("stream-one", transport["mode"]!!.jsonPrimitive.content)
-        assertFalse(transport.containsKey("xPaddingBytes"))
-        assertEquals("100-200", transport["extra"]!!.jsonObject["xPaddingBytes"]!!.jsonPrimitive.content)
-        assertEquals("yes", transport["extra"]!!.jsonObject["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
+        assertEquals("100-200", transport["xPaddingBytes"]!!.jsonPrimitive.content)
+        assertEquals("yes", transport["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("extra"))
         val tls = outbound["tls"]!!.jsonObject
         assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)
         assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
