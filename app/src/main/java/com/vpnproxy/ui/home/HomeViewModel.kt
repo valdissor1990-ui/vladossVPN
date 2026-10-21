@@ -318,6 +318,10 @@ class HomeViewModel @Inject constructor(
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
                 var configs = subscriptionRepository.getAllConfigs()
+                if (activeTraceId != traceId) {
+                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId")
+                    return@launch
+                }
                 var refreshedSubscription = false
                 // Refresh subscription before selecting a server; scanner results are invalidated with it.
                 if (hasNetwork) {
