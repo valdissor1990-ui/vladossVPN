@@ -59,7 +59,10 @@ class ServerScanner @Inject constructor(
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
-            val unique = configs.distinctBy(::serverKey)
+            // Prefer an RU-labelled copy when the same connection profile appears in
+            // multiple providers, so deduplication cannot erase RU-first priority.
+            val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
+                .distinctBy(::serverKey)
             val requestedKeys = unique.map(::serverKey).toSet()
             if (!force && requestedKeys.isNotEmpty() &&
                 requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size
