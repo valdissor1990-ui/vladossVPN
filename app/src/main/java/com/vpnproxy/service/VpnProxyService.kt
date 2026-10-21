@@ -422,6 +422,8 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
+        // Blacklist the server that just failed so auto-switch/ranking skips it for ~10 min.
+        autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
     }
 
