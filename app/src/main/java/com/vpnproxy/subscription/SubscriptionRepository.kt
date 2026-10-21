@@ -112,7 +112,7 @@ class SubscriptionRepository @Inject constructor(
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
-                "${it.address}|${it.port}|${it.uuid}"
+                "${it.providerTag}\u001F${it.connectionKey()}"
             }
             logCollector.info(TAG, "Cold start from cache: ${_allConfigs.value.size}")
         } else {
@@ -221,16 +221,30 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            if (allConfigsList.isNotEmpty() && anyNetworkSuccess) {
-                saveConfigsToCache(allConfigsList)
-                logCollector.info(TAG, "Updated cached_configs.json from subscription source; configs=${allConfigsList.size}")
+            // Preserve attribution per provider while removing duplicate profiles within each
+            // provider. Global scanning/counts use connectionKey() without providerTag.
+            val providerUniqueConfigs = allConfigsList.distinctBy {
+                "${it.providerTag}\u001F${it.connectionKey()}"
+            }
+            val globallyUniqueCount = providerUniqueConfigs.distinctBy {
+                it.connectionKey()
+            }.size
+
+            if (providerUniqueConfigs.isNotEmpty() && anyNetworkSuccess) {
+                saveConfigsToCache(providerUniqueConfigs)
+                logCollector.info(
+                    TAG,
+                    "Updated cached_configs.json: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
+                )
             }
 
-            _allConfigs.value = allConfigsList.distinctBy {
-                "${it.address}|${it.port}|${it.uuid}"
-            }
+            _allConfigs.value = providerUniqueConfigs
             saveToPrefs()
-            totalConfigs
+            logCollector.info(
+                TAG,
+                "Refresh complete: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
+            )
+            globallyUniqueCount
         }
     }
 
@@ -348,13 +362,12 @@ class SubscriptionRepository @Inject constructor(
         } catch (_: Exception) { }
     }
 
-    fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value.distinctBy {
-        "${it.address}|${it.port}|${it.uuid}"
-    }
+    /** Configs deduplicated per provider, preserving provider attribution for subscription UI. */
+    fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
         loadConfigsFromCache().map { it.toParsedConfig() }.distinctBy {
-            "${it.address}|${it.port}|${it.uuid}"
+            "${it.providerTag}\u001F${it.connectionKey()}"
         }
 
     @Serializable
