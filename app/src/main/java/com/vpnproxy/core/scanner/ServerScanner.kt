@@ -142,7 +142,6 @@ class ServerScanner @Inject constructor(
     fun isRussianServer(config: ParsedConfig): Boolean {
         val name = config.name
         return name.contains("🇷🇺") ||
-            name.contains("RU", ignoreCase = true) ||
             Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE)
                 .containsMatchIn(name) ||
             config.address.endsWith(".ru", ignoreCase = true) ||
