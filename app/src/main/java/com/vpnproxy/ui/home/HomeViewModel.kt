@@ -338,6 +338,10 @@ class HomeViewModel @Inject constructor(
                         emptyList()
                     }
                 }
+                if (activeTraceId != traceId) {
+                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId after subscription refresh")
+                    return@launch
+                }
                 if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
                 if (configs.isEmpty()) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов. Проверьте интернет и обновите подписку"))
@@ -346,6 +350,10 @@ class HomeViewModel @Inject constructor(
 
                 if (!serverScanner.isScanCurrent(configs)) {
                     serverScanner.scanAll(configs, force = !refreshedSubscription)
+                }
+                if (activeTraceId != traceId) {
+                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId after scanning")
+                    return@launch
                 }
                 val available = serverScanner.availableServers()
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
@@ -362,10 +370,14 @@ class HomeViewModel @Inject constructor(
 
                 val chosen = candidates.first()
                 val best = autoSwitcher.selectScanned(chosen, candidates)
+                if (activeTraceId != traceId) {
+                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId before publishing candidates")
+                    return@launch
+                }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
                 Log.i(TAG, "Connecting to fastest scanned server [${chosen.config.name}] rtt=${chosen.latencyMs}ms")
                 logCollector.info(TAG, tmsg("Scanned server selected: ${chosen.config.name}; available=${candidates.size}"))
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(best, traceId))
                 connectionCoordinator.send(ConnectionEvent.UserConnect)
                 logCollector.info(
                     TAG,
@@ -376,6 +388,10 @@ class HomeViewModel @Inject constructor(
                 logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
             } catch (e: Exception) {
+                if (activeTraceId != traceId) {
+                    logCollector.info(TAG, "Ignoring failure from stale server-selection attempt $traceId")
+                    return@launch
+                }
                 Log.e(TAG, "Instant server selection failed", e)
                 logCollector.error(TAG, tmsg("Instant server selection failed: ${e.message}"), e)
                 connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось выбрать сервер"))
