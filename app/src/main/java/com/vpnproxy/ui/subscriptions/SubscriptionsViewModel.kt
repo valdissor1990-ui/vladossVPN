@@ -72,11 +72,11 @@ class SubscriptionsViewModel @Inject constructor(
             try {
                 repository.refreshAll()
                 val scanResults = serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
-                val reachableCount = scanResults.count { it.successRate > 0.5f }
-                _message.value = "Найдено $reachableCount уникальных серверов"
+                val tcpReachableCount = scanResults.count { it.successRate > 0.5f }
+                _message.value = "TCP-проверку прошли $tcpReachableCount уникальных профилей"
                 logCollector.info(
                     "SubscriptionsVM",
-                    "Refreshed and scanned: reachableUnique=$reachableCount; scannedUnique=${scanResults.size}"
+                    "Refreshed and scanned: tcpReachableUnique=$tcpReachableCount; scannedUnique=${scanResults.size}"
                 )
             } catch (c: CancellationException) {
                 throw c
