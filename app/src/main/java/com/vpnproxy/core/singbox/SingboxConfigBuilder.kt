@@ -191,7 +191,13 @@ object SingboxConfigBuilder {
                     // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
                     extraObject?.forEach { (key, value) ->
-                        if (key != "type") put(key, value)
+                        if (key != "type") {
+                            // Subscription links use Xray's camelCase names; sing-box JSON
+                            // uses snake_case. Passing xPaddingBytes verbatim makes libbox
+                            // 1.14.3 reject the entire outbound as an unknown field.
+                            val singBoxKey = key.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").lowercase()
+                            put(singBoxKey, value)
+                        }
                     }
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
