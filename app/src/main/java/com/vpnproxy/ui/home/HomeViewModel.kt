@@ -532,7 +532,7 @@ class HomeViewModel @Inject constructor(
                 if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
                     connectionCoordinator.state.value is ConnectionState.Error
                 ) {
-                    connectionCoordinator.send(ConnectionEvent.UserConnect)
+                    connectionCoordinator.send(ConnectionEvent.UserConnect(userInitiated = true))
                 }
                 ensureServiceRunning()
             } catch (c: CancellationException) {
