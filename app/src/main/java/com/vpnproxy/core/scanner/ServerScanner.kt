@@ -1,0 +1,178 @@
+package com.vpnproxy.core.scanner
+
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.ping.PingExecutor
+import com.vpnproxy.core.ping.PingProtocol
+import com.vpnproxy.core.ping.PingRegion
+import com.vpnproxy.core.ping.PingTarget
+import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.subscription.SubscriptionRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.Locale
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class ServerScanner @Inject constructor(
+    private val pingExecutor: PingExecutor,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val connectionCoordinator: ConnectionCoordinator,
+    private val autoSwitcher: AutoSwitcher,
+    private val logCollector: LogCollector
+) {
+    companion object {
+        private const val TAG = "ServerScanner"
+        private const val CONCURRENCY = 20
+        private const val SERVER_TIMEOUT_MS = 2_000L
+        private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
+    }
+
+    private val scanMutex = Mutex()
+    private val _scannedServers = MutableStateFlow<List<ScoredServer>>(emptyList())
+    val scannedServers: StateFlow<List<ScoredServer>> = _scannedServers.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    @Volatile private var scannedConfigKeys: Set<String> = emptySet()
+    @Volatile private var backgroundJob: Job? = null
+
+    suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
+        scanMutex.withLock {
+            val unique = configs.distinctBy(::serverKey)
+            val requestedKeys = unique.map(::serverKey).toSet()
+            if (!force && requestedKeys.isNotEmpty() &&
+                requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size
+            ) {
+                return@withLock _scannedServers.value
+            }
+
+            if (unique.isEmpty()) {
+                scannedConfigKeys = emptySet()
+                _scannedServers.value = emptyList()
+                return@withLock emptyList()
+            }
+
+            _isScanning.value = true
+            try {
+                val semaphore = Semaphore(CONCURRENCY)
+                val results = coroutineScope {
+                    unique.map { config ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit { probe(config) }
+                        }
+                    }.awaitAll()
+                }.sortedWith(
+                    compareBy<ScoredServer>(
+                        { if (it.successRate > 0.5f) 0 else 1 },
+                        { it.latencyMs }
+                    )
+                )
+                scannedConfigKeys = requestedKeys
+                _scannedServers.value = results
+                val available = results.filter { it.successRate > 0.5f }
+                val ruAvailable = available.count { isRussianServer(it.config) }
+                logCollector.info(
+                    TAG,
+                    "Scan complete: ${available.size}/${unique.size} reachable, RU=$ruAvailable"
+                )
+                results
+            } finally {
+                _isScanning.value = false
+            }
+        }
+
+    suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
+        autoSwitcher.clearBlacklist()
+        scannedConfigKeys = emptySet()
+        _scannedServers.value = emptyList()
+        return scanAll(configs, force = true)
+    }
+
+    fun scanInBackground(scope: CoroutineScope): Job {
+        backgroundJob?.takeIf { it.isActive }?.let { return it }
+        return scope.launch {
+            val initialConfigs = subscriptionRepository.getAllConfigs()
+            if (initialConfigs.isNotEmpty()) scanAll(initialConfigs)
+            while (isActive) {
+                delay(RESCAN_INTERVAL_MS)
+                if (connectionCoordinator.state.value is ConnectionState.Connected) {
+                    val configs = subscriptionRepository.getAllConfigs()
+                    if (configs.isNotEmpty()) scanAll(configs, force = true)
+                }
+            }
+        }.also { backgroundJob = it }
+    }
+
+    fun isScanCurrent(configs: List<ParsedConfig>): Boolean {
+        val keys = configs.distinctBy(::serverKey).map(::serverKey).toSet()
+        return keys.isNotEmpty() && keys == scannedConfigKeys &&
+            _scannedServers.value.size == keys.size
+    }
+
+    fun availableServers(): List<ScoredServer> =
+        _scannedServers.value.filter { it.successRate > 0.5f }
+
+    fun isRussianServer(config: ParsedConfig): Boolean {
+        val name = config.name
+        return name.contains("🇷🇺") ||
+            name.contains("RU", ignoreCase = true) ||
+            Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(name) ||
+            config.address.endsWith(".ru", ignoreCase = true) ||
+            config.sni.orEmpty().endsWith(".ru", ignoreCase = true)
+    }
+
+    private suspend fun probe(config: ParsedConfig): ScoredServer {
+        val target = PingTarget(
+            id = serverKey(config),
+            displayName = config.name,
+            host = config.address,
+            port = config.port,
+            protocol = PingProtocol.TCP_CONNECT,
+            weight = 1.0,
+            regions = setOf(if (isRussianServer(config)) PingRegion.RU else PingRegion.GLOBAL)
+        )
+        return try {
+            val result = pingExecutor.ping(target, SERVER_TIMEOUT_MS)
+            val latency = result.rttMs?.takeIf { result.success } ?: Long.MAX_VALUE
+            ScoredServer(
+                config = config,
+                latencyMs = latency,
+                speedMbps = 0f,
+                successRate = if (result.success && result.rttMs != null) 1f else 0f,
+                score = if (result.success && result.rttMs != null) {
+                    1f / result.rttMs.coerceAtLeast(1L).toFloat()
+                } else 0f
+            )
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            logCollector.debug(TAG, "TCP probe failed for ${config.name}: ${e.message}")
+            ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+        }
+    }
+
+    private fun serverKey(config: ParsedConfig): String =
+        "${config.address.lowercase(Locale.ROOT)}:${config.port}:${config.uuid.lowercase(Locale.ROOT)}"
+}
