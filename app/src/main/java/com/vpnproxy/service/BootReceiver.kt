@@ -95,7 +95,7 @@ class BootReceiver : BroadcastReceiver() {
         )
         autoSwitcher.forceSelect(scored)
         connectionCoordinator.send(ConnectionEvent.ServerSelected(scored))
-        connectionCoordinator.send(ConnectionEvent.UserConnect())
+        connectionCoordinator.send(ConnectionEvent.UserConnect)
         logCollector.info(
             "BootReceiver",
             "Auto-connect ($action): ServerSelected(${matched.name}) + UserConnect"
