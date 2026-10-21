@@ -166,6 +166,24 @@ fun HomeScreen(
                     onClick = { viewModel.toggleConnection() }
                 )
 
+                if (uiState.isScanningServers) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Поиск доступных серверов...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
                 Spacer(Modifier.height(32.dp))
 
                 ConnectionStatsCard(
