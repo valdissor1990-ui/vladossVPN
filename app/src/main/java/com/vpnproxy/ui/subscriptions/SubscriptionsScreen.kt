@@ -95,7 +95,7 @@ fun SubscriptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.size})",
+                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.distinctBy { it.connectionKey() }.size})",
                                 color = WarningYellow,
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium
