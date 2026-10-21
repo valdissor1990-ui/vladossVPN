@@ -198,7 +198,7 @@ class SubscriptionParser @Inject constructor(
 
     /**
      * Optional XHTTP `extra`:
-     * - missing / blank / literal "null" → silent null (no WARN, no CPU parse)
+     * - missing / blank / literal "null" → empty JSON object without WARN
      * - valid JSON object → normalized string
      * - present but invalid / non-object → WARN once and null
      */
@@ -261,7 +261,7 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
-                extra = normalizeXhttpExtra(params["extra"])
+                extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"]) else null
             )
             if (!config.isValid()) {
                 logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))
