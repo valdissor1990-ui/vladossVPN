@@ -34,7 +34,7 @@ sealed class ConnectionState {
 }
 
 sealed class ConnectionEvent {
-    data object UserConnect : ConnectionEvent()
+    data class UserConnect(val userInitiated: Boolean = false) : ConnectionEvent()
     data object UserDisconnect : ConnectionEvent()
     /** Notification STOP / UI disconnect — cancels selection + goes Disconnecting. */
     data object RequestDisconnect : ConnectionEvent()
@@ -225,9 +225,14 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.UserConnect -> {
-                if (isFatalErrorLocked) {
-                    logW("UserConnect ignored — fatal lock is active; waiting for manual ConnectRequested")
+                if (isFatalErrorLocked && !event.userInitiated) {
+                    logW("UserConnect ignored — fatal lock is active; waiting for manual action")
                     return
+                }
+                if (event.userInitiated && isFatalErrorLocked) {
+                    isFatalErrorLocked = false
+                    trafficFailures = 0
+                    logI("Manual UserConnect — fatal lock cleared")
                 }
                 retryCount = 0
                 if (!hasServerSelected || pendingServerName == null) {
