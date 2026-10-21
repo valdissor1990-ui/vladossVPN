@@ -163,9 +163,13 @@ object SingboxConfigBuilder {
         } catch (e: Exception) {
             throw IllegalArgumentException("Invalid XHTTP extra JSON: ${e.message}", e)
         }
-        val obj = element as? JsonObject ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
-        return kotlinx.serialization.json.buildJsonObject {
-            obj.forEach { (sourceKey, value) ->
+        return element as? JsonObject
+            ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
+    }
+
+    private fun normalizeXhttpOptions(extra: JsonObject?): JsonObject =
+        kotlinx.serialization.json.buildJsonObject {
+            extra?.forEach { (sourceKey, value) ->
                 val targetKey = xhttpOptionAliases[sourceKey] ?: return@forEach
                 when (targetKey) {
                     "headers" -> if (value is JsonObject) put(targetKey, value)
@@ -182,7 +186,6 @@ object SingboxConfigBuilder {
                 }
             }
         }
-    }
 
     private fun normalizeXhttpStringOption(key: String, raw: String): String? {
         val value = raw.trim()
@@ -265,13 +268,6 @@ object SingboxConfigBuilder {
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
                 "xhttp" -> put("transport", buildJsonObject {
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
-                    extraObject?.forEach { (key, value) ->
-                        if (key !in setOf("headers", "host", "path", "mode", "type")) put(key, value)
-                    }
-
-                    // Top-level URI parameters are authoritative; extra.host/path/mode are fallbacks.
-                    val extraHost = extraObject?.get("host") as? JsonPrimitive
-                    val extraPath = extraObject?.get("path") as? JsonPrimitive
                     val extraMode = (extraObject?.get("mode") as? JsonPrimitive)?.contentOrNull
                     val selectedMode = config.mode?.takeIf { it in setOf("auto", "packet-up", "stream-up", "stream-one") }
                         ?: extraMode?.takeIf { it in setOf("auto", "packet-up", "stream-up", "stream-one") }
@@ -279,34 +275,27 @@ object SingboxConfigBuilder {
                     val effectiveMode = if (selectedMode == "auto") {
                         if (config.security.equals("reality", true)) "stream-one" else "packet-up"
                     } else selectedMode
+                    val packetUp = effectiveMode == "packet-up"
 
                     put("type", "xhttp")
-                    (config.host?.takeIf { it.isNotBlank() } ?: extraHost?.contentOrNull?.takeIf { it.isNotBlank() })
+                    (config.host?.takeIf { it.isNotBlank() }
+                        ?: (extraObject?.get("host") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() })
                         ?.let { put("host", it) }
-                    (config.path?.takeIf { it.isNotBlank() } ?: extraPath?.contentOrNull?.takeIf { it.isNotBlank() })
+                    (config.path?.takeIf { it.isNotBlank() }
+                        ?: (extraObject?.get("path") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() })
                         ?.let { put("path", it) }
                     put("mode", selectedMode)
 
-                    // Some Xray links contain options only meaningful for packet-up. Drop
-                    // incompatible combinations instead of letting strict libbox config decode fail.
-                    val packetUp = effectiveMode == "packet-up"
-                    if (!packetUp) {
-                        // These values are removed below if present; defaults remain core-owned.
-                    }
-                    extraObject?.forEach { (key, value) ->
-                        val normalizedKey = key
-                        if (normalizedKey == "uplink_data_placement" &&
+                    // Xray extra uses camelCase and may contain server-only fields. Emit only
+                    // recognized sing-box-lx client options with the exact snake_case schema.
+                    normalizeXhttpOptions(extraObject).forEach { (key, value) ->
+                        if (key == "uplink_data_placement" &&
                             (value as? JsonPrimitive)?.contentOrNull in setOf("header", "cookie") && !packetUp
                         ) return@forEach
-                        if (normalizedKey == "uplink_http_method" &&
+                        if (key == "uplink_http_method" &&
                             (value as? JsonPrimitive)?.contentOrNull == "GET" && !packetUp
                         ) return@forEach
-                        if (normalizedKey in setOf("headers", "x_padding_bytes", "no_grpc_header", "session_placement",
-                                "session_key", "seq_placement", "seq_key", "uplink_data_placement", "uplink_data_key",
-                                "uplink_chunk_size", "uplink_http_method", "x_padding_obfs_mode", "x_padding_placement",
-                                "x_padding_key", "x_padding_header", "x_padding_method", "sc_max_each_post_bytes",
-                                "sc_min_posts_interval_ms")
-                        ) put(normalizedKey, value)
+                        put(key, value)
                     }
                 })
             }
