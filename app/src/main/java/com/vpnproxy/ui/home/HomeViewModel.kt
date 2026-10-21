@@ -362,7 +362,7 @@ class HomeViewModel @Inject constructor(
                 Log.i(TAG, "Connecting to fastest scanned server [${chosen.config.name}] rtt=${chosen.latencyMs}ms")
                 logCollector.info(TAG, tmsg("Scanned server selected: ${chosen.config.name}; available=${candidates.size}"))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
-                connectionCoordinator.send(ConnectionEvent.UserConnect)
+                connectionCoordinator.send(ConnectionEvent.UserConnect(userInitiated = true))
                 logCollector.info(
                     TAG,
                     tmsg("ServerSelected+UserConnect after ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms")
