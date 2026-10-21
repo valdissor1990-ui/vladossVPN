@@ -66,7 +66,7 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
 
@@ -85,7 +85,7 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
@@ -104,7 +104,7 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
 
@@ -130,7 +130,7 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.AnotherVpnActive)) {
@@ -144,18 +144,23 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun userConnect_clearsFatalLock() {
+    fun automaticUserConnect_doesNotClearFatalLock() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
-            coordinator.isFatalErrorLocked
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
         }
 
-        sendAndWait(ConnectionEvent.UserConnect(userInitiated = true)) {
+        coordinator.send(ConnectionEvent.UserConnect)
+        Thread.sleep(150)
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
+
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
             !coordinator.isFatalErrorLocked &&
                 coordinator.state.value is ConnectionState.Connecting
         }
@@ -166,7 +171,7 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
-        sendAndWait(ConnectionEvent.UserConnect()) {
+        sendAndWait(ConnectionEvent.UserConnect) {
             coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
