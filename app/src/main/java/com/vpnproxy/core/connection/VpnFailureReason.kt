@@ -26,14 +26,28 @@ sealed class VpnFailureReason {
         is PermissionDenied -> "Нет разрешения VPN. Выдайте доступ в настройках."
         is TunConflict -> "Не удалось создать TUN. Закройте другое VPN и повторите."
         is NetworkTimeout -> if (details.isNotBlank()) "Превышено время подключения: $details" else "Превышено время подключения"
-        is CoreError -> message.ifBlank { "Ошибка ядра VPN" }
+        is CoreError -> if (isConfigurationError(message)) {
+            "Ошибка конфигурации сервера. Попробуйте обновить подписку."
+        } else {
+            message.ifBlank { "Ошибка ядра VPN" }
+        }
         is Unknown -> "Неизвестная ошибка подключения"
     }
 
     companion object {
+        private fun isConfigurationError(message: String): Boolean {
+            val m = message.lowercase()
+            return m.contains("unknown field") ||
+                m.contains("unable to start libbox") ||
+                m.contains("illegalstateexception") ||
+                m.contains("invalid configuration") ||
+                m.contains("invalid config")
+        }
+
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()
-            return m.contains("another vpn") ||
+            return isConfigurationError(message) ||
+                m.contains("another vpn") ||
                 m.contains("permission denied") ||
                 m.contains("permission is missing") ||
                 m.contains("permission revoked") ||

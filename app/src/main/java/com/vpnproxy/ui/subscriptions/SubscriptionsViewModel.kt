@@ -37,6 +37,8 @@ class SubscriptionsViewModel @Inject constructor(
 
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
+    val scannedServers = serverScanner.scannedServers
+    val isScanning = serverScanner.isScanning
 
     fun addSubscription(url: String, name: String, tag: String = "") {
         if (url.isBlank()) {
@@ -68,10 +70,14 @@ class SubscriptionsViewModel @Inject constructor(
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                val count = repository.refreshAll()
-                serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
-                _message.value = "Загружено уникальных серверов: $count; проверка завершена"
-                logCollector.info("SubscriptionsVM", "Refreshed: uniqueGlobal=$count; server scan completed")
+                repository.refreshAll()
+                val scanResults = serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+                val reachableCount = scanResults.count { it.successRate > 0.5f }
+                _message.value = "Найдено $reachableCount уникальных серверов"
+                logCollector.info(
+                    "SubscriptionsVM",
+                    "Refreshed and scanned: reachableUnique=$reachableCount; scannedUnique=${scanResults.size}"
+                )
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

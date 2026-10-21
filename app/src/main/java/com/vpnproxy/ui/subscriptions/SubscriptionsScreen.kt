@@ -30,6 +30,14 @@ fun SubscriptionsScreen(
     val refreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
+    val scannedServers by viewModel.scannedServers.collectAsStateWithLifecycle()
+    val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val reachableKeys = remember(scannedServers) {
+        scannedServers.asSequence()
+            .filter { it.successRate > 0.5f }
+            .map { it.config.connectionKey() }
+            .toSet()
+    }
 
     var dismissCacheBanner by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -95,7 +103,7 @@ fun SubscriptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.distinctBy { it.connectionKey() }.size})",
+                                text = "⚠️ Источник недоступен, используются кэшированные серверы (${reachableKeys.size} доступно)",
                                 color = WarningYellow,
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium
@@ -109,7 +117,7 @@ fun SubscriptionsScreen(
             }
             item(key = "unique-server-summary") {
                 Text(
-                    text = "Уникальных серверов всего: ${configs.distinctBy { it.connectionKey() }.size}",
+                    text = if (isScanning) "Проверка серверов… Доступно: ${reachableKeys.size}" else "Доступно уникальных серверов: ${reachableKeys.size}",
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
@@ -128,8 +136,9 @@ fun SubscriptionsScreen(
             items(subs, key = { it.id }) { sub ->
                 val countForSub = configs.asSequence()
                     .filter { it.providerTag == sub.name }
-                    .distinctBy { it.connectionKey() }
-                    .count()
+                    .map { it.connectionKey() }
+                    .distinct()
+                    .count { it in reachableKeys }
                 val canRemove = sub.id != SubscriptionRepository.DEFAULT_SUBSCRIPTION_ID
                 Card(
                     modifier = Modifier.fillMaxWidth(),

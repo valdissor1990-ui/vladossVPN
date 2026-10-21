@@ -187,12 +187,16 @@ object SingboxConfigBuilder {
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
                 "xhttp" -> put("transport", buildJsonObject {
+                    // libbox 1.14.3 rejects transport.extra; XHTTP extension fields
+                    // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
+                    extraObject?.forEach { (key, value) ->
+                        if (key != "type") put(key, value)
+                    }
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                     config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
                     put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
-                    if (extraObject != null) put("extra", extraObject)
                 })
             }
 
