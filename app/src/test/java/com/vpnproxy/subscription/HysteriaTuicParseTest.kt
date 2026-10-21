@@ -62,6 +62,26 @@ class HysteriaTuicParseTest {
         assertTrue(configs.all { it.providerTag == "Test" })
     }
     @Test
+    fun normalizesNullXhttpExtraToEmptyObjectWithoutWarning() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=reality&sni=www.example.org&fp=chrome&pbk=public-key&sid=a1b2&extra=null#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertEquals("{}", cfg!!.extra)
+    }
+
+    @Test
+    fun normalizesMissingXhttpExtraToEmptyObject() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=reality&sni=www.example.org&fp=chrome&pbk=public-key&sid=a1b2#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertEquals("{}", cfg!!.extra)
+    }
+
+    @Test
     fun parsesVlessXhttpRealityUriAndExtraWithoutThrowing() {
         val cfg = parser.parseVlessUri(
             "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
