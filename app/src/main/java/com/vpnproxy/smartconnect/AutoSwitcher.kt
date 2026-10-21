@@ -394,6 +394,17 @@ class AutoSwitcher @Inject constructor(
         return selected
     }
 
+    fun selectScanned(server: ScoredServer, candidates: List<ScoredServer>): ScoredServer {
+        val filtered = candidates.filterNot { isBlacklisted(it.config) }
+        val selected = filtered.firstOrNull { sameConfig(it.config, server.config) } ?: server
+        _currentServer.value = selected
+        _rankedServers.value = listOf(selected) + filtered.filterNot { sameConfig(it.config, selected.config) }
+        baselineRtt = selected.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
+        consecutiveErrors = 0
+        logCollector.info(TAG, "Instant scanned-server selection -> ${selected.config.name} (${selected.latencyMs}ms)")
+        return selected
+    }
+
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
         val allowed = filterUsableServers(configs)
