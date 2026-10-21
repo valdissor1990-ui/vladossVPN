@@ -47,6 +47,36 @@ class SubscriptionParser @Inject constructor(
         val congestionControl: String = "bbr",
         val extra: String? = null
     ) {
+        /**
+         * Stable identity for a connection profile. Endpoint + UUID alone is too coarse:
+         * subscriptions can publish the same endpoint with different transports/security.
+         * Name and providerTag are intentionally excluded so identical profiles from
+         * different providers are counted once globally but remain attributable per provider.
+         */
+        fun connectionKey(): String = listOf(
+            address.lowercase(java.util.Locale.ROOT),
+            port.toString(),
+            uuid.lowercase(java.util.Locale.ROOT),
+            transport.lowercase(java.util.Locale.ROOT),
+            security.lowercase(java.util.Locale.ROOT),
+            sni.orEmpty().lowercase(java.util.Locale.ROOT),
+            path.orEmpty(),
+            host.orEmpty().lowercase(java.util.Locale.ROOT),
+            mode.orEmpty().lowercase(java.util.Locale.ROOT),
+            fingerprint.orEmpty().lowercase(java.util.Locale.ROOT),
+            publicKey.orEmpty(),
+            shortId.orEmpty(),
+            flow.orEmpty(),
+            password.orEmpty(),
+            insecure.toString(),
+            alpn.joinToString(","),
+            obfsType.orEmpty(),
+            obfsPassword.orEmpty(),
+            pinSHA256.orEmpty(),
+            congestionControl.lowercase(java.util.Locale.ROOT),
+            extra.orEmpty()
+        ).joinToString("\u001F")
+
         fun isValid(): Boolean {
             if (uuid.isBlank() || address.isBlank()) return false
             if (port !in 1..65535) return false

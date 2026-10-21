@@ -95,7 +95,7 @@ fun SubscriptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.size})",
+                                text = "⚠️ Источник недоступен, используются кэшированные сервера (${configs.distinctBy { it.connectionKey() }.size})",
                                 color = WarningYellow,
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium
@@ -106,6 +106,13 @@ fun SubscriptionsScreen(
                         }
                     }
                 }
+            }
+            item(key = "unique-server-summary") {
+                Text(
+                    text = "Уникальных серверов всего: ${configs.distinctBy { it.connectionKey() }.size}",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                )
             }
             if (subs.isEmpty()) {
                 item {
@@ -119,7 +126,10 @@ fun SubscriptionsScreen(
                 }
             }
             items(subs, key = { it.id }) { sub ->
-                val countForSub = configs.count { it.providerTag == sub.name }
+                val countForSub = configs.asSequence()
+                    .filter { it.providerTag == sub.name }
+                    .distinctBy { it.connectionKey() }
+                    .count()
                 val canRemove = sub.id != SubscriptionRepository.DEFAULT_SUBSCRIPTION_ID
                 Card(
                     modifier = Modifier.fillMaxWidth(),

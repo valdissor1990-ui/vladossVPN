@@ -39,7 +39,7 @@ sealed class ConnectionEvent {
     /** Notification STOP / UI disconnect — cancels selection + goes Disconnecting. */
     data object RequestDisconnect : ConnectionEvent()
     /** UI requested connect (permission granted); selection may still be in progress. */
-    data class ConnectRequested(val traceId: String) : ConnectionEvent()
+    data class ConnectRequested(val traceId: String, val userInitiated: Boolean = false) : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
@@ -61,6 +61,8 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
+        private const val MAX_TRAFFIC_VALIDATION_FAILURES = 3
+        private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
         const val CONNECTING_TIMEOUT_MS = 60_000L
     }
 
@@ -181,6 +183,7 @@ class ConnectionCoordinator @Inject constructor(
     private fun applyFatal(reason: VpnFailureReason) {
         retryCount = 0
         isFatalErrorLocked = true
+        cancelSelectionJob()
         setState(ConnectionState.Error(reason.userMessage()), reason = reason.toString())
     }
 
@@ -195,11 +198,19 @@ class ConnectionCoordinator @Inject constructor(
         val current = _state.value
         when (event) {
             is ConnectionEvent.ConnectRequested -> {
+                if (isFatalErrorLocked && !event.userInitiated) {
+                    logW("ConnectRequested ignored — fatal lock is active; waiting for manual action")
+                    return
+                }
+                if (event.userInitiated) {
+                    isFatalErrorLocked = false
+                    trafficFailures = 0
+                    logI("Manual connect requested — fatal lock cleared")
+                }
                 activeTraceId = event.traceId
                 TraceId.newId() // keep generator in sync if needed
                 // Force the known id from the event
                 // (TraceId object may have a newer id from UI; prefer event)
-                isFatalErrorLocked = false
                 retryCount = 0
                 logI("ConnectRequested — enter Connecting (selection may still run)")
                 when (current) {
@@ -214,7 +225,10 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.UserConnect -> {
-                isFatalErrorLocked = false
+                if (isFatalErrorLocked) {
+                    logW("UserConnect ignored — fatal lock is active; waiting for manual ConnectRequested")
+                    return
+                }
                 retryCount = 0
                 if (!hasServerSelected || pendingServerName == null) {
                     logI("UserConnect deferred — waiting for ServerSelected")
@@ -251,7 +265,7 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.SetFallbackCandidates -> {
                 fallbackCandidates = event.servers
-                    .distinctBy { "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid}" }
+                    .distinctBy { it.config.connectionKey() }
                     .sortedBy { if (isRussianServer(it)) 0 else 1 }
                 fallbackIndex = -1
                 fallbackAttempts = 0
@@ -264,12 +278,12 @@ class ConnectionCoordinator @Inject constructor(
                 activeScoredServer = event.server
                 hasServerSelected = true
                 retryCount = 0
-                val selectedKey = "${event.server.config.address.lowercase()}:${event.server.config.port}:${event.server.config.uuid}"
+                val selectedKey = event.server.config.connectionKey()
                 val selectedWasFallback = fallbackCandidates.any {
-                    "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid}" == selectedKey
+                    it.config.connectionKey() == selectedKey
                 }
                 fallbackCandidates = fallbackCandidates.filterNot {
-                    "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid}" == selectedKey
+                    it.config.connectionKey() == selectedKey
                 }
                 fallbackIndex = -1
                 if (!selectedWasFallback) fallbackAttempts = 0
@@ -349,18 +363,19 @@ class ConnectionCoordinator @Inject constructor(
                 cancelSelectionJob()
                 if (current is ConnectionState.Disconnected) {
                     retryCount = 0
-                    isFatalErrorLocked = false
-                    logD("ForceDisconnected ($why): already Disconnected, flags cleared")
+                    logD("ForceDisconnected ($why): already Disconnected; fatal lock is preserved")
                     return
                 }
                 retryCount = 0
-                isFatalErrorLocked = false
                 setState(ConnectionState.Disconnected, reason = "ForceDisconnected:$why")
             }
 
             is ConnectionEvent.ServiceReady -> {
+                if (isFatalErrorLocked) {
+                    logW("ServiceReady ignored — fatal lock is active")
+                    return
+                }
                 retryCount = 0
-                isFatalErrorLocked = false
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
@@ -383,13 +398,21 @@ class ConnectionCoordinator @Inject constructor(
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     trafficFailures++
-                    logW("Server does not pass traffic: ${event.serverName} (failures=$trafficFailures; remainingCandidates=${fallbackCandidates.size})")
+                    logW("Server does not pass traffic: ${event.serverName} (consecutiveFailures=$trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES; remainingCandidates=${fallbackCandidates.size})")
                     val next = fallbackCandidates.firstOrNull()
-                    if (next == null) {
-                        val message = "Все сервера недоступны"
-                        logE("$message; traffic validation failed on ${event.serverName}")
+                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES || next == null) {
+                        retryCount = 0
                         isFatalErrorLocked = true
-                        setState(ConnectionState.Error(message), reason = "trafficValidationExhausted")
+                        cancelSelectionJob()
+                        logE("Traffic validation stopped after $trafficFailures failure(s); fatal lock enabled")
+                        setState(
+                            ConnectionState.Error(FATAL_TRAFFIC_MESSAGE),
+                            reason = if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES) {
+                                "trafficValidationFailedThreeTimes"
+                            } else {
+                                "trafficValidationExhausted"
+                            }
+                        )
                     } else {
                         logW("Traffic validation fallback -> ${next.config.name}")
                         send(ConnectionEvent.ServerSelected(next))
@@ -421,7 +444,7 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
-        if (!reason.isRetryable() || fallbackCandidates.isEmpty()) return false
+        if (isFatalErrorLocked || !reason.isRetryable() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected &&
@@ -432,21 +455,16 @@ class ConnectionCoordinator @Inject constructor(
         while (nextIndex < fallbackCandidates.size) {
             val candidate = fallbackCandidates[nextIndex]
             val active = activeScoredServer?.config
-            if (active == null ||
-                !candidate.config.address.equals(active.address, ignoreCase = true) ||
-                candidate.config.port != active.port || candidate.config.uuid != active.uuid
-            ) {
+            if (active == null || candidate.config.connectionKey() != active.connectionKey()) {
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot {
-                    it.config.address.equals(candidate.config.address, ignoreCase = true) &&
-                        it.config.port == candidate.config.port && it.config.uuid == candidate.config.uuid
+                    it.config.connectionKey() == candidate.config.connectionKey()
                 }
                 fallbackIndex = -1
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
                 retryCount = 0
-                isFatalErrorLocked = false
                 logW("Fallback attempt $fallbackAttempts -> ${candidate.config.name} after $reason")
                 setState(ConnectionState.Reconnecting, reason = "fallback:$fallbackAttempts:${candidate.config.name}")
                 return true

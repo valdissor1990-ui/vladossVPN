@@ -70,8 +70,8 @@ class SubscriptionsViewModel @Inject constructor(
             try {
                 val count = repository.refreshAll()
                 serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
-                _message.value = "Загружено серверов: $count; проверка завершена"
-                logCollector.info("SubscriptionsVM", "Refreshed: $count; server scan completed")
+                _message.value = "Загружено уникальных серверов: $count; проверка завершена"
+                logCollector.info("SubscriptionsVM", "Refreshed: uniqueGlobal=$count; server scan completed")
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

@@ -28,7 +28,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.Locale
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -59,7 +59,10 @@ class ServerScanner @Inject constructor(
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
-            val unique = configs.distinctBy(::serverKey)
+            // Prefer an RU-labelled copy when the same connection profile appears in
+            // multiple providers, so deduplication cannot erase RU-first priority.
+            val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
+                .distinctBy(::serverKey)
             val requestedKeys = unique.map(::serverKey).toSet()
             if (!force && requestedKeys.isNotEmpty() &&
                 requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size
@@ -103,7 +106,7 @@ class ServerScanner @Inject constructor(
                 val ruAvailable = available.count { isRussianServer(it.config) }
                 logCollector.info(
                     TAG,
-                    "Scan complete: ${available.size}/${unique.size} reachable, RU=$ruAvailable"
+                    "Scan complete: ${available.size}/${unique.size} unique reachable profiles, RU=$ruAvailable (input=${configs.size})"
                 )
                 results
             } finally {
@@ -143,17 +146,20 @@ class ServerScanner @Inject constructor(
         _scannedServers.value.filter { it.successRate > 0.5f }
 
     fun isRussianServer(config: ParsedConfig): Boolean {
-        val name = config.name
-        return name.contains("🇷🇺") ||
+        val labels = "${config.name} ${config.providerTag}"
+        return labels.contains("🇷🇺") ||
             Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE)
-                .containsMatchIn(name) ||
+                .containsMatchIn(labels) ||
             config.address.endsWith(".ru", ignoreCase = true) ||
             config.sni.orEmpty().endsWith(".ru", ignoreCase = true)
     }
 
+    /** Shared canonical key used by the scanner and server-list UI. */
+    fun configKey(config: ParsedConfig): String = config.connectionKey()
+
     private suspend fun probe(config: ParsedConfig): ScoredServer {
         val target = PingTarget(
-            id = serverKey(config),
+            id = pingTargetId(config),
             displayName = config.name,
             host = config.address,
             port = config.port,
@@ -181,6 +187,11 @@ class ServerScanner @Inject constructor(
         }
     }
 
-    private fun serverKey(config: ParsedConfig): String =
-        "${config.address.lowercase(Locale.ROOT)}:${config.port}:${config.uuid.lowercase(Locale.ROOT)}"
+    private fun pingTargetId(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(serverKey(config).toByteArray(Charsets.UTF_8))
+            .take(12)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun serverKey(config: ParsedConfig): String = config.connectionKey()
 }

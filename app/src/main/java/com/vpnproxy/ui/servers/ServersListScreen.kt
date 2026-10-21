@@ -83,6 +83,8 @@ class ServersListViewModel @Inject constructor(
     val scanResults: StateFlow<List<ScoredServer>> = serverScanner.scannedServers
     fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
         serverScanner.isRussianServer(config)
+    fun configKey(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): String =
+        serverScanner.configKey(config)
 
     private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
     val servers: StateFlow<List<ScoredServer>> = _servers.asStateFlow()
@@ -101,13 +103,13 @@ class ServersListViewModel @Inject constructor(
     private var currentScanResults: List<ScoredServer> = emptyList()
 
     private fun updateServerRows() {
-        val scanned = currentScanResults.associateBy {
-            "${it.config.address.lowercase()}:${it.config.port}:${it.config.uuid.lowercase()}"
-        }
-        _servers.value = currentConfigs.map { config ->
-            val key = "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
-            scanned[key] ?: ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f)
-        }.sortedWith(compareBy<ScoredServer>({
+        val scanned = currentScanResults.associateBy { serverScanner.configKey(it.config) }
+        _servers.value = currentConfigs
+            .distinctBy { serverScanner.configKey(it) }
+            .map { config ->
+                val key = serverScanner.configKey(config)
+                scanned[key] ?: ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f)
+            }.sortedWith(compareBy<ScoredServer>({
             when { it.successRate > 0.5f -> 0; it.successRate == 0f -> 1; else -> 2 }
         }, { it.latencyMs }))
     }
@@ -229,9 +231,7 @@ fun ServerListContent(
     }
 
     val uniqueItems = remember(filtered) {
-        filtered.distinctBy {
-            "${it.config.address}|${it.config.port}|${it.config.uuid}"
-        }
+        filtered.distinctBy { viewModel.configKey(it.config) }
     }
 
     Column(
@@ -352,7 +352,7 @@ fun ServerListContent(
                 items(
                     items = uniqueItems,
                     key = {
-                        ServerMetrics.serverKey(it.config.address, it.config.port, it.config.uuid)
+                        viewModel.configKey(it.config)
                     }
                 ) { scoredServer ->
                     val scoreLabel = breakdown

@@ -144,7 +144,7 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun userConnect_clearsFatalLock() {
+    fun automaticUserConnect_doesNotClearFatalLock() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
         }
@@ -152,12 +152,39 @@ class ConnectionCoordinatorTest {
             coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
-            coordinator.isFatalErrorLocked
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
         }
 
-        sendAndWait(ConnectionEvent.UserConnect) {
+        coordinator.send(ConnectionEvent.UserConnect)
+        Thread.sleep(150)
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
+
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
             !coordinator.isFatalErrorLocked &&
                 coordinator.state.value is ConnectionState.Connecting
+        }
+    }
+
+    @Test
+    fun fatalLock_blocksAutomaticConnectRequested_untilManualConnect() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+
+        coordinator.send(ConnectionEvent.ConnectRequested("automatic"))
+        Thread.sleep(150)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
+        assertTrue(coordinator.isFatalErrorLocked)
+
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting && !coordinator.isFatalErrorLocked
         }
     }
 
