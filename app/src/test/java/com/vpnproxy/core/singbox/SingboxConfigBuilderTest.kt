@@ -126,7 +126,7 @@ class SingboxConfigBuilderTest {
             path = "/xhttp", host = "www.example.org", mode = "stream-one",
             fingerprint = "chrome", publicKey = "public-key", shortId = "a1b2",
             flow = "", name = "xhttp",
-            extra = """{"xPaddingBytes":"100-200","headers":{"X-Test":"yes"}}"""
+            extra = """{"xPaddingBytes":"100-200","noGRPCHeader":true,"uplinkHTTPMethod":"POST","headers":{"X-Test":"yes"}}"""
         )
         val outbound = kotlinx.serialization.json.Json.parseToJsonElement(SingboxConfigBuilder.build(config))
             .jsonObject["outbounds"]!!.jsonArray.first().jsonObject
@@ -135,9 +135,12 @@ class SingboxConfigBuilderTest {
         assertEquals("www.example.org", transport["host"]!!.jsonPrimitive.content)
         assertEquals("/xhttp", transport["path"]!!.jsonPrimitive.content)
         assertEquals("stream-one", transport["mode"]!!.jsonPrimitive.content)
-        assertEquals("100-200", transport["xPaddingBytes"]!!.jsonPrimitive.content)
+        assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
+        assertTrue(transport["no_grpc_header"]!!.jsonPrimitive.boolean)
+        assertEquals("POST", transport["uplink_http_method"]!!.jsonPrimitive.content)
         assertEquals("yes", transport["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
         assertFalse(transport.containsKey("extra"))
+        assertFalse(transport.containsKey("xPaddingBytes"))
         val tls = outbound["tls"]!!.jsonObject
         assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)
         assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
