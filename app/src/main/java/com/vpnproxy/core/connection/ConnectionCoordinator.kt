@@ -368,8 +368,7 @@ class ConnectionCoordinator @Inject constructor(
                 cancelSelectionJob()
                 if (current is ConnectionState.Disconnected) {
                     retryCount = 0
-                    isFatalErrorLocked = false
-                    logD("ForceDisconnected ($why): already Disconnected, flags cleared")
+                    logD("ForceDisconnected ($why): already Disconnected; fatal lock is preserved")
                     return
                 }
                 retryCount = 0
@@ -464,8 +463,7 @@ class ConnectionCoordinator @Inject constructor(
             if (active == null || candidate.config.connectionKey() != active.connectionKey()) {
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot {
-                    it.config.address.equals(candidate.config.address, ignoreCase = true) &&
-                        it.config.port == candidate.config.port && it.config.uuid == candidate.config.uuid
+                    it.config.connectionKey() == candidate.config.connectionKey()
                 }
                 fallbackIndex = -1
                 activeScoredServer = candidate
