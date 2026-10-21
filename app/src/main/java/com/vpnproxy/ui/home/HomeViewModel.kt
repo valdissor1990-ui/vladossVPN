@@ -489,7 +489,7 @@ class HomeViewModel @Inject constructor(
                 serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
                 logCollector.info(
                     TAG,
-                    "Manual subscription refresh: $n configs; scan refreshed"
+                    "Manual subscription refresh: uniqueConfigs=$n; scan refreshed"
                 )
             } catch (c: CancellationException) {
                 throw c
