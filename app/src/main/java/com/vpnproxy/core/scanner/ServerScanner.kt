@@ -28,7 +28,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.Locale
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -156,7 +156,7 @@ class ServerScanner @Inject constructor(
 
     private suspend fun probe(config: ParsedConfig): ScoredServer {
         val target = PingTarget(
-            id = serverKey(config),
+            id = pingTargetId(config),
             displayName = config.name,
             host = config.address,
             port = config.port,
@@ -183,6 +183,12 @@ class ServerScanner @Inject constructor(
             ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
         }
     }
+
+    private fun pingTargetId(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(serverKey(config).toByteArray(Charsets.UTF_8))
+            .take(12)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private fun serverKey(config: ParsedConfig): String = config.connectionKey()
 }
