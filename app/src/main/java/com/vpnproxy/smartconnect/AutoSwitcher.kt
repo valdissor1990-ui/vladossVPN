@@ -113,6 +113,11 @@ class AutoSwitcher @Inject constructor(
         logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
     }
 
+    fun clearBlacklist() {
+        serverBlacklist.clear()
+        logCollector.info(TAG, "Server blacklist cleared after subscription update")
+    }
+
     private fun filterUsableServers(configs: List<ParsedConfig>): List<ParsedConfig> =
         configs.filterNot { isBlacklisted(it) }
 
