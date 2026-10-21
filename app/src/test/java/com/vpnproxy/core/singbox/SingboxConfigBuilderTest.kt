@@ -126,7 +126,7 @@ class SingboxConfigBuilderTest {
             path = "/xhttp", host = "www.example.org", mode = "stream-one",
             fingerprint = "chrome", publicKey = "public-key", shortId = "a1b2",
             flow = "", name = "xhttp",
-            extra = """{"xPaddingBytes":"100-200","headers":{"X-Test":"yes"}}"""
+            extra = """{"host":"","path":"","mode":"","xPaddingBytes":"100-200","xPaddingObfsMode":true,"headers":{"X-Test":"yes"},"noGRPCHeader":false,"sessionIDPlacement":"header","sessionIDKey":"X-Session","seqPlacement":"query","seqKey":"seq","uplinkDataPlacement":"header","uplinkDataKey":"data","uplinkChunkSize":"2048-3072","uplinkHTTPMethod":"GET","scMaxEachPostBytes":"1000000-1000000","scMinPostsIntervalMs":"30-30","scMaxBufferedPosts":64,"serverMaxHeaderBytes":32768,"xmux":{"maxConcurrency":"8-16"},"downloadSettings":null,"extra":null}"""
         )
         val outbound = kotlinx.serialization.json.Json.parseToJsonElement(SingboxConfigBuilder.build(config))
             .jsonObject["outbounds"]!!.jsonArray.first().jsonObject
@@ -135,8 +135,32 @@ class SingboxConfigBuilderTest {
         assertEquals("www.example.org", transport["host"]!!.jsonPrimitive.content)
         assertEquals("/xhttp", transport["path"]!!.jsonPrimitive.content)
         assertEquals("stream-one", transport["mode"]!!.jsonPrimitive.content)
-        assertEquals("100-200", transport["xPaddingBytes"]!!.jsonPrimitive.content)
+        assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
+        assertTrue(transport["x_padding_obfs_mode"]!!.jsonPrimitive.boolean)
         assertEquals("yes", transport["headers"]!!.jsonObject["X-Test"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("xPaddingBytes"))
+        assertEquals("false", transport["no_grpc_header"]!!.jsonPrimitive.content)
+        assertEquals("header", transport["session_placement"]!!.jsonPrimitive.content)
+        assertEquals("X-Session", transport["session_key"]!!.jsonPrimitive.content)
+        assertEquals("query", transport["seq_placement"]!!.jsonPrimitive.content)
+        assertEquals("2048-3072", transport["uplink_chunk_size"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("uplink_data_placement"))
+        assertFalse(transport.containsKey("uplink_http_method"))
+        assertEquals("1000000-1000000", transport["sc_max_each_post_bytes"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("sc_max_buffered_posts"))
+
+        val packetUpConfig = config.copy(
+            mode = "packet-up",
+            extra = """{"uplinkDataPlacement":"header","uplinkDataKey":"X-Data","uplinkHTTPMethod":"GET"}"""
+        )
+        val packetUpTransport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(packetUpConfig)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+        assertEquals("header", packetUpTransport["uplink_data_placement"]!!.jsonPrimitive.content)
+        assertEquals("GET", packetUpTransport["uplink_http_method"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("server_max_header_bytes"))
+        assertFalse(transport.containsKey("xmux"))
+        assertFalse(transport.containsKey("downloadSettings"))
         assertFalse(transport.containsKey("extra"))
         val tls = outbound["tls"]!!.jsonObject
         assertEquals("www.example.org", tls["server_name"]!!.jsonPrimitive.content)

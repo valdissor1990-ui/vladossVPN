@@ -103,7 +103,7 @@ fun SubscriptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚠️ Источник недоступен, используются кэшированные серверы (${reachableKeys.size} доступно)",
+                                text = "⚠️ Источник недоступен, используются кэшированные профили (TCP-доступно: ${reachableKeys.size})",
                                 color = WarningYellow,
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium
@@ -117,7 +117,7 @@ fun SubscriptionsScreen(
             }
             item(key = "unique-server-summary") {
                 Text(
-                    text = if (isScanning) "Проверка серверов… Доступно: ${reachableKeys.size}" else "Доступно уникальных серверов: ${reachableKeys.size}",
+                    text = if (isScanning) "Проверка TCP-доступности… Прошли: ${reachableKeys.size}" else "Прошли TCP-проверку: ${reachableKeys.size} уникальных профилей",
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
@@ -156,7 +156,7 @@ fun SubscriptionsScreen(
                         Text(text = sub.url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                         Text(text = "Тег: ${sub.displayTag()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.height(6.dp))
-                        Text(text = "Серверов: $countForSub", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
+                        Text(text = "Прошли TCP-проверку: $countForSub", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
                     }
                 }
             }

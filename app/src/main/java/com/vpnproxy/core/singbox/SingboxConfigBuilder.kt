@@ -4,6 +4,9 @@ import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -119,6 +122,40 @@ object SingboxConfigBuilder {
         }.toString()
     }
 
+    private val xhttpOptionAliases = mapOf(
+        "headers" to "headers",
+        "xPaddingBytes" to "x_padding_bytes", "x_padding_bytes" to "x_padding_bytes",
+        "noGRPCHeader" to "no_grpc_header", "no_grpc_header" to "no_grpc_header",
+        "sessionIDPlacement" to "session_placement", "sessionPlacement" to "session_placement",
+        "session_placement" to "session_placement",
+        "sessionIDKey" to "session_key", "sessionKey" to "session_key", "session_key" to "session_key",
+        "seqPlacement" to "seq_placement", "seq_placement" to "seq_placement",
+        "seqKey" to "seq_key", "seq_key" to "seq_key",
+        "uplinkDataPlacement" to "uplink_data_placement", "uplink_data_placement" to "uplink_data_placement",
+        "uplinkDataKey" to "uplink_data_key", "uplink_data_key" to "uplink_data_key",
+        "uplinkChunkSize" to "uplink_chunk_size", "uplink_chunk_size" to "uplink_chunk_size",
+        "uplinkHTTPMethod" to "uplink_http_method", "uplink_http_method" to "uplink_http_method",
+        "xPaddingObfsMode" to "x_padding_obfs_mode", "x_padding_obfs_mode" to "x_padding_obfs_mode",
+        "xPaddingPlacement" to "x_padding_placement", "x_padding_placement" to "x_padding_placement",
+        "xPaddingKey" to "x_padding_key", "x_padding_key" to "x_padding_key",
+        "xPaddingHeader" to "x_padding_header", "x_padding_header" to "x_padding_header",
+        "xPaddingMethod" to "x_padding_method", "x_padding_method" to "x_padding_method",
+        "scMaxEachPostBytes" to "sc_max_each_post_bytes", "sc_max_each_post_bytes" to "sc_max_each_post_bytes",
+        "scMinPostsIntervalMs" to "sc_min_posts_interval_ms", "sc_min_posts_interval_ms" to "sc_min_posts_interval_ms"
+    )
+
+    private val xhttpStringOptions = setOf(
+        "x_padding_bytes", "session_placement", "session_key", "seq_placement", "seq_key",
+        "uplink_data_placement", "uplink_data_key", "uplink_chunk_size", "uplink_http_method",
+        "x_padding_placement", "x_padding_key", "x_padding_header", "x_padding_method",
+        "sc_max_each_post_bytes", "sc_min_posts_interval_ms"
+    )
+
+    /**
+     * Subscription links commonly encode Xray-style camelCase names and server-only fields.
+     * sing-box-lx expects snake_case client options; unknown/server-only fields must never be
+     * copied into transport because libbox decodes this object strictly.
+     */
     private fun parseXhttpExtra(rawExtra: String?): JsonObject? {
         if (rawExtra.isNullOrBlank()) return null
         val element = try {
@@ -126,8 +163,51 @@ object SingboxConfigBuilder {
         } catch (e: Exception) {
             throw IllegalArgumentException("Invalid XHTTP extra JSON: ${e.message}", e)
         }
-        val obj = element as? JsonObject ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
-        return obj
+        return element as? JsonObject
+            ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
+    }
+
+    private fun normalizeXhttpOptions(extra: JsonObject?): JsonObject =
+        kotlinx.serialization.json.buildJsonObject {
+            extra?.forEach { (sourceKey, value) ->
+                val targetKey = xhttpOptionAliases[sourceKey] ?: return@forEach
+                when (targetKey) {
+                    "headers" -> if (value is JsonObject) put(targetKey, value)
+                    "no_grpc_header", "x_padding_obfs_mode" -> {
+                        val booleanValue = (value as? JsonPrimitive)?.booleanOrNull ?: return@forEach
+                        put(targetKey, booleanValue)
+                    }
+                    else -> {
+                        if (targetKey !in xhttpStringOptions) return@forEach
+                        val rawValue = (value as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                        val normalized = normalizeXhttpStringOption(targetKey, rawValue) ?: return@forEach
+                        put(targetKey, normalized)
+                    }
+                }
+            }
+        }
+
+    private fun normalizeXhttpStringOption(key: String, raw: String): String? {
+        val value = raw.trim()
+        if (value.isEmpty()) return null
+        return when (key) {
+            "session_placement", "seq_placement" ->
+                value.lowercase().takeIf { it in setOf("path", "query", "header", "cookie") }
+            "uplink_data_placement" ->
+                value.lowercase().takeIf { it in setOf("body", "auto", "header", "cookie") }
+            "x_padding_placement" ->
+                value.takeIf { it in setOf("cookie", "header", "query", "queryInHeader") }
+            "x_padding_method" ->
+                value.lowercase().takeIf { it in setOf("repeat-x", "tokenish") }
+            "uplink_http_method" ->
+                value.uppercase().takeIf { it in setOf("GET", "POST") }
+            "x_padding_bytes", "uplink_chunk_size", "sc_max_each_post_bytes", "sc_min_posts_interval_ms" -> {
+                if (!value.matches(Regex("\\d+(?:-\\d+)?"))) return null
+                if (key != "x_padding_bytes" && value == "0") return null
+                value
+            }
+            else -> value
+        }
     }
 
     fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
@@ -187,16 +267,36 @@ object SingboxConfigBuilder {
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
                 "xhttp" -> put("transport", buildJsonObject {
-                    // libbox 1.14.3 rejects transport.extra; XHTTP extension fields
-                    // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
-                    extraObject?.forEach { (key, value) ->
-                        if (key != "type") put(key, value)
-                    }
+                    val extraMode = (extraObject?.get("mode") as? JsonPrimitive)?.contentOrNull
+                    val selectedMode = config.mode?.takeIf { it in setOf("auto", "packet-up", "stream-up", "stream-one") }
+                        ?: extraMode?.takeIf { it in setOf("auto", "packet-up", "stream-up", "stream-one") }
+                        ?: "auto"
+                    val effectiveMode = if (selectedMode == "auto") {
+                        if (config.security.equals("reality", true)) "stream-one" else "packet-up"
+                    } else selectedMode
+                    val packetUp = effectiveMode == "packet-up"
+
                     put("type", "xhttp")
-                    config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
-                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
-                    put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
+                    (config.host?.takeIf { it.isNotBlank() }
+                        ?: (extraObject?.get("host") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() })
+                        ?.let { put("host", it) }
+                    (config.path?.takeIf { it.isNotBlank() }
+                        ?: (extraObject?.get("path") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() })
+                        ?.let { put("path", it) }
+                    put("mode", selectedMode)
+
+                    // Xray extra uses camelCase and may contain server-only fields. Emit only
+                    // recognized sing-box-lx client options with the exact snake_case schema.
+                    normalizeXhttpOptions(extraObject).forEach { (key, value) ->
+                        if (key == "uplink_data_placement" &&
+                            (value as? JsonPrimitive)?.contentOrNull in setOf("header", "cookie") && !packetUp
+                        ) return@forEach
+                        if (key == "uplink_http_method" &&
+                            (value as? JsonPrimitive)?.contentOrNull == "GET" && !packetUp
+                        ) return@forEach
+                        put(key, value)
+                    }
                 })
             }
 

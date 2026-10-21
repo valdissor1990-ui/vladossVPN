@@ -9,7 +9,7 @@
 
 ## XHTTP через sing-box-lx
 
-Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` версии `1.14.3-lx.21`, собранный с `with_xhttp`. Builder создаёт `transport.type=xhttp` и передаёт `host`, `path`, `mode`; поля JSON из URI-параметра `extra` разворачиваются в поддерживаемые XHTTP options. TLS/Reality остаётся на уровне outbound `tls`. Релиз AAR фиксируется SHA-256 в `scripts/download_libbox.sh`.
+Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` версии `1.14.3-lx.21`, собранный с `with_xhttp`. Builder создаёт `transport.type=xhttp`, передаёт `host`, `path`, `mode` и преобразует поддерживаемые параметры Xray camelCase в имена sing-box-lx snake_case (например, `xPaddingBytes` → `x_padding_bytes`). В `transport` попадают только поля клиентской XHTTP-схемы; серверные/неподдерживаемые поля (`xmux`, `serverMaxHeaderBytes`, `scMaxBufferedPosts` и др.) отбрасываются, чтобы строгий декодер libbox не отклонял весь профиль. TLS/Reality остаётся на уровне outbound `tls`. Релиз AAR фиксируется SHA-256 в `scripts/download_libbox.sh`.
 
 ## VLESS + Reality: поля URI
 

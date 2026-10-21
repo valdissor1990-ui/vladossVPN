@@ -234,12 +234,9 @@ class SubscriptionParser @Inject constructor(
      */
     private fun normalizeXhttpExtra(rawValue: String?): String? {
         if (rawValue == null) return "{}"
-        val decoded = try {
-            URLDecoder.decode(rawValue, "UTF-8")
-        } catch (_: IllegalArgumentException) {
-            rawValue
-        }
-        val trimmed = decoded.trim()
+        // parseUriQuery() has already URL-decoded this value once. Decoding again
+        // corrupts literal '+' and percent sequences inside JSON headers/values.
+        val trimmed = rawValue.trim()
         // Missing/null optional payloads are normalized to an empty object without WARN logs.
         if (trimmed.isEmpty() ||
             trimmed.equals("null", ignoreCase = true) ||
