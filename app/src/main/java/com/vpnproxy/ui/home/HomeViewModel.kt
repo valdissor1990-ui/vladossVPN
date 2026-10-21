@@ -53,7 +53,7 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val CONNECTING_UI_WATCHDOG_MS = 10_000L
+        private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
     }
 
@@ -341,6 +341,7 @@ class HomeViewModel @Inject constructor(
                     serverScanner.scanAll(configs, force = !refreshedSubscription)
                 }
                 val available = serverScanner.availableServers()
+                    .filterNot { autoSwitcher.isBlacklisted(it.config) }
                 val russian = available.filter { serverScanner.isRussianServer(it.config) }
                     .sortedBy { it.latencyMs }
                 val foreign = available.filterNot { serverScanner.isRussianServer(it.config) }
