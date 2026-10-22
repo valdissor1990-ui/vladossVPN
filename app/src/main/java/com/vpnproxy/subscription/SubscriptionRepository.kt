@@ -313,12 +313,13 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-            if (sawTransportFailure && connectionCoordinator.state.value is ConnectionState.Connected) {
-                val message = "Сервер не пропускает трафик"
-                logCollector.warn(TAG, "Connected state but subscription request timed out/failed at transport layer; requesting fallback")
-                connectionCoordinator.send(
-                    ConnectionEvent.CoreError(VpnFailureReason.CoreError(message))
-                )
+            val vpnState = connectionCoordinator.state.value
+            val vpnActive = vpnState is ConnectionState.Connecting ||
+                vpnState is ConnectionState.Verifying ||
+                vpnState is ConnectionState.Connected ||
+                vpnState is ConnectionState.Reconnecting
+            if (vpnActive) {
+                logCollector.warn(TAG, "SubRepo refresh failed while VPN active — ignored; transportFailure=$sawTransportFailure")
             }
             throw IOException("All sources failed", lastFailure)
         }
