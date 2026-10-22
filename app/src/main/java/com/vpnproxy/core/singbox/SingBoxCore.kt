@@ -3,6 +3,7 @@ package com.vpnproxy.core.singbox
 import android.content.Context
 import android.util.Log
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.LogCollectorHolder
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.Libbox
@@ -20,7 +21,7 @@ import java.util.Locale
 class SingBoxCore(
     private val context: Context,
     private val platform: SingBoxPlatform,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector? = LogCollectorHolder.get()
 ) {
     companion object {
         private const val TAG = "SingBoxCore"
@@ -56,7 +57,7 @@ class SingBoxCore(
                 Libbox.setup(options)
                 setupComplete = true
                 Log.i(TAG, "Libbox.setup() completed")
-                logCollector.info(TAG, "libbox logger attached")
+                logCollector?.info(TAG, "libbox logger attached")
             } catch (t: Throwable) {
                 Log.e(TAG, "JNI failure during Libbox initialization", t)
                 throw t
@@ -89,7 +90,7 @@ class SingBoxCore(
         }
         override fun writeDebugMessage(message: String?) {
             val line = message.orEmpty()
-            logCollector.debug("LIBBOX", "[LIBBOX] $line")
+            logCollector?.debug("LIBBOX", "[LIBBOX] $line")
             Log.d(TAG, line)
         }
         override fun connectSSHAgent(): Int {
