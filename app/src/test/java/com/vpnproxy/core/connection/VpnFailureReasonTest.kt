@@ -30,4 +30,15 @@ class VpnFailureReasonTest {
             reason.userMessage()
         )
     }
+
+    @Test
+    fun profileConfigurationErrorAllowsFallbackButRemainsFatalWithoutCandidates() {
+        val reason = VpnFailureReason.fromMessage(
+            """Unable to start libbox 1.14.3: outbounds[0].transport.session_id_placement: json: unknown field"""
+        )
+
+        assertFalse(reason.isRetryable())
+        org.junit.Assert.assertEquals(true, reason.canFallbackToNextServer())
+        org.junit.Assert.assertEquals(false, VpnFailureReason.PermissionDenied.canFallbackToNextServer())
+    }
 }
