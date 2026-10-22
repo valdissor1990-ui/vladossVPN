@@ -484,10 +484,20 @@ class VpnProxyService : VpnService() {
         if (passiveProbeJob?.isActive == true) return
         val serverName = autoSwitcher.currentServer.value?.config?.name ?: connectionCoordinator.currentSelectedServer()?.config?.name ?: "unknown"
         passiveProbeJob = scope.launch {
+            var outboundSuccessLogged = false
             logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
             while (isActive && connectionCoordinator.state.value is ConnectionState.Connected) {
-                runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
-                    .onFailure { t -> logCollector.warn(TAG, "PassiveProbe runner failed: ${t.javaClass.name}: ${t.message}") }
+                val probe = runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
+                probe.onSuccess { result ->
+                    if (result.success && !outboundSuccessLogged) {
+                        val config = autoSwitcher.currentServer.value?.config
+                        val endpoint = config?.let { "${it.address}:${it.port}" } ?: serverName
+                        logCollector.info("LIBBOX", "Outbound established: $endpoint via protect")
+                        outboundSuccessLogged = true
+                    }
+                }.onFailure { t ->
+                    logCollector.warn(TAG, "PassiveProbe runner failed: ${t.javaClass.name}: ${t.message}")
+                }
                 delay(5_000L)
             }
             logCollector.info(TAG, "PassiveProbe lifecycle stopped server=$serverName")
