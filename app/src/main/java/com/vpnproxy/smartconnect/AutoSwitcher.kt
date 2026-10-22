@@ -88,8 +88,9 @@ class AutoSwitcher @Inject constructor(
         return nowMs - connectedAtMs < AutoSwitcherConfig.postConnectWarmupMs
     }
 
-    private fun serverKey(config: ParsedConfig): String =
-        "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
+    // Blacklist the exact profile, not every variant sharing endpoint/UUID.
+    // XHTTP variants can differ in session placement, mode, path, TLS fingerprint, etc.
+    private fun serverKey(config: ParsedConfig): String = config.connectionKey()
 
     private fun pruneBlacklist(nowMs: Long = System.currentTimeMillis()) {
         serverBlacklist.entries.removeIf { it.value <= nowMs }
@@ -486,11 +487,20 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun forceSelect(server: ScoredServer): Boolean {
+        if (isBlacklisted(server.config)) {
+            logCollector.warn(TAG, "forceSelect rejected blacklisted profile: ${server.config.name}")
+            return false
+        }
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "forceSelect ignored — already switching")
             return false
         }
         try {
+            // Re-check after acquiring the switch guard in case a concurrent failure blacklisted it.
+            if (isBlacklisted(server.config)) {
+                logCollector.warn(TAG, "forceSelect rejected newly blacklisted profile: ${server.config.name}")
+                return false
+            }
             _currentServer.value = server
             baselineRtt = server.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
             previousRtt = null
