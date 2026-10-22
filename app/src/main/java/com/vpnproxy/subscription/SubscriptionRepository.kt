@@ -189,6 +189,18 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun refreshAll(): Int = refreshMutex.withLock {
+        // Subscription HTTP must not race VPN startup or be routed into a tunnel that is
+        // not ready yet. Keep the currently loaded/cache-backed profiles and refresh later.
+        when (connectionCoordinator.state.value) {
+            is ConnectionState.Connecting,
+            is ConnectionState.Reconnecting,
+            is ConnectionState.Verifying -> {
+                _lastRefreshUsedCache.value = true
+                logCollector.info(TAG, "Skipping subscription refresh while VPN is connecting/verifying; keeping cached profiles")
+                return@withLock _allConfigs.value.size
+            }
+            else -> Unit
+        }
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
             val subs = _subscriptions.value.filter { it.enabled }
