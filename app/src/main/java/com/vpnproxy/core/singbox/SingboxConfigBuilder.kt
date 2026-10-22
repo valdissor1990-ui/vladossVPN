@@ -127,7 +127,26 @@ object SingboxConfigBuilder {
             throw IllegalArgumentException("Invalid XHTTP extra JSON: ${e.message}", e)
         }
         val obj = element as? JsonObject ?: throw IllegalArgumentException("XHTTP extra must be a JSON object")
-        return obj
+        // Do not forward provider-only or default Xray fields to libbox. libbox 1.14.3
+        // strictly rejects unknown XHTTP transport keys (notably sessionIDTable ->
+        // session_idtable), even when their values are empty.
+        val unsupportedAliases = setOf(
+            "sessionIDTable", "sessionIdTable", "session_idtable", "session_id_table"
+        )
+        return JsonObject(obj.filter { (key, value) ->
+            key !in unsupportedAliases && !isDefaultXhttpValue(value)
+        })
+    }
+
+    private fun isDefaultXhttpValue(value: kotlinx.serialization.json.JsonElement): Boolean {
+        if (value is kotlinx.serialization.json.JsonNull) return true
+        if (value is kotlinx.serialization.json.JsonPrimitive) {
+            if (value.isString) return value.content.isEmpty() || value.content == "0"
+            if (value.content == "false") return true
+        }
+        if (value is JsonArray) return value.isEmpty()
+        if (value is JsonObject) return value.isEmpty()
+        return false
     }
 
     fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
@@ -191,7 +210,9 @@ object SingboxConfigBuilder {
                     // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
                     extraObject?.forEach { (key, value) ->
-                        if (key != "type") {
+                        if (key != "type" && key !in setOf(
+                                "sessionIDTable", "sessionIdTable", "session_idtable", "session_id_table"
+                            ) && !isDefaultXhttpValue(value)) {
                             // Subscription links use Xray's camelCase names; sing-box JSON
                             // uses snake_case. Passing xPaddingBytes verbatim makes libbox
                             // 1.14.3 reject the entire outbound as an unknown field.
