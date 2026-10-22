@@ -91,7 +91,7 @@ class ConnectionCoordinator @Inject constructor(
         private set
 
     @Volatile
-    @Volatile var activeTraceId: String? = null
+    var activeTraceId: String? = null
         private set
 
     private var connectingTimeoutJob: Job? = null
