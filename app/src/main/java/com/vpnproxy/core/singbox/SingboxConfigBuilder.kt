@@ -149,6 +149,46 @@ object SingboxConfigBuilder {
         return false
     }
 
+    /**
+     * Diagnostic-only view of which provider XHTTP extra keys survive the existing allowlist.
+     * This does not alter the allowlist or generated outbound.
+     */
+    fun xhttpExtraDiagnostics(config: ParsedConfig): Pair<List<String>, List<String>> {
+        if (!config.transport.equals("xhttp", ignoreCase = true)) return emptyList<String>() to emptyList()
+        val raw = config.extra?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+            ?: return emptyList<String>() to emptyList()
+        val outbound = buildOutbound(config)
+        val transport = outbound["transport"] as? JsonObject ?: return emptyList<String>() to raw.keys.sorted()
+        val aliases = mapOf(
+            "sessionIDPlacement" to "session_placement", "sessionIdPlacement" to "session_placement",
+            "sessionPlacement" to "session_placement", "session_placement" to "session_placement",
+            "session_id_placement" to "session_placement", "sessionIDKey" to "session_key",
+            "sessionIdKey" to "session_key", "sessionKey" to "session_key",
+            "session_key" to "session_key", "session_id_key" to "session_key",
+            "seqPlacement" to "seq_placement", "seq_placement" to "seq_placement",
+            "seqKey" to "seq_key", "seq_key" to "seq_key",
+            "uplinkDataPlacement" to "uplink_data_placement", "uplink_data_placement" to "uplink_data_placement",
+            "uplinkDataKey" to "uplink_data_key", "uplink_data_key" to "uplink_data_key",
+            "uplinkChunkSize" to "uplink_chunk_size", "uplink_chunk_size" to "uplink_chunk_size",
+            "uplinkHTTPMethod" to "uplink_http_method", "uplink_http_method" to "uplink_http_method",
+            "xPaddingBytes" to "x_padding_bytes", "x_padding_bytes" to "x_padding_bytes",
+            "noGRPCHeader" to "no_grpc_header", "noGrpcHeader" to "no_grpc_header",
+            "no_grpc_header" to "no_grpc_header", "xPaddingObfsMode" to "x_padding_obfs_mode",
+            "x_padding_obfs_mode" to "x_padding_obfs_mode", "xPaddingKey" to "x_padding_key",
+            "x_padding_key" to "x_padding_key", "xPaddingHeader" to "x_padding_header",
+            "x_padding_header" to "x_padding_header", "xPaddingPlacement" to "x_padding_placement",
+            "x_padding_placement" to "x_padding_placement", "xPaddingMethod" to "x_padding_method",
+            "x_padding_method" to "x_padding_method", "scMaxEachPostBytes" to "sc_max_each_post_bytes",
+            "sc_max_each_post_bytes" to "sc_max_each_post_bytes", "scMinPostsIntervalMs" to "sc_min_posts_interval_ms",
+            "sc_min_posts_interval_ms" to "sc_min_posts_interval_ms", "host" to "host", "path" to "path",
+            "mode" to "mode", "headers" to "headers"
+        )
+        val included = raw.keys.filter { key -> (aliases[key] ?: key) in transport.keys }.sorted()
+        val omitted = raw.keys.filterNot { it in included }.sorted()
+        return included to omitted
+    }
+
     fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
         val isHy2 = config.transport.equals("hysteria2", true) || config.transport.equals("hy2", true)
         val isTuic = config.transport.equals("tuic", true)
