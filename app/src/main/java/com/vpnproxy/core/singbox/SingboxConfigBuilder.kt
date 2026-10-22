@@ -29,17 +29,25 @@ object SingboxConfigBuilder {
     }.toString()
 
     /** Full VPN configuration. The libbox platform callback creates the Android TUN. */
-    fun buildVpn(config: ParsedConfig): String = buildJsonObject {
+    fun buildVpn(config: ParsedConfig, options: RuntimeTunnelOptions = RuntimeTunnelOptions()): String = buildJsonObject {
         put("log", buildJsonObject { put("level", "warn") })
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
-                add(buildJsonObject {
-                    put("type", "tls")
-                    put("tag", "remote-dns")
-                    put("server", "1.1.1.1")
-                    put("server_port", 853)
-                    put("detour", "proxy")
-                })
+                when (options.dnsMode) {
+                    "udp_8888_nodetour" -> add(buildJsonObject {
+                        put("type", "udp"); put("tag", "remote-dns"); put("server", "1.1.1.1"); put("server_port", 8888)
+                    })
+                    "udp_1111_nodetour" -> add(buildJsonObject {
+                        put("type", "udp"); put("tag", "remote-dns"); put("server", "1.1.1.1"); put("server_port", 1111)
+                    })
+                    "dot_111853_nodetour" -> add(buildJsonObject {
+                        put("type", "tls"); put("tag", "remote-dns"); put("server", "1.1.1.1"); put("server_port", 853)
+                    })
+                    "system_no_hijack" -> add(buildJsonObject {
+                        put("type", "local"); put("tag", "remote-dns")
+                    })
+                    else -> error("Unsupported DNS mode: ${options.dnsMode}")
+                }
             })
             put("final", "remote-dns")
             put("strategy", "prefer_ipv4")
@@ -55,8 +63,8 @@ object SingboxConfigBuilder {
                 })
                 put("mtu", 1400)
                 put("auto_route", true)
-                put("strict_route", true)
-                put("stack", "system")
+                put("strict_route", options.strictRoute)
+                put("stack", options.tunStack)
                 put("sniff", true)
             })
             add(buildJsonObject {
@@ -74,7 +82,7 @@ object SingboxConfigBuilder {
         put("route", buildJsonObject {
             put("auto_detect_interface", true)
             put("rules", buildJsonArray {
-                add(buildJsonObject {
+                if (options.dnsMode != "system_no_hijack") add(buildJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
                 })
@@ -83,7 +91,7 @@ object SingboxConfigBuilder {
                     put("outbound", "proxy")
                 })
             })
-            put("final", "proxy")
+            put("final", options.routeFinal)
         })
     }.toString()
 
