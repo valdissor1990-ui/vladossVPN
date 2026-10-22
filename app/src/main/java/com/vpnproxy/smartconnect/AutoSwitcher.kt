@@ -1,12 +1,14 @@
 package com.vpnproxy.smartconnect
 
 import android.util.Log
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.util.DebugFlags
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -75,12 +77,28 @@ class AutoSwitcher @Inject constructor(
     private val switching = AtomicBoolean(false)
 
     @Volatile private var connectedAtMs: Long = 0L
+    @Volatile private var hasConnectedOnce: Boolean = false
+
+    private fun diagnosticFreezeActive(): Boolean {
+        if (!BuildConfig.DEBUG || !DebugFlags.DIAGNOSTIC_MODE || !DebugFlags.FREEZE_AFTER_FIRST_CONNECTED) return false
+        if (connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected) {
+            hasConnectedOnce = true
+        }
+        return hasConnectedOnce
+    }
+
+    private fun suppressSwitchIfFrozen(targetName: String, reason: String): Boolean {
+        if (!diagnosticFreezeActive()) return false
+        logCollector.warn(TAG, "AutoSwitcher suppressed in DIAGNOSTIC_MODE: would switch to $targetName (reason=$reason)")
+        return true
+    }
 
     fun isSwitching(): Boolean = switching.get()
 
     fun markConnected() {
         connectedAtMs = System.currentTimeMillis()
-        logCollector.info(TAG, "Warmup started ${AutoSwitcherConfig.postConnectWarmupMs}ms")
+        hasConnectedOnce = true
+        logCollector.info(TAG, "Warmup started ${AutoSwitcherConfig.postConnectWarmupMs}ms; FREEZE_AFTER_FIRST_CONNECTED=${DebugFlags.FREEZE_AFTER_FIRST_CONNECTED}")
     }
 
     fun isInPostConnectWarmup(nowMs: Long = System.currentTimeMillis()): Boolean {
@@ -109,6 +127,10 @@ class AutoSwitcher @Inject constructor(
 
     fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
         val target = config ?: return
+        if (diagnosticFreezeActive()) {
+            logCollector.warn(TAG, "AutoSwitcher suppressed in DIAGNOSTIC_MODE: would switch to ${target.name} (reason=markServerFailed/blacklist suppressed)")
+            return
+        }
         val key = serverKey(target)
         serverBlacklist[key] = nowMs + ttlMs
         logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
@@ -124,6 +146,12 @@ class AutoSwitcher @Inject constructor(
 
     fun startMonitoring() {
         markConnected()
+        if (diagnosticFreezeActive()) {
+            healthCheckJob?.cancel()
+            healthCheckJob = null
+            logCollector.info(TAG, "AutoSwitcher monitoring disabled after first Connected in DIAGNOSTIC_MODE")
+            return
+        }
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
@@ -280,6 +308,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     private suspend fun performSlowServerSwitch(reason: String) {
+        if (suppressSwitchIfFrozen(_rankedServers.value.firstOrNull()?.config?.name ?: "unknown", "slow-server health check: $reason")) {
+            transitionTo(AutoSwitchState.MONITORING, "DIAGNOSTIC_MODE freeze")
+            return
+        }
         if (isInPostConnectWarmup()) {
             logCollector.info(TAG, "Slow-server switch ignored during warmup: $reason")
             transitionTo(AutoSwitchState.MONITORING, "warmup")
@@ -316,6 +348,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToBest(): ScoredServer? {
+        if (suppressSwitchIfFrozen(_rankedServers.value.firstOrNull()?.config?.name ?: "unknown", "switchToBest")) return null
         if (isInPostConnectWarmup()) {
             logCollector.info(TAG, "switchToBest ignored — post-connect warmup")
             return null
@@ -446,6 +479,9 @@ class AutoSwitcher @Inject constructor(
                     (current == null || !sameConfig(current.config, bestRussian.config)) &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
                 ) {
+                    if (suppressSwitchIfFrozen(bestRussian.config.name, "background ranking: fast RU server found")) {
+                        return@launch
+                    }
                     if (isInPostConnectWarmup()) {
                         logCollector.info(
                             TAG,
@@ -492,6 +528,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun forceSelect(server: ScoredServer): Boolean {
+        if (suppressSwitchIfFrozen(server.config.name, "forceSelect")) return false
         if (isBlacklisted(server.config)) {
             logCollector.warn(TAG, "forceSelect rejected blacklisted profile: ${server.config.name}")
             return false
@@ -518,6 +555,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToNext(): ScoredServer? {
+        if (suppressSwitchIfFrozen(_rankedServers.value.firstOrNull()?.config?.name ?: "unknown", "switchToNext")) return null
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "switchToNext ignored — already switching")
             return null
