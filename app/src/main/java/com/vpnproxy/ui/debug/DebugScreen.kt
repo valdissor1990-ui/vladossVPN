@@ -14,6 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.core.singbox.DebugRuntimeOptions
+import com.vpnproxy.core.singbox.RuntimeTunnelOptions
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.logging.LogLevel
@@ -31,6 +35,12 @@ fun DebugScreen(
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    var runtimeOptions by remember { mutableStateOf(DebugRuntimeOptions.load(context)) }
+    fun saveOptions(updated: RuntimeTunnelOptions) {
+        runtimeOptions = updated
+        DebugRuntimeOptions.save(context, updated)
+    }
 
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
@@ -105,6 +115,51 @@ fun DebugScreen(
                             fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
+                    }
+                }
+            }
+
+            if (BuildConfig.DEBUG) {
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("Runtime tunnel options (следующее подключение)", style = MaterialTheme.typography.titleSmall)
+                        Text("DNS_MODE", style = MaterialTheme.typography.labelMedium)
+                        DebugRuntimeOptions.dnsModes.forEach { mode ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = runtimeOptions.dnsMode == mode, onClick = {
+                                    saveOptions(runtimeOptions.copy(dnsMode = mode))
+                                })
+                                Text(mode, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text("TUN_STACK", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DebugRuntimeOptions.tunStacks.forEach { stack ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = runtimeOptions.tunStack == stack, onClick = {
+                                        saveOptions(runtimeOptions.copy(tunStack = stack))
+                                    })
+                                    Text(stack)
+                                }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = runtimeOptions.strictRoute, onCheckedChange = {
+                                saveOptions(runtimeOptions.copy(strictRoute = it))
+                            })
+                            Text("STRICT_ROUTE")
+                        }
+                        Text("ROUTE_FINAL", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DebugRuntimeOptions.routeFinals.forEach { finalRoute ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = runtimeOptions.routeFinal == finalRoute, onClick = {
+                                        saveOptions(runtimeOptions.copy(routeFinal = finalRoute))
+                                    })
+                                    Text(finalRoute)
+                                }
+                            }
+                        }
                     }
                 }
             }
