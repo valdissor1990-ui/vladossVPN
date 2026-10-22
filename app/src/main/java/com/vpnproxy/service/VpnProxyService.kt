@@ -379,6 +379,22 @@ class VpnProxyService : VpnService() {
             }
 
             logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
+            val outbound = SingboxConfigBuilder.buildOutbound(parsed)
+            val outboundTransport = (outbound["transport"] as? kotlinx.serialization.json.JsonObject)
+                ?.get("type")?.toString()?.trim('"') ?: "raw"
+            val includedExtra = SingboxConfigBuilder.xhttpExtraDiagnostics(parsed).first
+            logCollector.info(
+                TAG,
+                "Outbound for ${parsed.name}: type=${outbound["type"]?.toString()?.trim('"')} transport=$outboundTransport " +
+                    "tls.server_name=${parsed.sni?.takeIf { it.isNotBlank() } ?: parsed.address} included_extra=$includedExtra " +
+                    "config=${SingboxConfigBuilder.maskedOutboundForDiagnostics(parsed)}"
+            )
+            logCollector.info(
+                TAG,
+                "TUN profile requested: routes=auto_route dns=[8.8.8.8/direct-dns] " +
+                    "stack=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else "system"} " +
+                    "strict_route=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else true} mtu=1400"
+            )
             val controller = lifecycleController ?: error("VPN lifecycle controller was not initialized")
             try {
                 val configJson = SingboxConfigBuilder.buildVpn(parsed)
