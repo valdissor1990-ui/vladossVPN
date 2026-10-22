@@ -492,7 +492,8 @@ class VpnProxyService : VpnService() {
                     if (result.success && !outboundSuccessLogged) {
                         val config = autoSwitcher.currentServer.value?.config
                         val endpoint = config?.let { "${it.address}:${it.port}" } ?: serverName
-                        logCollector.info("LIBBOX", "Outbound established: $endpoint via protect")
+                        val protectionPath = if (DiagnosticSettings.load(this@VpnProxyService).autoDetectInterface) "via protect" else "with AUTO_DETECT_INTERFACE=false"
+                        logCollector.info("LIBBOX", "Outbound established: $endpoint $protectionPath")
                         outboundSuccessLogged = true
                     }
                 }.onFailure { t ->
