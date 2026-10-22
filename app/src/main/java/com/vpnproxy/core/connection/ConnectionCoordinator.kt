@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -481,6 +483,25 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
+        val configInvalid = reason is VpnFailureReason.CoreError &&
+            (reason.message.contains("decode config", ignoreCase = true) ||
+                reason.message.contains("unknown field", ignoreCase = true) ||
+                reason.message.contains("invalid config", ignoreCase = true) ||
+                reason.message.contains("invalid configuration", ignoreCase = true))
+        if (configInvalid) {
+            val failed = activeScoredServer?.config
+            if (failed != null && failed.transport.equals("xhttp", ignoreCase = true)) {
+                val failedKeys = xhttpExtraKeys(failed.extra)
+                val before = fallbackCandidates.size
+                fallbackCandidates = fallbackCandidates.filterNot { candidate ->
+                    candidate.config.transport.equals("xhttp", ignoreCase = true) &&
+                        xhttpExtraKeys(candidate.config.extra) == failedKeys
+                }
+                if (before != fallbackCandidates.size) {
+                    logW("Removed ${before - fallbackCandidates.size} XHTTP fallback candidates with the same invalid config signature")
+                }
+            }
+        }
         if (isFatalErrorLocked || !reason.canFallbackToNextServer() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
@@ -510,6 +531,11 @@ class ConnectionCoordinator @Inject constructor(
         }
         logW("Fallback exhausted: attempts=$fallbackAttempts candidates=${fallbackCandidates.size}")
         return false
+    }
+
+    private fun xhttpExtraKeys(raw: String?): Set<String> {
+        if (raw.isNullOrBlank()) return emptySet()
+        return runCatching { Json.parseToJsonElement(raw).jsonObject.keys }.getOrDefault(emptySet())
     }
 
     private fun handleFailure(reason: VpnFailureReason, current: ConnectionState) {
