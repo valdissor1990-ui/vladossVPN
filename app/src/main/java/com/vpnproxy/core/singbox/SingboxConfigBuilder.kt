@@ -195,7 +195,15 @@ object SingboxConfigBuilder {
             "sc_min_posts_interval_ms" to "sc_min_posts_interval_ms", "host" to "host", "path" to "path",
             "mode" to "mode", "headers" to "headers"
         )
-        val included = raw.keys.filter { key -> (aliases[key] ?: key) in transport.keys }.sorted()
+        val included = raw.entries.filter { (key, value) ->
+            val normalized = aliases[key] ?: key
+            key != "type" &&
+                normalized in transport.keys &&
+                !isDefaultXhttpValue(value) &&
+                !(normalized == "host" && !config.host.isNullOrBlank()) &&
+                !(normalized == "path" && !config.path.isNullOrBlank()) &&
+                !(normalized == "mode" && !config.mode.isNullOrBlank())
+        }.map { it.key }.sorted()
         val omitted = raw.keys.filterNot { it in included }.sorted()
         return included to omitted
     }
