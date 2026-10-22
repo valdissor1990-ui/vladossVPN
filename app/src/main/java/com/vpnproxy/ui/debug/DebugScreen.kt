@@ -18,6 +18,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.logging.LogLevel
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.util.DebugFlags
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +32,9 @@ fun DebugScreen(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val lastCrash by viewModel.lastCrash.collectAsStateWithLifecycle()
     val battery by viewModel.battery.collectAsStateWithLifecycle()
+    val diagnosticOptions by viewModel.diagnosticOptions.collectAsStateWithLifecycle()
+    val libboxTail by viewModel.libboxTail.collectAsStateWithLifecycle()
+    val probeResult by viewModel.probeResult.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
     val listState = rememberLazyListState()
@@ -115,6 +121,77 @@ fun DebugScreen(
                 state = battery,
                 onLog = { viewModel.logBatteryManual() }
             )
+
+            if (BuildConfig.DEBUG && DebugFlags.diagnosticEnabled()) {
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("Настройки диагностики (следующее подключение)", style = MaterialTheme.typography.titleSmall)
+                        Text("DNS_MODE", style = MaterialTheme.typography.labelMedium)
+                        DiagnosticSettings.dnsModes.forEach { mode ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = diagnosticOptions.dnsMode == mode, onClick = {
+                                    viewModel.updateDiagnosticOptions(diagnosticOptions.copy(dnsMode = mode))
+                                })
+                                Text(mode, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text("TUN_STACK", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DiagnosticSettings.tunStacks.forEach { stack ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = diagnosticOptions.tunStack == stack, onClick = {
+                                        viewModel.updateDiagnosticOptions(diagnosticOptions.copy(tunStack = stack))
+                                    })
+                                    Text(stack)
+                                }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticOptions.strictRoute, onCheckedChange = {
+                                viewModel.updateDiagnosticOptions(diagnosticOptions.copy(strictRoute = it))
+                            })
+                            Text("STRICT_ROUTE")
+                        }
+                        Text("ROUTE_FINAL", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DiagnosticSettings.routeFinals.forEach { route ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = diagnosticOptions.routeFinal == route, onClick = {
+                                        viewModel.updateDiagnosticOptions(diagnosticOptions.copy(routeFinal = route))
+                                    })
+                                    Text(route)
+                                }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticOptions.passiveProbeEnabled, onCheckedChange = {
+                                viewModel.updateDiagnosticOptions(diagnosticOptions.copy(passiveProbeEnabled = it))
+                            })
+                            Text("PASSIVE_PROBE_ENABLED")
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticOptions.freezeAutoSwitcherAfterConnected, onCheckedChange = {
+                                viewModel.updateDiagnosticOptions(diagnosticOptions.copy(freezeAutoSwitcherAfterConnected = it))
+                            })
+                            Text("FREEZE_AUTOSWITCHER_AFTER_CONNECTED")
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { viewModel.showLastLibboxLines() }) {
+                                Text("Показать последние 100 строк libbox log")
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { viewModel.runTrafficProbeNow() }) {
+                                Text("Run traffic probe now")
+                            }
+                        }
+                        probeResult?.let { Text("Probe: $it", fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
+                        libboxTail?.let {
+                            Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 100)
+                        }
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier
