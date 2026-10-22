@@ -46,6 +46,13 @@ object SingboxConfigBuilder {
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 when (options.dnsMode) {
+                    "proxy_dot_8888" -> add(buildJsonObject {
+                        put("type", "tls")
+                        put("tag", "proxy-dot")
+                        put("server", "8.8.8.8")
+                        put("server_port", 853)
+                        put("detour", "proxy")
+                    })
                     "direct_udp_8888" -> add(buildJsonObject {
                         put("type", "udp"); put("tag", "direct-dns"); put("server", "8.8.8.8")
                     })
@@ -64,7 +71,7 @@ object SingboxConfigBuilder {
                     else -> error("Unsupported diagnostic DNS mode: ${options.dnsMode}")
                 }
             })
-            put("final", "direct-dns")
+            put("final", if (options.dnsMode == "proxy_dot_8888") "proxy-dot" else "direct-dns")
             put("strategy", "prefer_ipv4")
         })
         put("inbounds", buildJsonArray {
