@@ -25,6 +25,8 @@ import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.SingBoxCore
 import com.vpnproxy.core.singbox.SingBoxPlatform
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -39,6 +41,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -86,6 +89,7 @@ class VpnProxyService : VpnService() {
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
+    private var passiveProbeJob: Job? = null
     private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
 
@@ -112,7 +116,7 @@ class VpnProxyService : VpnService() {
 
         try {
             autoSwitcher.attachVpnService(this)
-            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager), logCollector)
             lifecycleController = VpnLifecycleController(core, logCollector)
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
@@ -167,7 +171,10 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connected -> {
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
+                        val diagnosticOptions = DiagnosticSettings.load(this@VpnProxyService)
+                        autoSwitcher.setDiagnosticFreeze(diagnosticOptions.freezeAutoSwitcherAfterConnected)
                         autoSwitcher.startMonitoring()
+                        if (diagnosticOptions.passiveProbeEnabled && com.vpnproxy.core.singbox.DebugFlags.diagnosticEnabled()) startPassiveProbe()
                         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
                             restartVpnForDesiredState(state)
                         } else {
@@ -176,10 +183,14 @@ class VpnProxyService : VpnService() {
                     }
                     is ConnectionState.Disconnecting,
                     is ConnectionState.Disconnected -> {
+                        stopPassiveProbe()
+                        autoSwitcher.clearDiagnosticFreeze()
                         stopVpnKeepAlive(state.toString())
                         scheduleIdleStop()
                     }
                     is ConnectionState.Error -> {
+                        stopPassiveProbe()
+                        autoSwitcher.clearDiagnosticFreeze()
                         stopVpnKeepAlive("Error: ${state.message}")
                         _lastError.value = state.message
                         updateNotification(state.message)
@@ -366,7 +377,15 @@ class VpnProxyService : VpnService() {
             logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
             val controller = lifecycleController ?: error("VPN lifecycle controller was not initialized")
             try {
-                val configJson = SingboxConfigBuilder.buildVpn(parsed)
+                val diagnosticOptions = DiagnosticSettings.load(this@VpnProxyService)
+                val logDir = java.io.File(filesDir, "logs").apply { mkdirs() }
+                val libboxLogFile = java.io.File(logDir, "libbox.log")
+                logCollector.info(TAG, "libbox log started")
+                logCollector.info(TAG, "libbox log path=${libboxLogFile.absolutePath}")
+                logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
+                logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
+                logCollector.info(TAG, "Route final=${diagnosticOptions.routeFinal}")
+                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, libboxLogFile.absolutePath)
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
                 runCatching {
                     val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
@@ -450,6 +469,25 @@ class VpnProxyService : VpnService() {
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
     }
 
+    private fun startPassiveProbe() {
+        if (passiveProbeJob?.isActive == true) return
+        val serverName = autoSwitcher.currentServer.value?.config?.name ?: connectionCoordinator.currentSelectedServer()?.config?.name ?: "unknown"
+        passiveProbeJob = scope.launch {
+            logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
+            while (isActive && connectionCoordinator.state.value is ConnectionState.Connected) {
+                runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
+                    .onFailure { t -> logCollector.warn(TAG, "PassiveProbe runner failed: ${t.javaClass.name}: ${t.message}") }
+                delay(5_000L)
+            }
+            logCollector.info(TAG, "PassiveProbe lifecycle stopped server=$serverName")
+        }
+    }
+
+    private fun stopPassiveProbe() {
+        passiveProbeJob?.cancel()
+        passiveProbeJob = null
+    }
+
     private fun stopVpnKeepAlive(reason: String) {
         if ((_serviceState.value == ServiceState.Stopping)) return
         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
@@ -476,7 +514,9 @@ class VpnProxyService : VpnService() {
         softRestart: Boolean = false
     ) {
         try {
+            stopPassiveProbe()
             autoSwitcher.stopMonitoring()
+            autoSwitcher.clearDiagnosticFreeze()
             trafficCollector.stop()
             lifecycleController?.stopCore()
 
