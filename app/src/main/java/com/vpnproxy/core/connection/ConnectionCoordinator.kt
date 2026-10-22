@@ -507,8 +507,13 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
+        val fallbackState = current is ConnectionState.Connecting ||
+            current is ConnectionState.Reconnecting ||
+            current is ConnectionState.Connected ||
+            current is ConnectionState.Verifying
         if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE &&
-            DebugFlags.FREEZE_AFTER_FIRST_CONNECTED && hasConnectedOnce
+            DebugFlags.FREEZE_AFTER_FIRST_CONNECTED && hasConnectedOnce &&
+            reason.canFallbackToNextServer() && fallbackCandidates.isNotEmpty() && fallbackState
         ) {
             logW("AutoSwitcher suppressed in DIAGNOSTIC_MODE: would switch to ${activeScoredServer?.config?.name ?: pendingServerName ?: "unknown"} (reason=fallback:$reason)")
             return false
