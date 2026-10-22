@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
 import com.vpnproxy.update.UpdateCheckWorker
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,6 +32,8 @@ class SettingsViewModel @Inject constructor(
         val KEY_KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val KEY_CHECK_UPDATES = booleanPreferencesKey("check_updates")
         val KEY_UPDATE_INTERVAL_HOURS = intPreferencesKey("update_interval_hours")
+        val KEY_DIAG_TUN_STACK = stringPreferencesKey("diagnostic_tun_stack")
+        val KEY_DIAG_STRICT_ROUTE = booleanPreferencesKey("diagnostic_strict_route")
     }
 
     val autoStart: StateFlow<Boolean> = context.settingsDataStore.data
@@ -47,6 +51,25 @@ class SettingsViewModel @Inject constructor(
     val updateInterval: StateFlow<Int> = context.settingsDataStore.data
         .map { it[KEY_UPDATE_INTERVAL_HOURS] ?: 6 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 6)
+
+    val diagnosticTunStack: StateFlow<String> = context.settingsDataStore.data
+        .map { it[KEY_DIAG_TUN_STACK] ?: "gvisor" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "gvisor")
+
+    val diagnosticStrictRoute: StateFlow<Boolean> = context.settingsDataStore.data
+        .map { it[KEY_DIAG_STRICT_ROUTE] ?: false }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    init {
+        viewModelScope.launch {
+            context.settingsDataStore.data.collect { prefs ->
+                if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) {
+                    DebugFlags.DIAG_TUN_STACK = prefs[KEY_DIAG_TUN_STACK] ?: "gvisor"
+                    DebugFlags.DIAG_STRICT_ROUTE = prefs[KEY_DIAG_STRICT_ROUTE] ?: false
+                }
+            }
+        }
+    }
 
     fun setAutoStart(enabled: Boolean) {
         viewModelScope.launch {
@@ -69,6 +92,21 @@ class SettingsViewModel @Inject constructor(
                 androidx.work.WorkManager.getInstance(context)
                     .cancelUniqueWork(UpdateCheckWorker.WORK_NAME)
             }
+        }
+    }
+
+    fun setDiagnosticTunStack(stack: String) {
+        if (stack !in setOf("gvisor", "system")) return
+        viewModelScope.launch {
+            context.settingsDataStore.edit { it[KEY_DIAG_TUN_STACK] = stack }
+            if (BuildConfig.DEBUG) DebugFlags.DIAG_TUN_STACK = stack
+        }
+    }
+
+    fun setDiagnosticStrictRoute(enabled: Boolean) {
+        viewModelScope.launch {
+            context.settingsDataStore.edit { it[KEY_DIAG_STRICT_ROUTE] = enabled }
+            if (BuildConfig.DEBUG) DebugFlags.DIAG_STRICT_ROUTE = enabled
         }
     }
 
