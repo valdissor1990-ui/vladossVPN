@@ -1,6 +1,8 @@
 package com.vpnproxy.core.singbox
 
 import android.content.Context
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 import android.util.Log
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
@@ -63,6 +65,7 @@ class SingBoxCore(
 
     @Volatile private var commandServer: CommandServer? = null
     @Volatile private var activeConfig: String? = null
+    @Volatile private var lastCoreStopAtMs: Long = 0L
 
     private val handler = object : CommandServerHandler {
         override fun serviceStop() {
@@ -96,7 +99,24 @@ class SingBoxCore(
     @Synchronized
     fun start(configJson: String) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
-        stopInternal()
+        // A previous native service must be fully closed before the next service is created.
+        if (commandServer != null || activeConfig != null) stopInternal()
+        val cooldownMs = if (BuildConfig.DEBUG) DebugFlags.CORE_RESTART_COOLDOWN_MS else 0L
+        val stoppedAt = lastCoreStopAtMs
+        if (cooldownMs > 0L && stoppedAt > 0L) {
+            val sinceStop = System.currentTimeMillis() - stoppedAt
+            val remaining = (cooldownMs - sinceStop).coerceAtLeast(0L)
+            if (remaining > 0L) {
+                Log.i(TAG, "Core start cooldown ms=$remaining")
+                try {
+                    Thread.sleep(remaining)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IllegalStateException("Interrupted during core restart cooldown", interrupted)
+                }
+            }
+        }
+        Log.i(TAG, "Core start requested")
         var server: CommandServer? = null
         try {
             Log.i(TAG, "Initializing libbox 1.14.3")
@@ -119,8 +139,10 @@ class SingBoxCore(
             }
             commandServer = createdServer
             activeConfig = configJson
+            Log.i(TAG, "Core started successfully")
             Log.i(TAG, "libbox 1.14.3 started in the app process")
         } catch (t: Throwable) {
+            Log.e(TAG, "Core start failed: ${t.message}", t)
             Log.e(TAG, "Failed to initialize/start libbox", t)
             server?.let { created ->
                 runCatching { created.closeService() }
@@ -141,7 +163,9 @@ class SingBoxCore(
 
     @Synchronized
     private fun stopInternal() {
+        Log.i(TAG, "Core stop requested")
         val server = commandServer
+        val hadCore = server != null || activeConfig != null
         commandServer = null
         activeConfig = null
         if (server != null) {
@@ -150,6 +174,9 @@ class SingBoxCore(
             runCatching { server.close() }
                 .onFailure { Log.w(TAG, "CommandServer.close failed", it) }
         }
-        platform.closeTun()
+        runCatching { platform.closeTun() }
+            .onFailure { Log.w(TAG, "closeTun failed", it) }
+        if (hadCore) lastCoreStopAtMs = System.currentTimeMillis()
+        Log.i(TAG, "Core stopped")
     }
 }
