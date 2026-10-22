@@ -3,7 +3,10 @@ package com.vpnproxy.core.singbox
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -37,10 +40,11 @@ object SingboxConfigBuilder {
             put("level", "debug")
             put("timestamp", true)
         })
-        // DIAG: direct UDP DNS without detour (DoT via proxy may fail if server blocks 853)
+        // DIAG: UDP DNS without detour (type required in sing-box 1.14+)
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
+                    put("type", "udp")
                     put("tag", "direct-dns")
                     put("server", "8.8.8.8")
                 })
@@ -205,6 +209,7 @@ object SingboxConfigBuilder {
                     )
                     extraObject?.forEach { (key, value) ->
                         if (key == "type") return@forEach
+                        if (value is JsonNull) return@forEach
                         val singBoxKey = when (key) {
                             "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
                             "session_id_placement" -> "session_placement"
@@ -223,6 +228,8 @@ object SingboxConfigBuilder {
                                 "${match.groupValues[1]}_${match.groupValues[2]}"
                             }.lowercase()
                         }
+                        if (value is JsonPrimitive && value.isString && value.content.isBlank()) return@forEach
+                        if (value is JsonPrimitive && value.booleanOrNull == false) return@forEach
                         if (singBoxKey in allowedKeys) {
                             put(singBoxKey, value)
                         }
