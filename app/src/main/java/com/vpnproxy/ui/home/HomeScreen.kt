@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.ui.components.ConnectionStatsCard
 import com.vpnproxy.ui.components.GlowPowerButton
 import com.vpnproxy.ui.servers.ServerListContent
@@ -40,6 +41,7 @@ fun HomeScreen(
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
+    showDebug: Boolean = BuildConfig.DEBUG,
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -76,8 +78,10 @@ fun HomeScreen(
                     IconButton(onClick = onNavigateToSubscriptions) {
                         Icon(Icons.Default.Cloud, "Subscriptions")
                     }
-                    IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, "Debug")
+                    if (showDebug) {
+                        IconButton(onClick = onNavigateToDebug) {
+                            Icon(Icons.Default.BugReport, "Debug")
+                        }
                     }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, "Settings")
