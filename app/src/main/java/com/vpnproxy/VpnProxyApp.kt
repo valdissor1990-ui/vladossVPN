@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.vpnproxy.core.scanner.ServerScanner
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
@@ -40,6 +42,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var batteryMonitor: BatteryMonitor
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     @Inject lateinit var serverScanner: ServerScanner
+    @Inject lateinit var connectionCoordinator: ConnectionCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -71,18 +74,25 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
         // Try a fresh subscription immediately on every process start; repository keeps the cache on failure.
         applicationScope.launch {
-            try {
-                val count = subscriptionRepository.refreshAll()
-                val providerConfigCount = subscriptionRepository.getAllConfigs().size
-                logCollector.info(
-                    "VpnProxyApp",
-                    "Startup subscription refresh finished: uniqueConfigs=$count providerConfigs=$providerConfigCount"
-                )
-                if (count == 0) {
-                    logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
+            val state = connectionCoordinator.state.value
+            val vpnActive = state is ConnectionState.Connecting || state is ConnectionState.Verifying ||
+                state is ConnectionState.Connected || state is ConnectionState.Reconnecting
+            if (vpnActive) {
+                logCollector.info("VpnProxyApp", "Startup auto-refresh skipped while VPN active: state=$state")
+            } else {
+                try {
+                    val count = subscriptionRepository.refreshAll()
+                    val providerConfigCount = subscriptionRepository.getAllConfigs().size
+                    logCollector.info(
+                        "VpnProxyApp",
+                        "Startup subscription refresh finished: uniqueConfigs=$count providerConfigs=$providerConfigCount"
+                    )
+                    if (count == 0) {
+                        logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
+                    }
+                } catch (t: Throwable) {
+                    logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
                 }
-            } catch (t: Throwable) {
-                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
             }
 
             // Scan the repository's current snapshot even if the network refresh failed;
