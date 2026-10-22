@@ -31,17 +31,16 @@ object SingboxConfigBuilder {
     /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildVpn(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject { put("level", "warn") })
+        // Diagnostic DNS profile: direct UDP, no proxy detour or legacy server schema.
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("type", "tls")
-                    put("tag", "remote-dns")
-                    put("server", "1.1.1.1")
-                    put("server_port", 853)
-                    put("detour", "proxy")
+                    put("type", "udp")
+                    put("tag", "direct-dns")
+                    put("server", "8.8.8.8")
                 })
             })
-            put("final", "remote-dns")
+            put("final", "direct-dns")
             put("strategy", "prefer_ipv4")
         })
         put("inbounds", buildJsonArray {
@@ -55,8 +54,9 @@ object SingboxConfigBuilder {
                 })
                 put("mtu", 1400)
                 put("auto_route", true)
-                put("strict_route", true)
-                put("stack", "system")
+                // Temporary diagnostic profile only; restore release TUN values after testing.
+                put("strict_route", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DEBUG_STRICT_ROUTE_FALSE) false else true)
+                put("stack", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DEBUG_TUN_STACK_GVISOR) "gvisor" else "system")
             })
             add(buildJsonObject {
                 put("type", "mixed")
