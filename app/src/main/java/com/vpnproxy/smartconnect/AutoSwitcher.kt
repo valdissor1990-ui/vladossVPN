@@ -478,6 +478,10 @@ class AutoSwitcher @Inject constructor(
 
                 val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < AutoSwitcherConfig.ruFastServerRttMs }
                 val current = _currentServer.value
+                if (bestRussian != null &&
+                    (current == null || !sameConfig(current.config, bestRussian.config)) &&
+                    suppressSwitchIfFrozen(bestRussian.config.name, "background ranking: fast RU server found")
+                ) return@launch
                 if (bestRussian != null && current != null && sameConfig(current.config, bestRussian.config)) {
                     _currentServer.value = bestRussian
                     baselineRtt = bestRussian.latencyMs
@@ -485,9 +489,6 @@ class AutoSwitcher @Inject constructor(
                     (current == null || !sameConfig(current.config, bestRussian.config)) &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
                 ) {
-                    if (suppressSwitchIfFrozen(bestRussian.config.name, "background ranking: fast RU server found")) {
-                        return@launch
-                    }
                     if (isInPostConnectWarmup()) {
                         logCollector.info(
                             TAG,
