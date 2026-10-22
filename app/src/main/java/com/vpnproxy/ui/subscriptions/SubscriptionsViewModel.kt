@@ -70,7 +70,7 @@ class SubscriptionsViewModel @Inject constructor(
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                repository.refreshAll()
+                repository.refreshAll(force = true)
                 val scanResults = serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
                 val reachableCount = scanResults.count { it.successRate > 0.5f }
                 _message.value = "Найдено $reachableCount уникальных серверов"
