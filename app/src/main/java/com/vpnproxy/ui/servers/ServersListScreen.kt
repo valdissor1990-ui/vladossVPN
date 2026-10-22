@@ -232,7 +232,9 @@ fun ServerListContent(
                 "XHTTP empty" -> xhttpEmptyExtra
                 "RAW/Reality" -> rawTransport && config.security.equals("reality", ignoreCase = true)
                 "gRPC/Reality" -> transport == "grpc" && config.security.equals("reality", ignoreCase = true)
-                "Другое" -> !xhttp && !rawTransport && transport != "grpc" &&
+                "Другое" -> !xhttp &&
+                    !(rawTransport && config.security.equals("reality", ignoreCase = true)) &&
+                    !(transport == "grpc" && config.security.equals("reality", ignoreCase = true)) &&
                     transport !in setOf("hysteria2", "hy2", "tuic")
                 else -> config.providerTag.equals(selectedFilter, ignoreCase = true)
             }
