@@ -20,8 +20,8 @@ import javax.inject.Singleton
  * HttpURLConnection would bypass the tunnel and test the underlying network instead. Connect
  * explicitly to Sing-box's local mixed inbound; it routes the request through the selected proxy.
  *
- * Uses SOCKS (not HTTP proxy) so the probe target hostname can be resolved on the proxy side
- * (socks5h-style), avoiding local DNS split-horizon against sing-box DoT.
+ * Uses HTTP CONNECT via the local mixed inbound so HTTPS SNI is sent correctly
+ * (Android HttpURLConnection + SOCKS often breaks TLS handshake/SNI).
  */
 @Singleton
 class TrafficValidator @Inject constructor(
@@ -55,9 +55,9 @@ class TrafficValidator @Inject constructor(
         val startedAtNs = System.nanoTime()
         var connection: HttpURLConnection? = null
         try {
-            // SOCKS (mixed inbound accepts SOCKS) — prefer remote DNS over local resolve.
+            // HTTP CONNECT — SNI works with HttpURLConnection; mixed inbound supports it.
             val localProxy = Proxy(
-                Proxy.Type.SOCKS,
+                Proxy.Type.HTTP,
                 InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
             )
             connection = (URL(PROBE_URL).openConnection(localProxy) as HttpURLConnection).apply {
@@ -76,7 +76,7 @@ class TrafficValidator @Inject constructor(
                 "Traffic probe completed",
                 mapOf(
                     "server" to (serverName ?: "unknown"),
-                    "proxy" to "socks5://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
+                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
                     "status" to status,
                     "elapsedMs" to elapsedMs,
                     "success" to success
@@ -90,7 +90,7 @@ class TrafficValidator @Inject constructor(
                 "Traffic probe failed",
                 mapOf(
                     "server" to (serverName ?: "unknown"),
-                    "proxy" to "socks5://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
+                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
                     "elapsedMs" to elapsedMs,
                     "exception" to e.javaClass.simpleName,
                     "message" to (e.message ?: "")
