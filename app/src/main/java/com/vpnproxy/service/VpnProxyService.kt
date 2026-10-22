@@ -18,6 +18,7 @@ import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.SingBoxCore
+import com.vpnproxy.core.singbox.DebugRuntimeOptions
 import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -242,7 +243,13 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
                 val core = singBoxCore ?: error("Sing-box core was not initialized")
                 try {
-                    val configJson = SingboxConfigBuilder.buildVpn(parsed)
+                    val runtimeOptions = DebugRuntimeOptions.load(this)
+                    val logDir = java.io.File(filesDir, "logs").apply { mkdirs() }
+                    val libboxLogFile = java.io.File(logDir, "libbox.log")
+                    logCollector.info(TAG, "DNS mode=${runtimeOptions.dnsMode} hijack=${if (runtimeOptions.dnsMode == "system_no_hijack") "off" else "on"}")
+                    logCollector.info(TAG, "TUN stack=${runtimeOptions.tunStack} strict_route=${runtimeOptions.strictRoute} mtu=1400")
+                    logCollector.info(TAG, "Route final=${runtimeOptions.routeFinal}")
+                    val configJson = SingboxConfigBuilder.buildVpn(parsed, runtimeOptions, libboxLogFile.absolutePath)
                     Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
                     core.start(configJson)
                 } catch (t: Throwable) {
