@@ -105,12 +105,27 @@ class SingBoxPlatform(
             while (includeIterator.hasNext()) includes += includeIterator.next()
             val excludeIterator = options.excludePackage
             while (excludeIterator.hasNext()) excludes += excludeIterator.next()
+            val diagnosticOptions = DiagnosticSettings.load(context)
+            val disallowSelf = diagnosticOptions.useDisallowSelfPackage
+            Log.i(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=" + disallowSelf)
+            Log.i(TAG, "DIAG AUTO_DETECT_INTERFACE=" + diagnosticOptions.autoDetectInterface)
+            Log.i(TAG, "DIAG TUN_STACK=" + diagnosticOptions.tunStack)
+            Log.i(TAG, "DIAG DNS_MODE=" + diagnosticOptions.dnsMode)
+            Log.i(TAG, "DIAG protect_enabled=true")
+            Log.i(TAG, "DIAG disallow_self=" + disallowSelf)
+
             if (splitTunnelManager != null) {
-                runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes) }
+                runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes, disallowSelf) }
             } else if (includes.isNotEmpty()) {
                 includes.filterNot { it in excludes || it == context.packageName }.forEach { builder.addAllowedApplication(it) }
             } else {
-                (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
+                val disallowed = excludes + if (disallowSelf) setOf(context.packageName) else emptySet()
+                disallowed.forEach { packageName ->
+                    try { builder.addDisallowedApplication(packageName) }
+                    catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                        Log.w(TAG, "Unknown excluded package: " + packageName, e)
+                    }
+                }
             }
 
             Log.d(TAG, "Attempting to create TUN interface...")
