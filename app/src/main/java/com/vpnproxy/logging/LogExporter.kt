@@ -48,6 +48,7 @@ class LogExporter @Inject constructor(
                     }
                     String(tail, Charsets.UTF_8).lineSequence()
                         .filter { it.isNotBlank() }
+                        .toList()
                         .takeLast(5000)
                         .joinToString("\n") { "[LIBBOX] $it" }
                 }.getOrElse { "[LIBBOX] Failed to read native log: ${it.javaClass.simpleName}: ${it.message}" }
