@@ -384,7 +384,7 @@ class ConnectionCoordinator @Inject constructor(
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
                 scope.launch {
-                    val passed = trafficValidator.checkTraffic()
+                    val passed = trafficValidator.checkTraffic(event.serverName)
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
                 }
             }
