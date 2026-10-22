@@ -210,7 +210,7 @@ fun ServerListContent(
                 .filter { it.isNotBlank() }
                 .distinct()
                 .sorted()
-                .filterNot { it in setOf("Все", "VLESS", "HY2", "TUIC") }
+                .filterNot { it in setOf("Все", "VLESS", "HY2", "TUIC", "XHTTP extra", "XHTTP empty", "RAW/Reality", "gRPC/Reality", "Другое") }
     }
 
     val filtered = remember(servers, query, selectedFilter) {
@@ -220,7 +220,7 @@ fun ServerListContent(
             val extraObject = config.extra?.takeIf { it.isNotBlank() }
                 ?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
             val xhttp = transport == "xhttp"
-            val xhttpHasExtra = xhttp && extraObject != null && extraObject.isNotEmpty()
+            val xhttpHasExtra = xhttp && !config.extra.isNullOrBlank() && extraObject?.isEmpty() != true
             val xhttpEmptyExtra = xhttp && (config.extra.isNullOrBlank() || extraObject?.isEmpty() == true)
             val rawTransport = transport in setOf("", "tcp", "raw", "none", "vless")
             val matchesFilter = when (selectedFilter) {
