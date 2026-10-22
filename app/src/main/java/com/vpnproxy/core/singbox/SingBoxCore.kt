@@ -103,17 +103,15 @@ class SingBoxCore(
         if (commandServer != null || activeConfig != null) stopInternal()
         val cooldownMs = if (BuildConfig.DEBUG) DebugFlags.CORE_RESTART_COOLDOWN_MS else 0L
         val stoppedAt = lastCoreStopAtMs
-        if (cooldownMs > 0L && stoppedAt > 0L) {
-            val sinceStop = System.currentTimeMillis() - stoppedAt
-            val remaining = (cooldownMs - sinceStop).coerceAtLeast(0L)
-            if (remaining > 0L) {
-                Log.i(TAG, "Core start cooldown ms=$remaining")
-                try {
-                    Thread.sleep(remaining)
-                } catch (interrupted: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw IllegalStateException("Interrupted during core restart cooldown", interrupted)
-                }
+        val sinceStop = if (stoppedAt > 0L) System.currentTimeMillis() - stoppedAt else Long.MAX_VALUE
+        val remaining = if (stoppedAt > 0L) (cooldownMs - sinceStop).coerceAtLeast(0L) else 0L
+        Log.i(TAG, "Core start cooldown ms=$remaining")
+        if (remaining > 0L) {
+            try {
+                Thread.sleep(remaining)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("Interrupted during core restart cooldown", interrupted)
             }
         }
         Log.i(TAG, "Core start requested")
