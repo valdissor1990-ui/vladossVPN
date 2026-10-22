@@ -627,7 +627,9 @@ class VpnProxyService : VpnService() {
         val server = autoSwitcher.currentServer.value
         if (server != null) {
             connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-            connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+            connectionCoordinator.send(
+                ConnectionEvent.ServerSelected(server, connectionCoordinator.activeTraceId)
+            )
         } else {
             connectionCoordinator.send(ConnectionEvent.NetworkChanged)
         }
