@@ -525,18 +525,22 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
+        // Reject a known-failed exact profile before changing the active connection trace.
+        if (!autoSwitcher.forceSelect(server)) {
+            logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name} (blacklisted or switch in progress)")
+            return
+        }
         manuallySelectedServer = server
+
+        // A manual choice supersedes any in-flight automatic ranking. Do not cancel the
+        // selection coroutine here: if it is refreshing subscriptions, let that fetch finish;
+        // its traceId checks prevent it from publishing a stale server afterwards.
+        val traceId = TraceId.newId()
+        activeTraceId = traceId
+        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
+
         viewModelScope.launch {
             try {
-                // Explicit server selection is a manual action and may release the fatal lock.
-                if (connectionCoordinator.isFatalErrorLocked) {
-                    val traceId = TraceId.newId()
-                    activeTraceId = traceId
-                    connectionCoordinator.send(
-                        ConnectionEvent.ConnectRequested(traceId, userInitiated = true)
-                    )
-                }
-                autoSwitcher.forceSelect(server)
                 lastServerStore.save(
                     address = server.config.address,
                     port = server.config.port,
@@ -548,7 +552,7 @@ class HomeViewModel @Inject constructor(
                     currentRtt = server.latencyMs
                 )
                 connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(server))
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
                 if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
                     connectionCoordinator.state.value is ConnectionState.Error
                 ) {
