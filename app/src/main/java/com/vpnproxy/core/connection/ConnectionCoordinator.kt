@@ -1,6 +1,8 @@
 package com.vpnproxy.core.connection
 
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.smartconnect.ScoringEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -392,6 +394,11 @@ class ConnectionCoordinator @Inject constructor(
                 retryCount = 0
                 pendingServerName = event.serverName
                 hasServerSelected = true
+                if (BuildConfig.DEBUG && DebugFlags.SKIP_TRAFFIC_VALIDATION) {
+                    logW("Debug diagnostic mode: skipping connection-blocking traffic validation")
+                    setState(ConnectionState.Connected(event.serverName), reason = "DebugSkipTrafficValidation")
+                    return
+                }
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
                 scope.launch {
                     // The core-ready callback can precede the local mixed inbound being
@@ -410,6 +417,13 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.TrafficValidationResult -> {
+                if (BuildConfig.DEBUG && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK) {
+                    logW("Debug diagnostic mode: ignoring traffic validation result; no fallback or server blacklist")
+                    if (_state.value is ConnectionState.Verifying && pendingServerName == event.serverName) {
+                        setState(ConnectionState.Connected(event.serverName), reason = "DebugIgnoreTrafficValidation")
+                    }
+                    return
+                }
                 if (_state.value !is ConnectionState.Verifying || pendingServerName != event.serverName) {
                     logD("Ignoring stale traffic validation result for ${event.serverName}")
                     return
