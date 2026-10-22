@@ -149,6 +149,17 @@ object SingboxConfigBuilder {
         return false
     }
 
+    /** Safe diagnostic JSON: credential-bearing fields are recursively redacted. */
+    fun maskedOutboundForDiagnostics(config: ParsedConfig): JsonObject {
+        val secrets = setOf("uuid", "password", "private_key", "token", "short_id")
+        fun mask(element: kotlinx.serialization.json.JsonElement): kotlinx.serialization.json.JsonElement = when (element) {
+            is JsonObject -> JsonObject(element.filterKeys { it !in secrets }.mapValues { (_, value) -> mask(value) })
+            is JsonArray -> JsonArray(element.map(::mask))
+            else -> element
+        }
+        return mask(buildOutbound(config)) as JsonObject
+    }
+
     /**
      * Diagnostic-only view of which provider XHTTP extra keys survive the existing allowlist.
      * This does not alter the allowlist or generated outbound.
