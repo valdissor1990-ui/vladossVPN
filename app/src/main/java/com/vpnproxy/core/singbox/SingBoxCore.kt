@@ -69,6 +69,7 @@ class SingBoxCore(
     @Volatile private var activeConfig: String? = null
 
     private val firstOutboundLogged = AtomicBoolean(false)
+    @Volatile private var pendingOutboundTarget: String? = null
 
     private val handler = object : CommandServerHandler {
         override fun serviceStop() {
@@ -96,12 +97,18 @@ class SingBoxCore(
             if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
                 logCollector?.error("LIBBOX", "[LIBBOX] exact handshake failure: $line")
             }
-            if (line.contains("outbound connection to ", ignoreCase = true) &&
-                line.contains("established", ignoreCase = true) &&
+            if (line.contains("outbound connection to ", ignoreCase = true)) {
+                pendingOutboundTarget = Regex("outbound connection to ([^\\s]+)", RegexOption.IGNORE_CASE)
+                    .find(line)?.groupValues?.getOrNull(1)
+            }
+            val outboundSucceeded = line.contains("connection upload finished", ignoreCase = true) ||
+                line.contains("connection download finished", ignoreCase = true) ||
+                line.contains("connection upload complete", ignoreCase = true) ||
+                line.contains("connection download complete", ignoreCase = true)
+            if (outboundSucceeded && !line.contains("no available network interface", ignoreCase = true) &&
                 firstOutboundLogged.compareAndSet(false, true)
             ) {
-                val endpoint = Regex("outbound connection to ([^\\s]+)", RegexOption.IGNORE_CASE)
-                    .find(line)?.groupValues?.getOrNull(1) ?: "unknown"
+                val endpoint = pendingOutboundTarget ?: "unknown"
                 logCollector?.info("LIBBOX", "Outbound established: $endpoint via protect")
             }
             Log.d(TAG, line)
@@ -116,6 +123,8 @@ class SingBoxCore(
     fun start(configJson: String) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
         stopInternal()
+        firstOutboundLogged.set(false)
+        pendingOutboundTarget = null
         var server: CommandServer? = null
         try {
             Log.i(TAG, "Initializing libbox 1.14.3")
