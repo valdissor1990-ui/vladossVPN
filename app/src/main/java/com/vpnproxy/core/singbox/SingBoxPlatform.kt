@@ -11,6 +11,8 @@ import android.util.Log
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
 import java.net.InetAddress
@@ -66,35 +68,64 @@ class SingBoxPlatform(
                 builder.addAddress(address.address(), address.prefix())
             }
 
+            val appliedDns = mutableListOf<String>()
+            val appliedRoutes = mutableListOf<String>()
+            val excludedRoutes = mutableListOf<String>()
             if (options.autoRoute) {
                 if (options.dnsMode.value != Libbox.DNSModeDisabled) {
                     val dns = options.dnsServerAddress
-                    while (dns.hasNext()) builder.addDnsServer(dns.next())
+                    while (dns.hasNext()) {
+                        val dnsAddress = dns.next()
+                        builder.addDnsServer(dnsAddress)
+                        appliedDns += dnsAddress
+                    }
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     val routes4 = options.inet4RouteAddress
-                    if (routes4.hasNext()) while (routes4.hasNext()) builder.addRoute(routes4.next().toIpPrefix())
-                    else if (options.inet4Address.hasNext()) builder.addRoute("0.0.0.0", 0)
+                    if (routes4.hasNext()) while (routes4.hasNext()) {
+                        val route = routes4.next().toIpPrefix()
+                        builder.addRoute(route)
+                        appliedRoutes += route.toString()
+                    } else if (options.inet4Address.hasNext()) {
+                        builder.addRoute("0.0.0.0", 0)
+                        appliedRoutes += "0.0.0.0/0"
+                    }
 
                     val routes6 = options.inet6RouteAddress
-                    if (routes6.hasNext()) while (routes6.hasNext()) builder.addRoute(routes6.next().toIpPrefix())
-                    else if (options.inet6Address.hasNext()) builder.addRoute("::", 0)
+                    if (routes6.hasNext()) while (routes6.hasNext()) {
+                        val route = routes6.next().toIpPrefix()
+                        builder.addRoute(route)
+                        appliedRoutes += route.toString()
+                    } else if (options.inet6Address.hasNext()) {
+                        builder.addRoute("::", 0)
+                        appliedRoutes += "::/0"
+                    }
 
                     val excludes4 = options.inet4RouteExcludeAddress
-                    while (excludes4.hasNext()) builder.excludeRoute(excludes4.next().toIpPrefix())
+                    while (excludes4.hasNext()) {
+                        val route = excludes4.next().toIpPrefix()
+                        builder.excludeRoute(route)
+                        excludedRoutes += route.toString()
+                    }
                     val excludes6 = options.inet6RouteExcludeAddress
-                    while (excludes6.hasNext()) builder.excludeRoute(excludes6.next().toIpPrefix())
+                    while (excludes6.hasNext()) {
+                        val route = excludes6.next().toIpPrefix()
+                        builder.excludeRoute(route)
+                        excludedRoutes += route.toString()
+                    }
                 } else {
                     val routes4 = options.inet4RouteRange
                     while (routes4.hasNext()) {
                         val address = routes4.next()
                         builder.addRoute(address.address(), address.prefix())
+                        appliedRoutes += "${address.address()}/${address.prefix()}"
                     }
                     val routes6 = options.inet6RouteRange
                     while (routes6.hasNext()) {
                         val address = routes6.next()
                         builder.addRoute(address.address(), address.prefix())
+                        appliedRoutes += "${address.address()}/${address.prefix()}"
                     }
                 }
             }
@@ -113,6 +144,14 @@ class SingBoxPlatform(
                 (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
             }
 
+            Log.i(TAG, "TUN routes: $appliedRoutes")
+            Log.i(TAG, "TUN dns: $appliedDns")
+            Log.i(TAG, "TUN excluded routes: $excludedRoutes")
+            Log.i(
+                TAG,
+                "TUN stack=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else if (BuildConfig.DEBUG && DebugFlags.DEBUG_TUN_STACK_GVISOR) "gvisor" else "system"} " +
+                    "strict_route=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else if (BuildConfig.DEBUG && DebugFlags.DEBUG_STRICT_ROUTE_FALSE) false else true} mtu=1400 auto_route=${options.autoRoute}"
+            )
             Log.d(TAG, "Attempting to create TUN interface...")
             val pfd = try {
                 builder.establish()
