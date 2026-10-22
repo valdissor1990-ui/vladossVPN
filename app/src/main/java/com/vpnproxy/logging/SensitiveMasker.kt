@@ -44,10 +44,14 @@ object SensitiveMasker {
         return try {
             var result = input
 
-            // 1. UUID
-            result = UUID_REGEX.replace(result, "***-UUID-***")
+            // 1. UUID — не трогаем traceId=... (корреляционный ID, не секрет)
+            result = UUID_REGEX.replace(result) { m ->
+                val start = m.range.first
+                val prefix = result.substring(maxOf(0, start - 12), start)
+                if (prefix.contains("traceId", ignoreCase = true)) m.value else "***-UUID-***"
+            }
 
-            // 2. Реальные URL подписок — оставляем только схему+host
+            // 2. URL подписок — оставляем схему+host; не маскируем localhost / 127.0.0.1 (proxy=...)
             result = URL_REGEX.replace(result) { m ->
                 val url = m.value
                 val schemeEnd = url.indexOf("://") + 3
@@ -55,7 +59,12 @@ object SensitiveMasker {
                     val afterScheme = url.substring(schemeEnd)
                     val hostEnd = afterScheme.indexOfFirst { it == '/' || it == '?' || it == '#' }
                     val host = if (hostEnd > 0) afterScheme.substring(0, hostEnd) else afterScheme
-                    "${url.substring(0, schemeEnd)}$host/***"
+                    val hostOnly = host.substringBefore(':')
+                    if (hostOnly == "127.0.0.1" || hostOnly.equals("localhost", ignoreCase = true)) {
+                        url
+                    } else {
+                        "${url.substring(0, schemeEnd)}$host/***"
+                    }
                 } else "***URL***"
             }
 
