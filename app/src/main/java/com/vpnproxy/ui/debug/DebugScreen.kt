@@ -37,6 +37,7 @@ fun DebugScreen(
     val probeResult by viewModel.probeResult.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
+    var showDiagnosticControls by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -123,6 +124,10 @@ fun DebugScreen(
             )
 
             if (BuildConfig.DEBUG && DebugFlags.diagnosticEnabled()) {
+                OutlinedButton(onClick = { showDiagnosticControls = !showDiagnosticControls }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Text(if (showDiagnosticControls) "Скрыть настройки диагностики" else "Настройки диагностики")
+                }
+                if (showDiagnosticControls) {
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
                     Column(modifier = Modifier.padding(10.dp)) {
                         Text("Настройки диагностики (следующее подключение)", style = MaterialTheme.typography.titleSmall)
@@ -190,6 +195,7 @@ fun DebugScreen(
                             Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 100)
                         }
                     }
+                }
                 }
             }
 
