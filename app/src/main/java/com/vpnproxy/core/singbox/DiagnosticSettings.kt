@@ -1,12 +1,8 @@
 package com.vpnproxy.core.singbox
 
 import android.content.Context
-import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 
-object DebugFlags {
-    const val DIAGNOSTIC_MODE: Boolean = true
-    fun diagnosticEnabled(): Boolean = BuildConfig.DEBUG && DIAGNOSTIC_MODE
-}
 
 data class DiagnosticOptions(
     val dnsMode: String = "direct_udp_8888",
