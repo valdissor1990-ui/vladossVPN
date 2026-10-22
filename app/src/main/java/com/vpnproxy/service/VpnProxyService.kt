@@ -380,7 +380,6 @@ class VpnProxyService : VpnService() {
                 val diagnosticOptions = DiagnosticSettings.load(this@VpnProxyService)
                 val logDir = java.io.File(filesDir, "logs").apply { mkdirs() }
                 val libboxLogFile = java.io.File(logDir, "libbox.log")
-                logCollector.info(TAG, "libbox log started")
                 logCollector.info(TAG, "libbox log path=${libboxLogFile.absolutePath}")
                 logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
@@ -392,6 +391,8 @@ class VpnProxyService : VpnService() {
                     logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
                 }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
                 controller.startCore(configJson)
+                if (libboxLogFile.isFile) logCollector.info(TAG, "libbox log started")
+                else logCollector.warn(TAG, "libbox log unavailable: output file not created after core start")
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)
                 throw e
