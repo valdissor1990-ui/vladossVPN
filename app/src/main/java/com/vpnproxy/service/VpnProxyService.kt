@@ -177,7 +177,11 @@ class VpnProxyService : VpnService() {
                         startPassiveTrafficProbe(state.serverName)
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
-                        autoSwitcher.startMonitoring()
+                        if (BuildConfig.DEBUG && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK) {
+                            logCollector.info(TAG, "Debug diagnostic mode: AutoSwitcher health-triggered switching disabled; passive probe remains enabled")
+                        } else {
+                            autoSwitcher.startMonitoring()
+                        }
                         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
                             restartVpnForDesiredState(state)
                         } else {
