@@ -9,8 +9,8 @@ import javax.inject.Singleton
 
 /**
  * Applies per-app VPN policy before VpnService.Builder.establish().
- * The VPN app is always removed from the user selection to avoid routing
- * the app's own control-plane traffic into its tunnel.
+ * The VPN app is removed from user-selected packages. Diagnostic mode can optionally
+ * add it to Android's disallowed-application list for comparison testing.
  */
 @Singleton
 class SplitTunnelManager @Inject constructor(
@@ -24,7 +24,8 @@ class SplitTunnelManager @Inject constructor(
         builder: VpnService.Builder,
         context: Context,
         optionIncludes: Set<String> = emptySet(),
-        optionExcludes: Set<String> = emptySet()
+        optionExcludes: Set<String> = emptySet(),
+        disallowSelfPackage: Boolean = false
     ) {
         val stored = store.readRules()
         val selected = (stored.selectedPackages - context.packageName)
@@ -42,7 +43,7 @@ class SplitTunnelManager @Inject constructor(
         }
 
         val includes = (selected + optionIncludes) - optionExcludes - context.packageName
-        val excludes = selected + optionExcludes + context.packageName
+        val excludes = selected + optionExcludes + if (disallowSelfPackage) setOf(context.packageName) else emptySet()
         when (stored.mode) {
             SplitTunnelMode.ALL_APPS -> {
                 if (optionIncludes.isNotEmpty()) {
@@ -66,7 +67,7 @@ class SplitTunnelManager @Inject constructor(
                 addAllowed(builder, includes)
             }
         }
-        Log.i(TAG, "Applied split-tunnel mode=${stored.mode}, selected=${selected.size}, tunIncludes=${optionIncludes.size}, tunExcludes=${optionExcludes.size}")
+        Log.i(TAG, "Applied split-tunnel mode=${stored.mode}, selected=${selected.size}, tunIncludes=${optionIncludes.size}, tunExcludes=${optionExcludes.size}, disallowSelfPackage=$disallowSelfPackage")
     }
 
     private fun addAllowed(builder: VpnService.Builder, packages: Set<String>) {
