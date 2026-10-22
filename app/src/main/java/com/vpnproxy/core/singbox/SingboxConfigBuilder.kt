@@ -39,7 +39,7 @@ object SingboxConfigBuilder {
     /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildVpn(config: ParsedConfig, options: DiagnosticOptions = DiagnosticOptions(), logFilePath: String? = null): String = buildJsonObject {
         put("log", buildJsonObject {
-            put("level", if (logFilePath.isNullOrBlank()) "debug" else "debug")
+            put("level", if (logFilePath.isNullOrBlank()) "warn" else "debug")
             put("timestamp", true)
             if (!logFilePath.isNullOrBlank()) put("output", logFilePath)
         })
