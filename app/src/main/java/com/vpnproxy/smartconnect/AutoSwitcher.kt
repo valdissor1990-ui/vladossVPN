@@ -88,8 +88,9 @@ class AutoSwitcher @Inject constructor(
         return nowMs - connectedAtMs < AutoSwitcherConfig.postConnectWarmupMs
     }
 
-    private fun serverKey(config: ParsedConfig): String =
-        "${config.address.lowercase()}:${config.port}:${config.uuid.lowercase()}"
+    // Blacklist the exact profile, not every variant sharing endpoint/UUID.
+    // XHTTP variants can differ in session placement, mode, path, TLS fingerprint, etc.
+    private fun serverKey(config: ParsedConfig): String = config.connectionKey()
 
     private fun pruneBlacklist(nowMs: Long = System.currentTimeMillis()) {
         serverBlacklist.entries.removeIf { it.value <= nowMs }
@@ -408,6 +409,7 @@ class AutoSwitcher @Inject constructor(
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
         val allowed = filterUsableServers(configs)
+        val rankingTraceId = connectionCoordinator.activeTraceId
         if (allowed.isEmpty()) {
             logCollector.warn(TAG, "All candidate servers are blacklisted; background ranking skipped")
             return
@@ -420,6 +422,10 @@ class AutoSwitcher @Inject constructor(
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
                     .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+                if (connectionCoordinator.activeTraceId != rankingTraceId) {
+                    logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
+                    return@launch
+                }
                 if (ranked.isEmpty()) {
                     val currentName = _currentServer.value?.config?.name ?: "unknown"
                     logCollector.warn(
@@ -451,7 +457,7 @@ class AutoSwitcher @Inject constructor(
                         consecutiveErrors = 0
                         _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
                         connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian))
+                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian, rankingTraceId))
                         logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
                     }
                 }
@@ -486,11 +492,20 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun forceSelect(server: ScoredServer): Boolean {
+        if (isBlacklisted(server.config)) {
+            logCollector.warn(TAG, "forceSelect rejected blacklisted profile: ${server.config.name}")
+            return false
+        }
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "forceSelect ignored — already switching")
             return false
         }
         try {
+            // Re-check after acquiring the switch guard in case a concurrent failure blacklisted it.
+            if (isBlacklisted(server.config)) {
+                logCollector.warn(TAG, "forceSelect rejected newly blacklisted profile: ${server.config.name}")
+                return false
+            }
             _currentServer.value = server
             baselineRtt = server.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
             previousRtt = null
@@ -551,7 +566,7 @@ class AutoSwitcher @Inject constructor(
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
         connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-        connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
+        connectionCoordinator.send(ConnectionEvent.ServerSelected(best, connectionCoordinator.activeTraceId))
     }
 
     private fun sameServer(

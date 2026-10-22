@@ -21,6 +21,16 @@ sealed class VpnFailureReason {
         is Unknown -> true
     }
 
+    /**
+     * A malformed profile should be skipped when other profiles remain. Keep its
+     * ordinary retry classification fatal so we do not retry the same broken profile
+     * after the candidate list has been exhausted.
+     */
+    fun canFallbackToNextServer(): Boolean = when (this) {
+        is CoreError -> isProfileConfigurationError(message) || isRetryable()
+        else -> isRetryable()
+    }
+
     fun userMessage(): String = when (this) {
         is AnotherVpnActive -> "Другое VPN уже активно. Отключите его."
         is PermissionDenied -> "Нет разрешения VPN. Выдайте доступ в настройках."
@@ -40,6 +50,13 @@ sealed class VpnFailureReason {
             return m.contains("unknown field") ||
                 m.contains("unable to start libbox") ||
                 m.contains("illegalstateexception") ||
+                m.contains("invalid configuration") ||
+                m.contains("invalid config")
+        }
+
+        private fun isProfileConfigurationError(message: String): Boolean {
+            val m = message.lowercase()
+            return m.contains("unknown field") ||
                 m.contains("invalid configuration") ||
                 m.contains("invalid config")
         }

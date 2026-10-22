@@ -384,7 +384,7 @@ class ConnectionCoordinator @Inject constructor(
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
                 scope.launch {
-                    val passed = trafficValidator.checkTraffic()
+                    val passed = trafficValidator.checkTraffic(event.serverName)
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
                 }
             }
@@ -463,7 +463,7 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
-        if (isFatalErrorLocked || !reason.isRetryable() || fallbackCandidates.isEmpty()) return false
+        if (isFatalErrorLocked || !reason.canFallbackToNextServer() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected &&

@@ -232,36 +232,56 @@ class SubscriptionParser @Inject constructor(
      * - valid JSON object → normalized string
      * - present but invalid / non-object → WARN once and null
      */
-    private fun normalizeXhttpExtra(rawValue: String?): String? {
-        if (rawValue == null) return "{}"
-        val decoded = try {
-            URLDecoder.decode(rawValue, "UTF-8")
-        } catch (_: IllegalArgumentException) {
-            rawValue
-        }
-        val trimmed = decoded.trim()
-        // Missing/null optional payloads are normalized to an empty object without WARN logs.
-        if (trimmed.isEmpty() ||
+    private fun normalizeXhttpExtra(
+        decodedValue: String?,
+        queryParams: Map<String, String> = emptyMap()
+    ): String? {
+        // parseUriQuery() has already URL-decoded the value. Decoding it a second time
+        // would turn literal '+' characters inside JSON values into spaces.
+        val trimmed = decodedValue.orEmpty().trim()
+        val extraObject = if (
+            trimmed.isEmpty() ||
             trimmed.equals("null", ignoreCase = true) ||
             trimmed.equals("undefined", ignoreCase = true)
         ) {
-            return "{}"
-        }
-        if (trimmed == "{}") return "{}"
-        return try {
-            val element = Json.parseToJsonElement(trimmed)
-            when (element) {
-                is JsonObject -> element.toString()
-                is JsonNull -> "{}"
-                else -> {
-                    logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
-                    null
+            JsonObject(emptyMap())
+        } else {
+            try {
+                when (val element = Json.parseToJsonElement(trimmed)) {
+                    is JsonObject -> element
+                    is JsonNull -> JsonObject(emptyMap())
+                    else -> {
+                        logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
+                        return null
+                    }
                 }
+            } catch (e: Exception) {
+                logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.message}")
+                return null
             }
-        } catch (e: Exception) {
-            logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.message}")
-            null
         }
+
+        val normalized = extraObject.toMutableMap()
+        // Some Xray links put these fields directly in the URI query rather than in
+        // URL-encoded extra JSON. Explicit extra settings take precedence over flat aliases.
+        val placementKeys = setOf(
+            "session_placement", "sessionPlacement", "sessionIDPlacement",
+            "sessionIdPlacement", "session_id_placement"
+        )
+        if (normalized.keys.none { it in placementKeys }) {
+            queryParams["sessionIDPlacement"]?.takeIf { it.isNotBlank() }?.let {
+                normalized["sessionIDPlacement"] = JsonPrimitive(it)
+            }
+        }
+        val sessionKeyKeys = setOf(
+            "session_key", "sessionKey", "sessionIDKey", "sessionIdKey", "session_id_key"
+        )
+        if (normalized.keys.none { it in sessionKeyKeys }) {
+            queryParams["sessionIDKey"]?.takeIf { it.isNotBlank() }?.let {
+                normalized["sessionIDKey"] = JsonPrimitive(it)
+            }
+        }
+        return JsonObject(normalized).toString()
     }
 
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
@@ -291,7 +311,7 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
-                extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"]) else null
+                extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"], params) else null
             )
             if (!config.isValid()) {
                 logCollector.warn(TAG, "Invalid config skipped", mapOf("name" to name, "transport" to config.transport))
