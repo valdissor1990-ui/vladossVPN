@@ -384,7 +384,17 @@ class ConnectionCoordinator @Inject constructor(
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
                 scope.launch {
-                    val passed = trafficValidator.checkTraffic(event.serverName)
+                    // The core-ready callback can precede the local mixed inbound being
+                    // reachable. Retry the real traffic probe before declaring this server bad.
+                    val retryDelays = listOf(300L, 700L, 1_200L)
+                    var passed = false
+                    for (attempt in 0..retryDelays.size) {
+                        if (trafficValidator.checkTraffic(event.serverName)) {
+                            passed = true
+                            break
+                        }
+                        if (attempt < retryDelays.size) delay(retryDelays[attempt])
+                    }
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
                 }
             }
