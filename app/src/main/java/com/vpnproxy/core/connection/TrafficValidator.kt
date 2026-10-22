@@ -27,7 +27,7 @@ class TrafficValidator @Inject constructor(
         private const val PROBE_URL = "https://cp.cloudflare.com/generate_204"
     }
 
-    suspend fun checkTraffic(serverName: String? = null): Boolean = withContext(Dispatchers.IO) {
+    suspend fun checkTraffic(serverName: String? = null, passiveDiagnostic: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         val startedAtNs = System.nanoTime()
         var connection: HttpURLConnection? = null
         try {
@@ -59,6 +59,9 @@ class TrafficValidator @Inject constructor(
             success
         } catch (e: Exception) {
             val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
+            if (passiveDiagnostic) {
+                logCollector.warn(TAG, "Passive traffic probe exception=${e.javaClass.simpleName}: ${e.message}")
+            }
             logCollector.warn(
                 TAG,
                 "Traffic probe failed",
