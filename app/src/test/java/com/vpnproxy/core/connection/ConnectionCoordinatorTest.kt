@@ -13,7 +13,7 @@ class ConnectionCoordinatorTest {
 
     private lateinit var coordinator: ConnectionCoordinator
 
-    private fun sampleServer(): ScoringEngine.ScoredServer {
+    private fun sampleServer(name: String = "test-server"): ScoringEngine.ScoredServer {
         val config = ParsedConfig(
             uuid = "11111111-1111-1111-1111-111111111111",
             address = "proxy.example.org",
@@ -28,7 +28,7 @@ class ConnectionCoordinatorTest {
             publicKey = null,
             shortId = null,
             flow = null,
-            name = "test-server"
+            name = name
         )
         return ScoringEngine.ScoredServer(
             config = config,
@@ -59,6 +59,26 @@ class ConnectionCoordinatorTest {
         coordinator = ConnectionCoordinator(LogCollector(), TrafficValidator(LogCollector()))
         // actor loop starts asynchronously
         Thread.sleep(50)
+    }
+
+    @Test
+    fun diagnosticFreezeSuppressesAutomaticSelectionButAllowsManualSelection() {
+        val first = sampleServer("first")
+        val second = sampleServer("second")
+        sendAndWait(ConnectionEvent.ServerSelected(first)) { coordinator.hasSelectedServer() }
+        sendAndWait(ConnectionEvent.UserConnect) { coordinator.state.value is ConnectionState.Connecting }
+        sendAndWait(ConnectionEvent.ServiceReady("first")) {
+            coordinator.state.value is ConnectionState.Connected
+        }
+
+        coordinator.send(ConnectionEvent.ServerSelected(second))
+        Thread.sleep(200)
+        assertEquals("first", (coordinator.state.value as ConnectionState.Connected).serverName)
+        assertEquals("first", coordinator.currentSelectedServer()?.config?.name)
+
+        coordinator.send(ConnectionEvent.ServerSelected(second, manual = true))
+        awaitUntil { coordinator.state.value is ConnectionState.Reconnecting }
+        assertEquals("second", coordinator.currentSelectedServer()?.config?.name)
     }
 
     @Test
