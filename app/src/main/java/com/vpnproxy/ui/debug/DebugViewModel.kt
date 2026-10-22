@@ -96,6 +96,13 @@ class DebugViewModel @Inject constructor(
         _message.value = "Настройки диагностики сохранены; применятся при следующем подключении"
     }
 
+    fun resetDiagnosticOptions() {
+        val defaults = DiagnosticOptions()
+        DiagnosticSettings.save(context, defaults)
+        _diagnosticOptions.value = defaults
+        _message.value = "Диагностические настройки сброшены; переподключитесь для применения"
+    }
+
     fun showLastLibboxLines() {
         val file = java.io.File(context.filesDir, "logs/libbox.log")
         _libboxTail.value = runCatching {
