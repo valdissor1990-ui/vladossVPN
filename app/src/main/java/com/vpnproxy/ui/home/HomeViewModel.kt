@@ -23,8 +23,6 @@ import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionRepository
-import com.vpnproxy.BuildConfig
-import com.vpnproxy.util.DebugFlags
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
