@@ -75,6 +75,23 @@ class AutoSwitcher @Inject constructor(
     private val switching = AtomicBoolean(false)
 
     @Volatile private var connectedAtMs: Long = 0L
+    @Volatile private var diagnosticFreezeAfterConnected: Boolean = false
+
+    fun setDiagnosticFreeze(enabled: Boolean) {
+        diagnosticFreezeAfterConnected = enabled
+        if (enabled) logCollector.info(TAG, "Diagnostic AutoSwitcher freeze armed after Connected")
+    }
+
+    fun clearDiagnosticFreeze() { diagnosticFreezeAfterConnected = false }
+
+    private fun isDiagnosticFreezeActive(): Boolean = diagnosticFreezeAfterConnected &&
+        connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
+
+    private fun suppressIfFrozen(action: String, target: String = "none"): Boolean {
+        if (!isDiagnosticFreezeActive()) return false
+        logCollector.warn(TAG, "AutoSwitcher suppressed: action=$action target=$target reason=diagnostic freeze")
+        return true
+    }
 
     fun isSwitching(): Boolean = switching.get()
 
@@ -109,12 +126,14 @@ class AutoSwitcher @Inject constructor(
 
     fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
         val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
         val key = serverKey(target)
         serverBlacklist[key] = nowMs + ttlMs
         logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
     }
 
     fun clearBlacklist() {
+        if (suppressIfFrozen("blacklist-clear")) return
         serverBlacklist.clear()
         logCollector.info(TAG, "Server blacklist cleared after subscription update")
     }
@@ -123,6 +142,11 @@ class AutoSwitcher @Inject constructor(
         configs.filterNot { isBlacklisted(it) }
 
     fun startMonitoring() {
+        if (isDiagnosticFreezeActive()) {
+            logCollector.info(TAG, "AutoSwitcher monitoring disabled by diagnostic freeze")
+            stopMonitoring()
+            return
+        }
         markConnected()
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
@@ -280,6 +304,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     private suspend fun performSlowServerSwitch(reason: String) {
+        if (suppressIfFrozen("fallback", reason)) {
+            transitionTo(AutoSwitchState.MONITORING, "diagnostic freeze")
+            return
+        }
         if (isInPostConnectWarmup()) {
             logCollector.info(TAG, "Slow-server switch ignored during warmup: $reason")
             transitionTo(AutoSwitchState.MONITORING, "warmup")
@@ -316,6 +344,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToBest(): ScoredServer? {
+        if (suppressIfFrozen("switchToBest")) return null
         if (isInPostConnectWarmup()) {
             logCollector.info(TAG, "switchToBest ignored — post-connect warmup")
             return null
@@ -408,6 +437,7 @@ class AutoSwitcher @Inject constructor(
 
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
+        if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
         val allowed = filterUsableServers(configs)
         val rankingTraceId = connectionCoordinator.activeTraceId
         if (allowed.isEmpty()) {
@@ -446,6 +476,7 @@ class AutoSwitcher @Inject constructor(
                     (current == null || !sameConfig(current.config, bestRussian.config)) &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
                 ) {
+                    if (suppressIfFrozen("ServerSelected", bestRussian.config.name)) return@launch
                     if (isInPostConnectWarmup()) {
                         logCollector.info(
                             TAG,
@@ -470,6 +501,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
+        if (suppressIfFrozen("selectBest")) return _currentServer.value
         val allowed = filterUsableServers(configs)
         if (allowed.isEmpty()) {
             logCollector.warn(TAG, "selectBest: all candidates blacklisted")
@@ -492,6 +524,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun forceSelect(server: ScoredServer): Boolean {
+        if (suppressIfFrozen("forceSelect", server.config.name)) return false
         if (isBlacklisted(server.config)) {
             logCollector.warn(TAG, "forceSelect rejected blacklisted profile: ${server.config.name}")
             return false
@@ -518,6 +551,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToNext(): ScoredServer? {
+        if (suppressIfFrozen("switchToNext")) return null
         if (!switching.compareAndSet(false, true)) {
             logCollector.warn(TAG, "switchToNext ignored — already switching")
             return null
@@ -549,6 +583,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun autoReselectIfNeeded() {
+        if (suppressIfFrozen("ServerSelected", _rankedServers.value.firstOrNull()?.config?.name ?: "unknown")) return
         val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
         if (ranked.isEmpty()) return
         val best = ranked.firstOrNull() ?: return
