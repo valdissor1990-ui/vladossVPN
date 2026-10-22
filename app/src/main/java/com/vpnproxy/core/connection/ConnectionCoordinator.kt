@@ -389,8 +389,8 @@ class ConnectionCoordinator @Inject constructor(
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
-                if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION) {
-                    logW("DEBUG: SKIP_TRAFFIC_VALIDATION=true — пропуск проверки трафика")
+                if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION && com.vpnproxy.util.DebugFlags.diagnosticEnabled()) {
+                    logW("Debug diagnostic mode: skipping connection-blocking traffic validation")
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true))
                     return
                 }
