@@ -6,6 +6,11 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.diagnostics.BatteryLogger
+import com.vpnproxy.core.singbox.DiagnosticOptions
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.DiagnosticProbe
+import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
@@ -36,7 +41,8 @@ class DebugViewModel @Inject constructor(
     private val logCollector: LogCollector,
     private val logExporter: LogExporter,
     private val batteryMonitor: BatteryMonitor,
-    private val batteryLogger: BatteryLogger
+    private val batteryLogger: BatteryLogger,
+    private val autoSwitcher: AutoSwitcher
 ) : ViewModel() {
 
     val filteredLogs: StateFlow<List<LogEntry>> = logCollector.filteredLogs
@@ -46,6 +52,15 @@ class DebugViewModel @Inject constructor(
 
     private val _lastCrash = MutableStateFlow<String?>(null)
     val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
+
+    private val _diagnosticOptions = MutableStateFlow(DiagnosticSettings.load(context))
+    val diagnosticOptions: StateFlow<DiagnosticOptions> = _diagnosticOptions.asStateFlow()
+
+    private val _libboxTail = MutableStateFlow<String?>(null)
+    val libboxTail: StateFlow<String?> = _libboxTail.asStateFlow()
+
+    private val _probeResult = MutableStateFlow<String?>(null)
+    val probeResult: StateFlow<String?> = _probeResult.asStateFlow()
 
     private val _battery = MutableStateFlow(BatteryUiState())
     val battery: StateFlow<BatteryUiState> = _battery.asStateFlow()
@@ -73,6 +88,29 @@ class DebugViewModel @Inject constructor(
             currentDrawMa = batteryMonitor.getCurrentDrawMa(),
             drainRatePerHour = batteryMonitor.getDrainRatePerHour()
         )
+    }
+
+    fun updateDiagnosticOptions(options: DiagnosticOptions) {
+        DiagnosticSettings.save(context, options)
+        _diagnosticOptions.value = options
+        _message.value = "Настройки диагностики сохранены; применятся при следующем подключении"
+    }
+
+    fun showLastLibboxLines() {
+        val file = java.io.File(context.filesDir, "logs/libbox.log")
+        _libboxTail.value = runCatching {
+            if (!file.isFile) return@runCatching "libbox log unavailable: file not found at ${file.absolutePath}"
+            file.readLines(Charsets.UTF_8).takeLast(100).joinToString("\n").ifBlank { "libbox log is empty" }
+        }.getOrElse { "libbox log unavailable: ${it.javaClass.simpleName}: ${it.message}" }
+    }
+
+    fun runTrafficProbeNow() {
+        viewModelScope.launch {
+            val server = autoSwitcher.currentServer.value?.config?.name ?: "manual"
+            _probeResult.value = "Проба выполняется…"
+            _probeResult.value = runCatching { DiagnosticProbe.runOnce(server, logCollector).toString() }
+                .getOrElse { "Probe failed: ${it.javaClass.simpleName}: ${it.message}" }
+        }
     }
 
     fun logBatteryManual() {
