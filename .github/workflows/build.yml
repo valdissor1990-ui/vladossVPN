@@ -54,6 +54,12 @@ jobs:
           fi
           chmod +x gradlew || true
 
+      - name: Compile Direct Debug Kotlin
+        run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
+
+      - name: Clean and build Direct Debug APK
+        run: ./gradlew clean :app:assembleDirectDebug --stacktrace
+
       - name: Build Direct Release APK
         run: ./gradlew assembleDirectRelease --stacktrace
 
@@ -77,6 +83,12 @@ jobs:
 
       - name: Build Play Release AAB
         run: ./gradlew bundlePlayRelease --stacktrace
+
+      - name: Upload Direct Debug APK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-direct-debug
+          path: app/build/outputs/apk/direct/debug/*.apk
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v7
