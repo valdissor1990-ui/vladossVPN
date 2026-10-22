@@ -368,6 +368,10 @@ class VpnProxyService : VpnService() {
             try {
                 val configJson = SingboxConfigBuilder.buildVpn(parsed)
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
+                runCatching {
+                    val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
+                    logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
+                }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
                 controller.startCore(configJson)
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)

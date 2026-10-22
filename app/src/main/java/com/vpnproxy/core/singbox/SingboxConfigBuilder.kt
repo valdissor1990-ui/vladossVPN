@@ -13,7 +13,10 @@ object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
     fun build(config: ParsedConfig): String = buildJsonObject {
-        put("log", buildJsonObject { put("level", "warn") })
+        put("log", buildJsonObject {
+            put("level", "debug")
+            put("timestamp", true)
+        })
         put("inbounds", buildJsonArray {
             add(buildJsonObject {
                 put("type", "mixed")
@@ -30,7 +33,10 @@ object SingboxConfigBuilder {
 
     /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
     fun buildVpn(config: ParsedConfig): String = buildJsonObject {
-        put("log", buildJsonObject { put("level", "warn") })
+        put("log", buildJsonObject {
+            put("level", "debug")
+            put("timestamp", true)
+        })
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
@@ -91,7 +97,10 @@ object SingboxConfigBuilder {
         require(configs.isNotEmpty()) { "At least one Sing-box config is required" }
         require(configs.size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
         return buildJsonObject {
-            put("log", buildJsonObject { put("level", "warn") })
+            put("log", buildJsonObject {
+                put("level", "debug")
+                put("timestamp", true)
+            })
             put("inbounds", buildJsonArray {
                 configs.forEachIndexed { index, _ ->
                     add(buildJsonObject {
@@ -187,13 +196,7 @@ object SingboxConfigBuilder {
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
                 "xhttp" -> put("transport", buildJsonObject {
-                    // libbox 1.14.3 rejects transport.extra; XHTTP extension fields
-                    // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
-
-                    // Whitelist полей, которые точно поддерживает libbox/sing-box для XHTTP.
-                    // Всё остальное (sessionIDTable, seqPlacement, xmux и т.д.) отбрасываем,
-                    // чтобы не получить "unknown field".
                     val allowedKeys = setOf(
                         "host", "path", "mode", "headers",
                         "x_padding_bytes", "x_padding_obfs_mode", "x_padding_key",
@@ -202,10 +205,8 @@ object SingboxConfigBuilder {
                         "uplink_http_method",
                         "session_placement", "session_key"
                     )
-
                     extraObject?.forEach { (key, value) ->
                         if (key == "type") return@forEach
-
                         val singBoxKey = when (key) {
                             "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
                             "session_id_placement" -> "session_placement"
@@ -224,8 +225,6 @@ object SingboxConfigBuilder {
                                 "${match.groupValues[1]}_${match.groupValues[2]}"
                             }.lowercase()
                         }
-
-                        // Кладем в JSON только разрешенные поля, игнорируя sessionIDTable и прочий мусор
                         if (singBoxKey in allowedKeys) {
                             put(singBoxKey, value)
                         }

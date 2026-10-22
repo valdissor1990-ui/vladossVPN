@@ -33,7 +33,7 @@ class SingBoxCore(
                 workingPath = working.absolutePath
                 tempPath = context.cacheDir.absolutePath
                 logMaxLines = 3000
-                debug = false
+                debug = true
                 appVersion = runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
                 }.getOrDefault("1")
