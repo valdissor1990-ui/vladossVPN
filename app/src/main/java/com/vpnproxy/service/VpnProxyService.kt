@@ -417,8 +417,18 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
-        // Blacklist the server that just failed so auto-switch/ranking skips it for ~10 min.
-        autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+        // Invalid generated config is a client/schema problem, not evidence that the
+        // endpoint is unreachable. Do not poison server availability history for it.
+        val configInvalid = reason is VpnFailureReason.CoreError &&
+            (reason.message.contains("decode config", ignoreCase = true) ||
+                reason.message.contains("unknown field", ignoreCase = true) ||
+                reason.message.contains("invalid config", ignoreCase = true) ||
+                reason.message.contains("invalid configuration", ignoreCase = true))
+        if (!configInvalid) {
+            autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+        } else {
+            logCollector.warn(TAG, "Skipping server blacklist because core rejected the generated config")
+        }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
     }
 
