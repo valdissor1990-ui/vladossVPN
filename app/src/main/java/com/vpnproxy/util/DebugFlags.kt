@@ -16,6 +16,6 @@ object DebugFlags {
     const val PASSIVE_TRAFFIC_PROBE_INTERVAL_MS = 5000L
     const val DEBUG_TUN_STACK_GVISOR = true
     const val DEBUG_STRICT_ROUTE_FALSE = true
-    const val DIAG_TUN_STACK: String = "gvisor"
-    const val DIAG_STRICT_ROUTE: Boolean = false
+    @Volatile var DIAG_TUN_STACK: String = "gvisor"
+    @Volatile var DIAG_STRICT_ROUTE: Boolean = false
 }
