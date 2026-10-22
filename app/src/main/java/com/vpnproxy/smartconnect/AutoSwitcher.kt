@@ -409,6 +409,7 @@ class AutoSwitcher @Inject constructor(
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
         val allowed = filterUsableServers(configs)
+        val rankingTraceId = connectionCoordinator.activeTraceId
         if (allowed.isEmpty()) {
             logCollector.warn(TAG, "All candidate servers are blacklisted; background ranking skipped")
             return
@@ -421,6 +422,10 @@ class AutoSwitcher @Inject constructor(
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
                     .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+                if (connectionCoordinator.activeTraceId != rankingTraceId) {
+                    logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
+                    return@launch
+                }
                 if (ranked.isEmpty()) {
                     val currentName = _currentServer.value?.config?.name ?: "unknown"
                     logCollector.warn(
@@ -452,7 +457,7 @@ class AutoSwitcher @Inject constructor(
                         consecutiveErrors = 0
                         _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
                         connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian))
+                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian, rankingTraceId))
                         logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
                     }
                 }
@@ -561,7 +566,7 @@ class AutoSwitcher @Inject constructor(
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
         connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-        connectionCoordinator.send(ConnectionEvent.ServerSelected(best))
+        connectionCoordinator.send(ConnectionEvent.ServerSelected(best, connectionCoordinator.activeTraceId))
     }
 
     private fun sameServer(
