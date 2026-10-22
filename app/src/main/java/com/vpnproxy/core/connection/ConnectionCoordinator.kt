@@ -463,7 +463,7 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
-        if (isFatalErrorLocked || !reason.isRetryable() || fallbackCandidates.isEmpty()) return false
+        if (isFatalErrorLocked || !reason.canFallbackToNextServer() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting &&
             current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected &&
