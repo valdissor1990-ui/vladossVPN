@@ -427,6 +427,13 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
+        if (BuildConfig.DEBUG && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK &&
+            reason is VpnFailureReason.CoreError &&
+            reason.message.contains("Сервер не пропускает трафик", ignoreCase = true)
+        ) {
+            logCollector.warn(TAG, "Debug diagnostic mode: suppressed post-connect traffic CoreError; no fallback or server blacklist")
+            return
+        }
         // Invalid generated config is a client/schema problem, not evidence that the
         // endpoint is unreachable. Do not poison server availability history for it.
         val configInvalid = reason is VpnFailureReason.CoreError &&
