@@ -2,6 +2,7 @@ package com.vpnproxy.core.singbox
 
 import android.content.Context
 import android.util.Log
+import com.vpnproxy.logging.LogCollector
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.Libbox
@@ -18,7 +19,8 @@ import java.util.Locale
  */
 class SingBoxCore(
     private val context: Context,
-    private val platform: SingBoxPlatform
+    private val platform: SingBoxPlatform,
+    private val logCollector: LogCollector
 ) {
     companion object {
         private const val TAG = "SingBoxCore"
@@ -85,7 +87,9 @@ class SingBoxCore(
             Log.w(TAG, "unsupported CommandServerHandler method: triggerNativeCrash")
         }
         override fun writeDebugMessage(message: String?) {
-            Log.d(TAG, message.orEmpty())
+            val line = message.orEmpty()
+            logCollector.debug("LIBBOX", "[LIBBOX] $line")
+            Log.d(TAG, line)
         }
         override fun connectSSHAgent(): Int {
             Log.w(TAG, "unsupported CommandServerHandler method: connectSSHAgent")
