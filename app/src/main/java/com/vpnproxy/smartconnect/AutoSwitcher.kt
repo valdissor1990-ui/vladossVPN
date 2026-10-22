@@ -527,6 +527,28 @@ class AutoSwitcher @Inject constructor(
         return best
     }
 
+    /** Explicit user choice. Unlike automatic forceSelect, this remains available in diagnostic mode. */
+    fun selectManual(server: ScoredServer): Boolean {
+        if (!switching.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "Manual selection rejected — switch operation already active: ${server.config.name}")
+            return false
+        }
+        try {
+            if (isBlacklisted(server.config) && !(BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE)) {
+                logCollector.warn(TAG, "Manual selection rejected blacklisted profile: ${server.config.name}")
+                return false
+            }
+            _currentServer.value = server
+            baselineRtt = server.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
+            previousRtt = null
+            consecutiveErrors = 0
+            logCollector.info(TAG, "Manual server selected: ${server.config.name}; diagnostic freeze does not suppress explicit user action")
+            return true
+        } finally {
+            switching.set(false)
+        }
+    }
+
     fun forceSelect(server: ScoredServer): Boolean {
         if (suppressSwitchIfFrozen(server.config.name, "forceSelect")) return false
         if (isBlacklisted(server.config)) {
