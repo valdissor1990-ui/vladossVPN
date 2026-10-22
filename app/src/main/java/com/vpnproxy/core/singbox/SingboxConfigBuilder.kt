@@ -47,7 +47,7 @@ object SingboxConfigBuilder {
             put("servers", buildJsonArray {
                 when (options.dnsMode) {
                     "direct_udp_8888" -> add(buildJsonObject {
-                        put("type", "udp"); put("tag", "direct-dns"); put("server", "8.8.8.8"); put("server_port", 8888)
+                        put("type", "udp"); put("tag", "direct-dns"); put("server", "8.8.8.8")
                     })
                     "direct_udp_1111" -> add(buildJsonObject {
                         put("type", "udp"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 1111)
