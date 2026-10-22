@@ -152,6 +152,8 @@ class SingBoxCore(
             }
             runCatching { platform.closeTun() }
                 .onFailure { Log.e(TAG, "TUN cleanup after libbox startup failure failed", it) }
+            lastCoreStopAtMs = System.currentTimeMillis()
+            Log.i(TAG, "Core stopped")
             throw IllegalStateException("Unable to start libbox 1.14.3: ${t.message}", t)
         }
     }
