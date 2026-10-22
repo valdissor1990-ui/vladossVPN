@@ -178,7 +178,7 @@ class VpnProxyService : VpnService() {
                         startPassiveTrafficProbe(state.serverName)
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
-                        if (BuildConfig.DEBUG && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK) {
+                        if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK) {
                             logCollector.info(TAG, "Debug diagnostic mode: AutoSwitcher health-triggered switching disabled; passive probe remains enabled")
                         } else {
                             autoSwitcher.startMonitoring()
@@ -448,7 +448,7 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
-        if (BuildConfig.DEBUG && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK &&
+        if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE && DebugFlags.DISABLE_POST_CONNECT_TRAFFIC_FALLBACK &&
             reason is VpnFailureReason.CoreError &&
             reason.message.contains("Сервер не пропускает трафик", ignoreCase = true)
         ) {
