@@ -114,7 +114,8 @@ private fun VPNProxyNavHost(
             HomeScreen(
                 viewModel = vm,
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
-                onNavigateToDebug = { navController.navigate(Route.Debug.path) },
+                onNavigateToDebug = { if (BuildConfig.DEBUG) navController.navigate(Route.Debug.path) },
+                showDebug = BuildConfig.DEBUG,
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) }
             )
         }
@@ -134,8 +135,10 @@ private fun VPNProxyNavHost(
             SettingsScreen(onBack = { navController.popBackStack() })
         }
 
-        composable(Route.Debug.path) {
-            DebugScreen(onBack = { navController.popBackStack() })
+        if (BuildConfig.DEBUG) {
+            composable(Route.Debug.path) {
+                DebugScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }
