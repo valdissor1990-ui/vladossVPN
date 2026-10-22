@@ -149,8 +149,8 @@ class SingBoxPlatform(
             Log.i(TAG, "TUN excluded routes: $excludedRoutes")
             Log.i(
                 TAG,
-                "TUN stack=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else if (BuildConfig.DEBUG && DebugFlags.DEBUG_TUN_STACK_GVISOR) "gvisor" else "system"} " +
-                    "strict_route=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else if (BuildConfig.DEBUG && DebugFlags.DEBUG_STRICT_ROUTE_FALSE) false else true} mtu=1400 auto_route=${options.autoRoute}"
+                "TUN stack=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else "system"} " +
+                    "strict_route=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else true} mtu=1400 auto_route=${options.autoRoute}"
             )
             Log.d(TAG, "Attempting to create TUN interface...")
             val pfd = try {
