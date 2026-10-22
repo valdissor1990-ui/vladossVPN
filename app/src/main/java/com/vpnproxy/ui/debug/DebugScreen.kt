@@ -131,6 +131,18 @@ fun DebugScreen(
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
                     Column(modifier = Modifier.padding(10.dp)) {
                         Text("Настройки диагностики (следующее подключение)", style = MaterialTheme.typography.titleSmall)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticOptions.useDisallowSelfPackage, onCheckedChange = {
+                                viewModel.updateDiagnosticOptions(diagnosticOptions.copy(useDisallowSelfPackage = it))
+                            })
+                            Text("USE_DISALLOW_SELF_PACKAGE")
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticOptions.autoDetectInterface, onCheckedChange = {
+                                viewModel.updateDiagnosticOptions(diagnosticOptions.copy(autoDetectInterface = it))
+                            })
+                            Text("AUTO_DETECT_INTERFACE")
+                        }
                         Text("DNS_MODE", style = MaterialTheme.typography.labelMedium)
                         DiagnosticSettings.dnsModes.forEach { mode ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
