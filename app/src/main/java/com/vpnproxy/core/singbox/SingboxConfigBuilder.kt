@@ -55,8 +55,8 @@ object SingboxConfigBuilder {
                 put("mtu", 1400)
                 put("auto_route", true)
                 // Temporary diagnostic profile only; restore release TUN values after testing.
-                put("strict_route", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DEBUG_STRICT_ROUTE_FALSE) false else true)
-                put("stack", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DEBUG_TUN_STACK_GVISOR) "gvisor" else "system")
+                put("strict_route", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DIAGNOSTIC_MODE) com.vpnproxy.util.DebugFlags.DIAG_STRICT_ROUTE else true)
+                put("stack", if (com.vpnproxy.BuildConfig.DEBUG && com.vpnproxy.util.DebugFlags.DIAGNOSTIC_MODE) com.vpnproxy.util.DebugFlags.DIAG_TUN_STACK else "system")
             })
             add(buildJsonObject {
                 put("type", "mixed")
