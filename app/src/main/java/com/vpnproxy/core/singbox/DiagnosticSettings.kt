@@ -5,7 +5,7 @@ import com.vpnproxy.util.DebugFlags
 
 
 data class DiagnosticOptions(
-    val dnsMode: String = "direct_udp_8888",
+    val dnsMode: String = "proxy_dot_8888",
     val tunStack: String = "gvisor",
     val strictRoute: Boolean = false,
     val routeFinal: String = "proxy",
@@ -15,7 +15,7 @@ data class DiagnosticOptions(
 
 object DiagnosticSettings {
     private const val PREFS = "diagnostic_settings"
-    val dnsModes = listOf("direct_udp_8888", "direct_udp_1111", "direct_dot_1111", "proxy_dot_1111", "system_no_hijack")
+    val dnsModes = listOf("proxy_dot_8888", "direct_udp_8888", "direct_udp_1111", "direct_dot_1111", "proxy_dot_1111", "system_no_hijack")
     val tunStacks = listOf("gvisor", "system")
     val routeFinals = listOf("proxy", "direct")
 
@@ -23,7 +23,7 @@ object DiagnosticSettings {
         if (!DebugFlags.diagnosticEnabled()) return DiagnosticOptions()
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return DiagnosticOptions(
-            dnsMode = p.getString("dns_mode", "direct_udp_8888")?.takeIf { it in dnsModes } ?: "direct_udp_8888",
+            dnsMode = p.getString("dns_mode", "proxy_dot_8888")?.takeIf { it in dnsModes } ?: "proxy_dot_8888",
             tunStack = p.getString("tun_stack", "gvisor")?.takeIf { it in tunStacks } ?: "gvisor",
             strictRoute = p.getBoolean("strict_route", false),
             routeFinal = p.getString("route_final", "proxy")?.takeIf { it in routeFinals } ?: "proxy",
