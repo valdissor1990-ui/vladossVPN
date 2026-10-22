@@ -511,7 +511,7 @@ class VpnProxyService : VpnService() {
             ) {
                 val startedAtMs = System.currentTimeMillis()
                 try {
-                    val success = trafficValidator.checkTraffic(serverName)
+                    val success = trafficValidator.checkTraffic(serverName, passiveDiagnostic = true)
                     val elapsedMs = System.currentTimeMillis() - startedAtMs
                     logCollector.info(TAG, "Passive traffic probe success=$success")
                     logCollector.info(TAG, "Passive traffic probe elapsedMs=$elapsedMs")
