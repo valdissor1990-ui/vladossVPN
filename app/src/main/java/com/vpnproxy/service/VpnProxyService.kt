@@ -403,15 +403,10 @@ class VpnProxyService : VpnService() {
             transitionServiceState(ServiceState.Failed(reasonMsg))
             stopVpnInternal("startVpnSession failed", t)
             emitCoreError(t)
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
-                }
-            } catch (_: Throwable) { }
-            stopSelf()
+            // Keep the service alive until the coordinator chooses the next state.
+            // Reconnecting must be able to restart the next candidate; stopping the service
+            // here races the actor and destroys the scope that performs that fallback.
+            // Fatal Error states are handled by stateCollectorJob and its idle-stop policy.
         } finally {
             isReconnecting.set(false)
         }
