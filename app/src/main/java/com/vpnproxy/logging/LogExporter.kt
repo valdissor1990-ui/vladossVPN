@@ -35,8 +35,21 @@ class LogExporter @Inject constructor(
     /** Формирует маскированный текст всех логов. Никогда не бросает. */
     fun buildExportText(): String {
         return try {
-            logCollector.getAllEntries()
+            val appLog = logCollector.getAllEntries()
                 .joinToString("\n") { it.toFormattedString(maskSensitive = true) }
+            val libboxFile = File(context.filesDir, "logs/libbox.log")
+            val libboxLog = if (libboxFile.isFile) runCatching {
+                val tail = java.io.RandomAccessFile(libboxFile, "r").use { file ->
+                    val length = file.length()
+                    val start = (length - 2L * 1024 * 1024).coerceAtLeast(0L)
+                    file.seek(start)
+                    ByteArray((length - start).toInt()).also { file.readFully(it) }
+                }
+                String(tail, Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()
+                    .takeLast(5000).joinToString("\n") { "[LIBBOX] $it" }
+            }.getOrElse { "[LIBBOX] read failed: ${it.javaClass.simpleName}: ${it.message}" }
+            else "[LIBBOX] log unavailable: file not found at ${libboxFile.absolutePath}"
+            listOf(appLog, libboxLog).filter { it.isNotBlank() }.joinToString("\n")
         } catch (t: Throwable) {
             logCollector.error(TAG, "buildExportText failed", t)
             "Log export failed: ${t.message}\n"
