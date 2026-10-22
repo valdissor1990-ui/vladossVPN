@@ -550,10 +550,11 @@ class HomeViewModel @Inject constructor(
         }
         val config = server.config
         val rawExtra = config.extra
+        val parsedExtra = rawExtra?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() }
         val extraState = when {
             rawExtra.isNullOrBlank() -> "null"
-            runCatching { Json.parseToJsonElement(rawExtra) }.getOrNull() is JsonObject &&
-                (runCatching { Json.parseToJsonElement(rawExtra) as JsonObject }.getOrNull()?.isEmpty() == true) -> "{}"
+            parsedExtra is JsonObject && parsedExtra.isEmpty() -> "{}"
             else -> "has_fields"
         }
         logCollector.info(TAG, "Manual connect to ${config.name} transport=${config.transport} security=${config.security} extra=$extraState")
