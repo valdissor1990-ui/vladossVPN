@@ -1,6 +1,7 @@
 package com.vpnproxy.core.singbox
 
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.logging.LogCollectorHolder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -252,8 +253,8 @@ object SingboxConfigBuilder {
                             includedKeys += singBoxKey
                         } else omittedKeys += key
                     }
-                    android.util.Log.d("SingboxConfigBuilder", "XHTTP included keys=${includedKeys.distinct().sorted()}")
-                    android.util.Log.d("SingboxConfigBuilder", "XHTTP omitted keys=${omittedKeys.distinct().sorted()}")
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP included keys=${includedKeys.distinct().sorted()}")
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP omitted keys=${omittedKeys.distinct().sorted()}")
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                     config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
@@ -268,7 +269,7 @@ object SingboxConfigBuilder {
                     val host = config.host?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9.-]+$").matches(it) && it.contains(".") }
                     val serverName = sni ?: host ?: config.address
                     val source = when { sni != null -> "sni"; host != null -> "host"; else -> "address" }
-                    android.util.Log.d("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
                     put("server_name", serverName)
                     if (isVless) {
                         put("utls", buildJsonObject {
