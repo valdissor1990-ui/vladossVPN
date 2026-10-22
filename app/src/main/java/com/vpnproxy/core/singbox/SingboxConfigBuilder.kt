@@ -196,9 +196,16 @@ object SingboxConfigBuilder {
                             // uses snake_case. Passing xPaddingBytes verbatim makes libbox
                             // 1.14.3 reject the entire outbound as an unknown field.
                             val singBoxKey = when (key) {
-                                // Preserve acronym boundaries used by Xray's URI parameter names.
-                                "noGRPCHeader" -> "no_grpc_header"
+                                // Xray uses "sessionID*" names, while sing-box-lx expects
+                                // session_placement/session_key. A generic camelCase conversion
+                                // incorrectly emits session_i_d_placement/session_i_d_key.
+                                "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
+                                "session_id_placement" -> "session_placement"
+                                "sessionIDKey", "sessionIdKey", "sessionKey",
+                                "session_id_key" -> "session_key"
+                                "noGRPCHeader", "noGrpcHeader" -> "no_grpc_header"
                                 "uplinkHTTPMethod" -> "uplink_http_method"
+                                "xPaddingBytes" -> "x_padding_bytes"
                                 else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
                                     "${match.groupValues[1]}_${match.groupValues[2]}"
                                 }.lowercase()
