@@ -174,7 +174,7 @@ class VpnProxyService : VpnService() {
                         val diagnosticOptions = DiagnosticSettings.load(this@VpnProxyService)
                         autoSwitcher.setDiagnosticFreeze(diagnosticOptions.freezeAutoSwitcherAfterConnected)
                         autoSwitcher.startMonitoring()
-                        if (diagnosticOptions.passiveProbeEnabled && com.vpnproxy.core.singbox.DebugFlags.diagnosticEnabled()) startPassiveProbe()
+                        if (diagnosticOptions.passiveProbeEnabled && com.vpnproxy.util.DebugFlags.diagnosticEnabled()) startPassiveProbe()
                         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
                             restartVpnForDesiredState(state)
                         } else {
