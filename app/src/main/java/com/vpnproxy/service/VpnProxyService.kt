@@ -383,9 +383,15 @@ class VpnProxyService : VpnService() {
                 val diagnosticOptions = if (diagnosticEnabled) DiagnosticSettings.load(this@VpnProxyService) else DiagnosticOptions(tunStack = "system", strictRoute = true)
                 val libboxLogFile = if (diagnosticEnabled) java.io.File(filesDir, "logs/libbox.log").also { it.parentFile?.mkdirs() } else null
                 if (libboxLogFile != null) logCollector.info(TAG, "libbox log path=${libboxLogFile.absolutePath}")
+                logCollector.info(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface}")
+                logCollector.info(TAG, "DIAG TUN_STACK=${diagnosticOptions.tunStack}")
+                logCollector.info(TAG, "DIAG DNS_MODE=${diagnosticOptions.dnsMode}")
+                logCollector.info(TAG, "DIAG protect_enabled=true")
+                logCollector.info(TAG, "DIAG disallow_self=${diagnosticOptions.useDisallowSelfPackage}")
                 logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
-                logCollector.info(TAG, "Route final=${diagnosticOptions.routeFinal}")
+                logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
                 val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, libboxLogFile?.absolutePath)
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
                 runCatching {
