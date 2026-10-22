@@ -40,7 +40,7 @@ sealed class ConnectionEvent {
     data object RequestDisconnect : ConnectionEvent()
     /** UI requested connect (permission granted); selection may still be in progress. */
     data class ConnectRequested(val traceId: String, val userInitiated: Boolean = false) : ConnectionEvent()
-    data class ServerSelected(val server: ScoringEngine.ScoredServer) : ConnectionEvent()
+    data class ServerSelected(val server: ScoringEngine.ScoredServer, val traceId: String? = null) : ConnectionEvent()
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
@@ -274,6 +274,10 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.ServerSelected -> {
+                if (event.traceId != null && event.traceId != activeTraceId) {
+                    logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                    return
+                }
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
                 hasServerSelected = true
@@ -398,20 +402,35 @@ class ConnectionCoordinator @Inject constructor(
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     trafficFailures++
+                    val failedConfig = activeScoredServer?.config
                     logW("Server does not pass traffic: ${event.serverName} (consecutiveFailures=$trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES; remainingCandidates=${fallbackCandidates.size})")
+
+                    // Subscription feeds often contain many fingerprint variants of the same
+                    // endpoint. Three failed validations on one endpoint should move selection
+                    // to a different endpoint, not enable a fatal lock while dozens remain.
+                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES && failedConfig != null) {
+                        val before = fallbackCandidates.size
+                        fallbackCandidates = fallbackCandidates.filterNot { candidate ->
+                            val config = candidate.config
+                            config.address.equals(failedConfig.address, ignoreCase = true) &&
+                                config.port == failedConfig.port &&
+                                config.transport.equals(failedConfig.transport, ignoreCase = true) &&
+                                config.security.equals(failedConfig.security, ignoreCase = true)
+                        }
+                        val skipped = before - fallbackCandidates.size
+                        logW("Traffic validation failed $trafficFailures times on endpoint ${failedConfig.address}:${failedConfig.port}; skipped $skipped equivalent endpoint variant(s)")
+                        trafficFailures = 0
+                    }
+
                     val next = fallbackCandidates.firstOrNull()
-                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES || next == null) {
+                    if (next == null) {
                         retryCount = 0
                         isFatalErrorLocked = true
                         cancelSelectionJob()
-                        logE("Traffic validation stopped after $trafficFailures failure(s); fatal lock enabled")
+                        logE("Traffic validation exhausted all fallback endpoints; fatal lock enabled")
                         setState(
                             ConnectionState.Error(FATAL_TRAFFIC_MESSAGE),
-                            reason = if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES) {
-                                "trafficValidationFailedThreeTimes"
-                            } else {
-                                "trafficValidationExhausted"
-                            }
+                            reason = "trafficValidationExhausted"
                         )
                     } else {
                         logW("Traffic validation fallback -> ${next.config.name}")
