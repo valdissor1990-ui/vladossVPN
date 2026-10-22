@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+# APK packaging includes several large native libraries; use the same heap size as release CI.
+env:
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
+
 jobs:
   direct-debug-apk:
     runs-on: ubuntu-latest
