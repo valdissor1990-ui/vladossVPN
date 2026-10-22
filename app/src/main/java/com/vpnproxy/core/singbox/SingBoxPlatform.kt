@@ -29,15 +29,27 @@ class SingBoxPlatform(
 
     @Volatile private var tunDescriptor: ParcelFileDescriptor? = null
 
-    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+    override fun usePlatformAutoDetectInterfaceControl(): Boolean {
+        val enabled = true
+        com.vpnproxy.logging.LogCollectorHolder.get()?.debug(TAG, "PLATFORM-AUTO-DETECT enabled=$enabled")
+        Log.d(TAG, "PLATFORM-AUTO-DETECT enabled=$enabled")
+        return enabled
+    }
 
     override fun autoDetectInterfaceControl(fd: Int) {
         val service = vpnService
+        val collector = com.vpnproxy.logging.LogCollectorHolder.get()
+        collector?.debug(TAG, "PROTECT-CALL fd=$fd vpnService=${service != null}")
+        val ok = service?.protect(fd) ?: false
+        collector?.debug(TAG, "PROTECT-RESULT fd=$fd ok=$ok")
+        if (!ok && service != null) {
+            collector?.error(TAG, "PROTECT-FAILED fd=$fd — сокет попадёт в TUN")
+        }
         if (service == null) {
             Log.d(TAG, "No active VPN service for fd=$fd; probe mode has no TUN to bypass")
             return
         }
-        check(service.protect(fd)) { "VpnService.protect($fd) failed" }
+        check(ok) { "VpnService.protect($fd) failed" }
     }
 
     override fun openTun(options: TunOptions): Int {
@@ -51,6 +63,12 @@ class SingBoxPlatform(
             }
 
             tunDescriptor?.close()
+            val configuredRoutes = mutableListOf<String>()
+            val configuredDns = mutableListOf<String>()
+            var allowedAppsCount = 0
+            var disallowedAppsCount = 0
+            var disallowSelfApplied = false
+            val blocking = false // Builder.setBlocking() is not used; VPN sockets are non-blocking by default.
             val builder = service.Builder()
                 .setSession("VPNProxy · Sing-box")
                 .setMtu(1400)
@@ -69,17 +87,33 @@ class SingBoxPlatform(
             if (options.autoRoute) {
                 if (options.dnsMode.value != Libbox.DNSModeDisabled) {
                     val dns = options.dnsServerAddress
-                    while (dns.hasNext()) builder.addDnsServer(dns.next())
+                    while (dns.hasNext()) {
+                        val address = dns.next()
+                        builder.addDnsServer(address)
+                        configuredDns += address
+                    }
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     val routes4 = options.inet4RouteAddress
-                    if (routes4.hasNext()) while (routes4.hasNext()) builder.addRoute(routes4.next().toIpPrefix())
-                    else if (options.inet4Address.hasNext()) builder.addRoute("0.0.0.0", 0)
+                    if (routes4.hasNext()) while (routes4.hasNext()) {
+                        val route = routes4.next()
+                        builder.addRoute(route.toIpPrefix())
+                        configuredRoutes += "${route.address()}/${route.prefix()}"
+                    } else if (options.inet4Address.hasNext()) {
+                        builder.addRoute("0.0.0.0", 0)
+                        configuredRoutes += "0.0.0.0/0"
+                    }
 
                     val routes6 = options.inet6RouteAddress
-                    if (routes6.hasNext()) while (routes6.hasNext()) builder.addRoute(routes6.next().toIpPrefix())
-                    else if (options.inet6Address.hasNext()) builder.addRoute("::", 0)
+                    if (routes6.hasNext()) while (routes6.hasNext()) {
+                        val route = routes6.next()
+                        builder.addRoute(route.toIpPrefix())
+                        configuredRoutes += "${route.address()}/${route.prefix()}"
+                    } else if (options.inet6Address.hasNext()) {
+                        builder.addRoute("::", 0)
+                        configuredRoutes += "::/0"
+                    }
 
                     val excludes4 = options.inet4RouteExcludeAddress
                     while (excludes4.hasNext()) builder.excludeRoute(excludes4.next().toIpPrefix())
@@ -90,11 +124,13 @@ class SingBoxPlatform(
                     while (routes4.hasNext()) {
                         val address = routes4.next()
                         builder.addRoute(address.address(), address.prefix())
+                        configuredRoutes += "${address.address()}/${address.prefix()}"
                     }
                     val routes6 = options.inet6RouteRange
                     while (routes6.hasNext()) {
                         val address = routes6.next()
                         builder.addRoute(address.address(), address.prefix())
+                        configuredRoutes += "${address.address()}/${address.prefix()}"
                     }
                 }
             }
@@ -115,19 +151,39 @@ class SingBoxPlatform(
             Log.i(TAG, "DIAG disallow_self=" + disallowSelf)
 
             if (splitTunnelManager != null) {
-                runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes, disallowSelf) }
+                val applied = runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes, disallowSelf) }
+                allowedAppsCount = applied.allowedApps.size
+                disallowedAppsCount = applied.disallowedApps.size
+                disallowSelfApplied = context.packageName in applied.disallowedApps
             } else if (includes.isNotEmpty()) {
-                includes.filterNot { it in excludes || it == context.packageName }.forEach { builder.addAllowedApplication(it) }
+                includes.filterNot { it in excludes || it == context.packageName }.forEach { packageName ->
+                    try {
+                        builder.addAllowedApplication(packageName)
+                        allowedAppsCount++
+                    } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                        Log.w(TAG, "Unknown included package: " + packageName, e)
+                    }
+                }
             } else {
                 val disallowed = excludes + if (disallowSelf) setOf(context.packageName) else emptySet()
                 disallowed.forEach { packageName ->
-                    try { builder.addDisallowedApplication(packageName) }
-                    catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                    try {
+                        builder.addDisallowedApplication(packageName)
+                        disallowedAppsCount++
+                        if (packageName == context.packageName) disallowSelfApplied = true
+                    } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
                         Log.w(TAG, "Unknown excluded package: " + packageName, e)
                     }
                 }
             }
 
+            Log.i(TAG, "BUILDER disallowSelf=$disallowSelfApplied")
+            Log.i(TAG, "BUILDER allowedApps=$allowedAppsCount")
+            Log.i(TAG, "BUILDER disallowedApps=$disallowedAppsCount")
+            Log.i(TAG, "BUILDER routes=$configuredRoutes")
+            Log.i(TAG, "BUILDER dns=$configuredDns")
+            Log.i(TAG, "BUILDER mtu=1400")
+            Log.i(TAG, "BUILDER blocking=$blocking")
             Log.d(TAG, "Attempting to create TUN interface...")
             val pfd = try {
                 builder.establish()
