@@ -13,9 +13,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
 import com.vpnproxy.R
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.connection.TrafficValidator
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.diagnostics.BatteryLogger
@@ -76,6 +79,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
+    @Inject lateinit var trafficValidator: TrafficValidator
     @Inject lateinit var batteryLogger: BatteryLogger
 
     private var lifecycleController: VpnLifecycleController? = null
@@ -86,6 +90,7 @@ class VpnProxyService : VpnService() {
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
+    private var passiveTrafficProbeJob: Job? = null
     private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
 
@@ -146,6 +151,10 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = scope.launch {
             connectionCoordinator.state.collect { state ->
                 if (_serviceState.value == ServiceState.Stopping) return@collect
+                if (state !is ConnectionState.Connected) {
+                    passiveTrafficProbeJob?.cancel()
+                    passiveTrafficProbeJob = null
+                }
                 if (state is ConnectionState.Verifying) transitionServiceState(ServiceState.Verifying)
                 else if (state is ConnectionState.Disconnected && _serviceState.value !is ServiceState.Failed) {
                     transitionServiceState(ServiceState.Idle)
@@ -165,6 +174,7 @@ class VpnProxyService : VpnService() {
                         updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
+                        startPassiveTrafficProbe(state.serverName)
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
                         autoSwitcher.startMonitoring()
@@ -481,6 +491,36 @@ class VpnProxyService : VpnService() {
         }
     }
 
+    /**
+     * Debug-only passive probe: records whether the local mixed inbound can carry traffic,
+     * but never sends ConnectionCoordinator events, triggers fallback, or blacklists a server.
+     */
+    private fun startPassiveTrafficProbe(serverName: String) {
+        if (!BuildConfig.DEBUG) return
+        if (passiveTrafficProbeJob?.isActive == true) return
+        passiveTrafficProbeJob = scope.launch {
+            while (_isRunning.value && connectionCoordinator.state.value is ConnectionState.Connected &&
+                _serviceState.value != ServiceState.Stopping
+            ) {
+                val startedAtMs = System.currentTimeMillis()
+                try {
+                    val success = trafficValidator.checkTraffic(serverName)
+                    val elapsedMs = System.currentTimeMillis() - startedAtMs
+                    logCollector.info(TAG, "Passive traffic probe success=$success")
+                    logCollector.info(TAG, "Passive traffic probe elapsedMs=$elapsedMs")
+                } catch (c: kotlinx.coroutines.CancellationException) {
+                    throw c
+                } catch (t: Throwable) {
+                    val elapsedMs = System.currentTimeMillis() - startedAtMs
+                    logCollector.warn(TAG, "Passive traffic probe success=false")
+                    logCollector.warn(TAG, "Passive traffic probe exception=${t.javaClass.simpleName}: ${t.message}")
+                    logCollector.warn(TAG, "Passive traffic probe elapsedMs=$elapsedMs")
+                }
+                delay(DebugFlags.PASSIVE_TRAFFIC_PROBE_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun startBatteryPeriodicLogging() {
         batteryPeriodicJob?.cancel()
         batteryPeriodicJob = scope.launch {
@@ -563,6 +603,8 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = null
         watchdogJob?.cancel()
         watchdogJob = null
+        passiveTrafficProbeJob?.cancel()
+        passiveTrafficProbeJob = null
         vpnJob?.cancel()
         vpnJob = null
         stopBatteryPeriodicLogging()
