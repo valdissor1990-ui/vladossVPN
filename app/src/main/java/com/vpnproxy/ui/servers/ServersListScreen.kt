@@ -69,6 +69,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 @HiltViewModel
 class ServersListViewModel @Inject constructor(
@@ -203,7 +205,7 @@ fun ServerListContent(
     }
 
     val filterOptions = remember(servers) {
-        listOf("Все", "VLESS", "HY2", "TUIC") +
+        listOf("Все", "VLESS", "HY2", "TUIC", "XHTTP extra", "XHTTP empty", "RAW/Reality", "gRPC/Reality", "Другое") +
             servers.map { it.config.providerTag.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
@@ -215,11 +217,23 @@ fun ServerListContent(
         servers.filter { server ->
             val config = server.config
             val transport = config.transport.lowercase()
+            val extraObject = config.extra?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+            val xhttp = transport == "xhttp"
+            val xhttpHasExtra = xhttp && extraObject != null && extraObject.isNotEmpty()
+            val xhttpEmptyExtra = xhttp && (config.extra.isNullOrBlank() || extraObject?.isEmpty() == true)
+            val rawTransport = transport in setOf("", "tcp", "raw", "none", "vless")
             val matchesFilter = when (selectedFilter) {
                 "Все" -> true
                 "HY2" -> transport in setOf("hysteria2", "hy2")
                 "TUIC" -> transport == "tuic"
                 "VLESS" -> transport !in setOf("hysteria2", "hy2", "tuic")
+                "XHTTP extra" -> xhttpHasExtra
+                "XHTTP empty" -> xhttpEmptyExtra
+                "RAW/Reality" -> rawTransport && config.security.equals("reality", ignoreCase = true)
+                "gRPC/Reality" -> transport == "grpc" && config.security.equals("reality", ignoreCase = true)
+                "Другое" -> !xhttp && !rawTransport && transport != "grpc" &&
+                    transport !in setOf("hysteria2", "hy2", "tuic")
                 else -> config.providerTag.equals(selectedFilter, ignoreCase = true)
             }
             val matchesQuery = query.isBlank() ||
