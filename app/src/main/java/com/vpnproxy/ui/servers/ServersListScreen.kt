@@ -199,6 +199,7 @@ fun ServerListContent(
     var query by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("Все") }
     var detailsServer by remember { mutableStateOf<ScoredServer?>(null) }
+    var selectedServer by remember { mutableStateOf<ScoredServer?>(null) }
     val targetNames = remember {
         (PingTargets.ALL + PingTargets.forRegion(PingRegion.EU))
             .associate { it.id to it.displayName }
@@ -293,6 +294,21 @@ fun ServerListContent(
             }
         }
 
+        selectedServer?.let { selected ->
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("Выбран: ${selected.config.name} · ${selected.config.transport}/${selected.config.security}", style = MaterialTheme.typography.bodySmall)
+                Button(
+                    onClick = {
+                        onServerSelected(selected)
+                        selectedServer = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Подключиться к выбранному серверу")
+                }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -382,7 +398,7 @@ fun ServerListContent(
 
                     ServerGridCard(
                         server = scoredServer,
-                        onClick = { onServerSelected(scoredServer) },
+                        onClick = { selectedServer = scoredServer },
                         scoreOverride = scoreLabel,
                         scoreColorOverride = scoreColor,
                         onDetailsClick = { detailsServer = scoredServer }
