@@ -27,7 +27,15 @@ class SingBoxPlatform(
     private val vpnService: VpnService? = null,
     private val splitTunnelManager: SplitTunnelManager? = null
 ) : PlatformInterface {
-    companion object { private const val TAG = "SingBoxPlatform" }
+    companion object {
+        private const val TAG = "SingBoxPlatform"
+        @Volatile var lastTunDiagnostics: String = "TUN not established"
+            private set
+
+        fun updateLastTunDiagnostics(value: String) {
+            lastTunDiagnostics = value
+        }
+    }
 
     @Volatile private var tunDescriptor: ParcelFileDescriptor? = null
 
@@ -144,14 +152,15 @@ class SingBoxPlatform(
                 (excludes + context.packageName).forEach { builder.addDisallowedApplication(it) }
             }
 
+            val tunStack = if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else "system"
+            val strictRoute = if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else true
+            val tunDiagnostics = "routes=$appliedRoutes dns=$appliedDns excludedRoutes=$excludedRoutes " +
+                "stack=$tunStack strict_route=$strictRoute mtu=1400 auto_route=${options.autoRoute}"
+            updateLastTunDiagnostics(tunDiagnostics)
             Log.i(TAG, "TUN routes: $appliedRoutes")
             Log.i(TAG, "TUN dns: $appliedDns")
             Log.i(TAG, "TUN excluded routes: $excludedRoutes")
-            Log.i(
-                TAG,
-                "TUN stack=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_TUN_STACK else "system"} " +
-                    "strict_route=${if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) DebugFlags.DIAG_STRICT_ROUTE else true} mtu=1400 auto_route=${options.autoRoute}"
-            )
+            Log.i(TAG, "TUN stack=$tunStack strict_route=$strictRoute mtu=1400 auto_route=${options.autoRoute}")
             Log.d(TAG, "Attempting to create TUN interface...")
             val pfd = try {
                 builder.establish()
