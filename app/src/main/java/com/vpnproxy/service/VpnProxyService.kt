@@ -32,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -303,7 +304,7 @@ class VpnProxyService : VpnService() {
                             connection.connect()
                             val status = connection.responseCode
                             val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
-                            val success = status in 200..399 || status == 204
+                            val success = status in 200..399
                             logCollector.info(TAG, "PassiveProbe success=$success endpoint=$endpoint status=$status elapsedMs=$elapsed")
                             if (success) {
                                 succeeded = true
