@@ -416,6 +416,9 @@ class AutoSwitcher @Inject constructor(
 
     /** Set the chosen server immediately; no latency probes run on the connection path. */
     fun selectImmediate(config: ParsedConfig, candidates: List<ParsedConfig>): ScoredServer {
+        if (suppressSwitchIfFrozen(config.name, "selectImmediate")) {
+            return _currentServer.value ?: ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+        }
         val filtered = candidates.filterNot { isBlacklisted(it) }
         val selected = ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
         _currentServer.value = selected
@@ -429,6 +432,9 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun selectScanned(server: ScoredServer, candidates: List<ScoredServer>): ScoredServer {
+        if (suppressSwitchIfFrozen(server.config.name, "selectScanned")) {
+            return _currentServer.value ?: server
+        }
         val filtered = candidates.filterNot { isBlacklisted(it.config) }
         val selected = filtered.firstOrNull { sameConfig(it.config, server.config) } ?: server
         _currentServer.value = selected
@@ -506,6 +512,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
+        if (suppressSwitchIfFrozen(configs.firstOrNull()?.name ?: "unknown", "selectBest")) return _currentServer.value
         val allowed = filterUsableServers(configs)
         if (allowed.isEmpty()) {
             logCollector.warn(TAG, "selectBest: all candidates blacklisted")
