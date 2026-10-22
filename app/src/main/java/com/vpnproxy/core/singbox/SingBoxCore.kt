@@ -57,7 +57,6 @@ class SingBoxCore(
                 Libbox.setup(options)
                 setupComplete = true
                 Log.i(TAG, "Libbox.setup() completed")
-                logCollector?.info(TAG, "libbox logger attached")
             } catch (t: Throwable) {
                 Log.e(TAG, "JNI failure during Libbox initialization", t)
                 throw t
@@ -107,6 +106,7 @@ class SingBoxCore(
         try {
             Log.i(TAG, "Initializing libbox 1.14.3")
             setup(context)
+            logCollector?.info(TAG, "libbox logger attached")
             Log.d(TAG, "Creating libbox CommandServer...")
             val createdServer = CommandServer(handler, platform)
             server = createdServer
