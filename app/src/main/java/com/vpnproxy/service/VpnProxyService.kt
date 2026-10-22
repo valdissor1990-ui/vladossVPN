@@ -417,8 +417,32 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
-        // Blacklist the server that just failed so auto-switch/ranking skips it for ~10 min.
-        autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+        val errorMessage = (t.message.orEmpty() + " " + when (reason) {
+            is VpnFailureReason.CoreError -> reason.message
+            else -> reason.toString()
+        }).lowercase()
+        val isConfigError = errorMessage.contains("unknown field") ||
+            errorMessage.contains("decode config") ||
+            errorMessage.contains("invalid config") ||
+            errorMessage.contains("invalid configuration") ||
+            errorMessage.contains("unable to start libbox")
+
+        if (isConfigError) {
+            // Ошибка генерации конфига (unknown field и т.п.) — короткий бан 1с,
+            // чтобы fallback сразу мог взять следующий сервер без проблемного extra.
+            logCollector.warn(
+                TAG,
+                "Configuration error detected for ${autoSwitcher.currentServer.value?.config?.name}. " +
+                    "Skipping long blacklist to allow immediate fallback."
+            )
+            autoSwitcher.markServerFailed(
+                autoSwitcher.currentServer.value?.config,
+                ttlMs = 1_000L
+            )
+        } else {
+            // Сетевая/ядерная ошибка — обычный бан ~10 мин.
+            autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+        }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
     }
 

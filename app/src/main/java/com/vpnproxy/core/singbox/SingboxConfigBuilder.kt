@@ -190,26 +190,43 @@ object SingboxConfigBuilder {
                     // libbox 1.14.3 rejects transport.extra; XHTTP extension fields
                     // must be siblings of type/host/path/mode in the transport object.
                     val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
+
+                    // Whitelist полей, которые точно поддерживает libbox/sing-box для XHTTP.
+                    // Всё остальное (sessionIDTable, seqPlacement, xmux и т.д.) отбрасываем,
+                    // чтобы не получить "unknown field".
+                    val allowedKeys = setOf(
+                        "host", "path", "mode", "headers",
+                        "x_padding_bytes", "x_padding_obfs_mode", "x_padding_key",
+                        "x_padding_header", "x_padding_placement", "x_padding_method",
+                        "no_grpc_header", "no_sse_header",
+                        "uplink_http_method",
+                        "session_placement", "session_key"
+                    )
+
                     extraObject?.forEach { (key, value) ->
-                        if (key != "type") {
-                            // Subscription links use Xray's camelCase names; sing-box JSON
-                            // uses snake_case. Passing xPaddingBytes verbatim makes libbox
-                            // 1.14.3 reject the entire outbound as an unknown field.
-                            val singBoxKey = when (key) {
-                                // Xray uses "sessionID*" names, while sing-box-lx expects
-                                // session_placement/session_key. A generic camelCase conversion
-                                // incorrectly emits session_i_d_placement/session_i_d_key.
-                                "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
-                                "session_id_placement" -> "session_placement"
-                                "sessionIDKey", "sessionIdKey", "sessionKey",
-                                "session_id_key" -> "session_key"
-                                "noGRPCHeader", "noGrpcHeader" -> "no_grpc_header"
-                                "uplinkHTTPMethod" -> "uplink_http_method"
-                                "xPaddingBytes" -> "x_padding_bytes"
-                                else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
-                                    "${match.groupValues[1]}_${match.groupValues[2]}"
-                                }.lowercase()
-                            }
+                        if (key == "type") return@forEach
+
+                        val singBoxKey = when (key) {
+                            "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
+                            "session_id_placement" -> "session_placement"
+                            "sessionIDKey", "sessionIdKey", "sessionKey",
+                            "session_id_key" -> "session_key"
+                            "noGRPCHeader", "noGrpcHeader" -> "no_grpc_header"
+                            "noSSEHeader", "noSseHeader" -> "no_sse_header"
+                            "uplinkHTTPMethod" -> "uplink_http_method"
+                            "xPaddingBytes" -> "x_padding_bytes"
+                            "xPaddingObfsMode" -> "x_padding_obfs_mode"
+                            "xPaddingKey" -> "x_padding_key"
+                            "xPaddingHeader" -> "x_padding_header"
+                            "xPaddingPlacement" -> "x_padding_placement"
+                            "xPaddingMethod" -> "x_padding_method"
+                            else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
+                                "${match.groupValues[1]}_${match.groupValues[2]}"
+                            }.lowercase()
+                        }
+
+                        // Кладем в JSON только разрешенные поля, игнорируя sessionIDTable и прочий мусор
+                        if (singBoxKey in allowedKeys) {
                             put(singBoxKey, value)
                         }
                     }

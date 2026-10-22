@@ -177,4 +177,40 @@ class SingboxConfigBuilderTest {
         assertFalse(transport.containsKey("session_idkey"))
         assertFalse(transport.containsKey("session_i_d_key"))
     }
+
+    @Test
+    fun xhttpDropsUnsupportedExtraFields() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "xhttp.example.org",
+            port = 443,
+            transport = "xhttp",
+            security = "reality",
+            sni = "www.example.org",
+            path = "/xhttp",
+            host = "www.example.org",
+            mode = "auto",
+            fingerprint = "chrome",
+            publicKey = "public-key",
+            shortId = "a1b2",
+            flow = "",
+            name = "xhttp",
+            extra = """{"sessionIDTable":{"a":1},"sessionIDLength":16,"seqPlacement":"header","xmux":true,"xPaddingBytes":"100-200"}"""
+        )
+        val transport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+
+        // Supported field survives
+        assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
+        // Unsupported fields must not appear under any known alias
+        assertFalse(transport.containsKey("session_idtable"))
+        assertFalse(transport.containsKey("session_i_d_table"))
+        assertFalse(transport.containsKey("sessionIDTable"))
+        assertFalse(transport.containsKey("session_id_length"))
+        assertFalse(transport.containsKey("sessionIDLength"))
+        assertFalse(transport.containsKey("seq_placement"))
+        assertFalse(transport.containsKey("seqPlacement"))
+        assertFalse(transport.containsKey("xmux"))
+    }
 }

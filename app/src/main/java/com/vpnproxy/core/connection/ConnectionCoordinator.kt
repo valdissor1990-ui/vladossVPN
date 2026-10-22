@@ -275,8 +275,18 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServerSelected -> {
                 if (event.traceId != null && event.traceId != activeTraceId) {
-                    logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
-                    return
+                    // Если мы активно подключаемся и сервер еще не выбран, принимаем его,
+                    // чтобы избежать зависания и срабатывания UI watchdog через 60 секунд.
+                    val isWaitingForServer = (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting)
+                        && !hasServerSelected
+
+                    if (isWaitingForServer) {
+                        logW("Accepting ServerSelected with stale traceId to prevent timeout: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        activeTraceId = event.traceId // Синхронизируем traceId, чтобы дальнейшие события прошли
+                    } else {
+                        logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        return
+                    }
                 }
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
