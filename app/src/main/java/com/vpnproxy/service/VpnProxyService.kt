@@ -174,6 +174,7 @@ class VpnProxyService : VpnService() {
                         updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
+                        if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) autoSwitcher.markConnected()
                         startPassiveTrafficProbe(state.serverName)
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
@@ -507,25 +508,38 @@ class VpnProxyService : VpnService() {
      * but never sends ConnectionCoordinator events, triggers fallback, or blacklists a server.
      */
     private fun startPassiveTrafficProbe(serverName: String) {
-        if (!BuildConfig.DEBUG) return
+        if (!BuildConfig.DEBUG || !DebugFlags.DIAGNOSTIC_MODE) return
         if (passiveTrafficProbeJob?.isActive == true) return
         passiveTrafficProbeJob = scope.launch {
-            while (_isRunning.value && connectionCoordinator.state.value is ConnectionState.Connected &&
+            while (connectionCoordinator.state.value is ConnectionState.Connected &&
                 _serviceState.value != ServiceState.Stopping
             ) {
                 val startedAtMs = System.currentTimeMillis()
+                logCollector.info(TAG, "Passive traffic probe start server=$serverName proxy=http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}")
                 try {
-                    val success = trafficValidator.checkTraffic(serverName, passiveDiagnostic = true)
+                    val result = trafficValidator.probeTraffic(serverName)
                     val elapsedMs = System.currentTimeMillis() - startedAtMs
-                    logCollector.info(TAG, "Passive traffic probe success=$success")
+                    if (result.exception == null) {
+                        logCollector.info(TAG, "Passive traffic probe success=${result.success} elapsedMs=${result.elapsedMs} status=${result.statusCode ?: -1}")
+                    } else {
+                        val causeChain = generateSequence(result.exception) { it.cause }
+                            .joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message}" }
+                        logCollector.warn(TAG, "Passive traffic probe exception=${result.exception.javaClass.simpleName} message=${result.exception.message}")
+                        logCollector.warn(TAG, "Passive traffic probe success=false elapsedMs=${result.elapsedMs} status=-1")
+                        if (causeChain.contains("SSLHandshakeException", ignoreCase = true) ||
+                            causeChain.contains("Connection reset", ignoreCase = true) ||
+                            causeChain.contains("SocketException", ignoreCase = true)
+                        ) {
+                            logCollector.error(TAG, "PASSIVE PROBE OUTBOUND FAILURE SIGNAL: $causeChain")
+                        }
+                    }
                     logCollector.info(TAG, "Passive traffic probe elapsedMs=$elapsedMs")
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (t: Throwable) {
                     val elapsedMs = System.currentTimeMillis() - startedAtMs
-                    logCollector.warn(TAG, "Passive traffic probe success=false")
-                    logCollector.warn(TAG, "Passive traffic probe exception=${t.javaClass.simpleName}: ${t.message}")
-                    logCollector.warn(TAG, "Passive traffic probe elapsedMs=$elapsedMs")
+                    logCollector.warn(TAG, "Passive traffic probe exception=${t.javaClass.simpleName} message=${t.message}")
+                    logCollector.warn(TAG, "Passive traffic probe success=false elapsedMs=$elapsedMs status=-1")
                 }
                 delay(DebugFlags.PASSIVE_TRAFFIC_PROBE_INTERVAL_MS)
             }
