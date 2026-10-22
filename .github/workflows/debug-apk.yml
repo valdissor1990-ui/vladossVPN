@@ -45,6 +45,7 @@ jobs:
       - name: Report diagnostic build revision
         run: |
           echo "Diagnostic build commit=$(git rev-parse HEAD)"
+          echo "Diagnostic source validation requested"
           git status --short
 
       - name: Compile Direct Debug Kotlin
