@@ -617,6 +617,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun autoReselectIfNeeded() {
+        if (suppressSwitchIfFrozen(_rankedServers.value.firstOrNull()?.config?.name ?: "unknown", "autoReselectIfNeeded")) return
         val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
         if (ranked.isEmpty()) return
         val best = ranked.firstOrNull() ?: return
