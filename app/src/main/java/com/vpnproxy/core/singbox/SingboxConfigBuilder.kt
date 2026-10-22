@@ -63,8 +63,9 @@ object SingboxConfigBuilder {
                 })
                 put("mtu", 1400)
                 put("auto_route", true)
-                put("strict_route", true)
-                put("stack", "system")
+                // DIAG: release → strict_route=true, stack=system
+                put("strict_route", !com.vpnproxy.util.DebugFlags.DEBUG_STRICT_ROUTE_FALSE)
+                put("stack", if (com.vpnproxy.util.DebugFlags.DEBUG_TUN_STACK_GVISOR) "gvisor" else "system")
             })
             add(buildJsonObject {
                 put("type", "mixed")
