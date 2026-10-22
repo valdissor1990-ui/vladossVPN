@@ -191,6 +191,9 @@ class SingboxConfigBuilderTest {
             host = "www.example.org",
             mode = "auto",
             fingerprint = "chrome",
+            publicKey = null,
+            shortId = null,
+            flow = null,
             name = "xhttp",
             extra = """{"sessionIDTable":"","sessionIDLength":"0","sessionIDKey":"","seqKey":"","xPaddingBytes":"","uplinkHTTPMethod":"POST"}"""
         )
