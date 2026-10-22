@@ -508,7 +508,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
             try {
-                val n = subscriptionRepository.refreshAll()
+                val n = subscriptionRepository.refreshAll(force = true)
                 serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
                 logCollector.info(
                     TAG,
