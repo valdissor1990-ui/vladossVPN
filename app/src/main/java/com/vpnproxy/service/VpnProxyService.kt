@@ -389,10 +389,42 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "DIAG DNS_MODE=${diagnosticOptions.dnsMode}")
                 logCollector.info(TAG, "DIAG protect_enabled=true")
                 logCollector.info(TAG, "DIAG disallow_self=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG-SETTINGS DNS_MODE=${diagnosticOptions.dnsMode} TUN_STACK=${diagnosticOptions.tunStack} STRICT_ROUTE=${diagnosticOptions.strictRoute}")
+                logCollector.info(TAG, "DIAG-SETTINGS ROUTE_FINAL=${diagnosticOptions.routeFinal} USE_DISALLOW_SELF_PACKAGE=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG-SETTINGS AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface} PASSIVE_PROBE_ENABLED=${diagnosticOptions.passiveProbeEnabled}")
+                logCollector.info(TAG, "DIAG-SETTINGS FREEZE_AUTOSWITCHER=${diagnosticOptions.freezeAutoSwitcherAfterConnected}")
+                logCollector.info(TAG, "DIAG-SETTINGS applied_at_this_connect=true")
                 logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
                 logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
                 val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, libboxLogFile?.absolutePath)
+                runCatching {
+                    val root = org.json.JSONObject(configJson)
+                    val route = root.optJSONObject("route")
+                    val dnsServer = root.optJSONObject("dns")?.optJSONArray("servers")?.optJSONObject(0)
+                    val inbounds = root.optJSONArray("inbounds")
+                    var tunInbound: org.json.JSONObject? = null
+                    if (inbounds != null) {
+                        for (index in 0 until inbounds.length()) {
+                            val inbound = inbounds.optJSONObject(index) ?: continue
+                            if (inbound.optString("type") == "tun") {
+                                tunInbound = inbound
+                                break
+                            }
+                        }
+                    }
+                    logCollector.info(TAG, "DIAG-EFFECTIVE route.auto_detect_interface=${route?.optBoolean("auto_detect_interface", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].type=${dnsServer?.optString("type")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].detour=${dnsServer?.optString("detour")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].server=${dnsServer?.optString("server")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].stack=${tunInbound?.optString("stack")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].strict_route=${tunInbound?.optBoolean("strict_route", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].auto_route=${tunInbound?.optBoolean("auto_route", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].mtu=${tunInbound?.optInt("mtu", -1) ?: -1}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE route.final=${route?.optString("final")?.takeIf { it.isNotBlank() } ?: "none"}")
+                }.onFailure { t ->
+                    logCollector.error(TAG, "DIAG-EFFECTIVE failed to parse final configJson: ${t.javaClass.simpleName}: ${t.message}")
+                }
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
                 runCatching {
                     val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
