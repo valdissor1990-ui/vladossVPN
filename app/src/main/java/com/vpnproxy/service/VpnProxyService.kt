@@ -115,7 +115,7 @@ class VpnProxyService : VpnService() {
 
         try {
             autoSwitcher.attachVpnService(this)
-            singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            singBoxCore = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager), logCollector)
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
             Log.e(TAG, "VpnProxyService.onCreate failed during Sing-box/service initialization", t)
