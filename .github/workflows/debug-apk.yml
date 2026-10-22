@@ -43,7 +43,9 @@ jobs:
           ./scripts/download_libbox.sh
 
       - name: Report diagnostic build revision
-        run: echo "Diagnostic build commit=$(git rev-parse HEAD)"
+        run: |
+          echo "Diagnostic build commit=$(git rev-parse HEAD)"
+          git status --short
 
       - name: Compile Direct Debug Kotlin
         run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
