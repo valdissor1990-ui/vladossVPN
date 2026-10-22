@@ -44,7 +44,7 @@ sealed class ConnectionEvent {
     data object RequestDisconnect : ConnectionEvent()
     /** UI requested connect (permission granted); selection may still be in progress. */
     data class ConnectRequested(val traceId: String, val userInitiated: Boolean = false) : ConnectionEvent()
-    data class ServerSelected(val server: ScoringEngine.ScoredServer, val traceId: String? = null) : ConnectionEvent()
+    data class ServerSelected(val server: ScoringEngine.ScoredServer, val traceId: String? = null, val manual: Boolean = false) : ConnectionEvent()
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
@@ -82,6 +82,9 @@ class ConnectionCoordinator @Inject constructor(
 
     @Volatile
     private var hasServerSelected: Boolean = false
+
+    @Volatile
+    private var hasConnectedOnce: Boolean = false
 
     private var retryCount: Int = 0
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
@@ -154,6 +157,7 @@ class ConnectionCoordinator @Inject constructor(
         val prev = _state.value
         if (prev == next) return
         _state.value = next
+        if (next is ConnectionState.Connected) hasConnectedOnce = true
         logI("STATE: $prev -> $next | reason=$reason | retry=$retryCount | fatalLock=$isFatalErrorLocked")
         onStateChanged(next)
     }
@@ -278,6 +282,12 @@ class ConnectionCoordinator @Inject constructor(
             }
 
             is ConnectionEvent.ServerSelected -> {
+                if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE &&
+                    DebugFlags.FREEZE_AFTER_FIRST_CONNECTED && hasConnectedOnce && !event.manual
+                ) {
+                    logW("AutoSwitcher suppressed in DIAGNOSTIC_MODE: would switch to ${event.server.config.name} (reason=ConnectionCoordinator.ServerSelected state=$current)")
+                    return
+                }
                 if (event.traceId != null && event.traceId != activeTraceId) {
                     // During initial selection, the actor may receive ConnectRequested and
                     // ServerSelected from adjacent coroutines. Accept the first selection only
