@@ -84,8 +84,16 @@ class AutoSwitcher @Inject constructor(
 
     fun clearDiagnosticFreeze() { diagnosticFreezeAfterConnected = false }
 
-    private fun isDiagnosticFreezeActive(): Boolean = diagnosticFreezeAfterConnected &&
-        connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
+    private fun isDiagnosticFreezeActive(): Boolean {
+        if (!diagnosticFreezeAfterConnected) return false
+        return when (connectionCoordinator.state.value) {
+            is com.vpnproxy.core.connection.ConnectionState.Connecting,
+            is com.vpnproxy.core.connection.ConnectionState.Verifying,
+            is com.vpnproxy.core.connection.ConnectionState.Connected,
+            is com.vpnproxy.core.connection.ConnectionState.Reconnecting -> true
+            else -> false
+        }
+    }
 
     private fun suppressIfFrozen(action: String, target: String = "none"): Boolean {
         if (!isDiagnosticFreezeActive()) return false
