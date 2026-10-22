@@ -462,6 +462,9 @@ class HomeViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(isBusy = false)
                     return@launch
                 }
+                val traceId = TraceId.newId()
+                activeTraceId = traceId
+                connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
                 _uiState.value = _uiState.value.copy(
                     currentServerName = next.config.name,
                     currentRtt = next.latencyMs
@@ -473,7 +476,7 @@ class HomeViewModel @Inject constructor(
                     uuid = next.config.uuid
                 )
                 connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(next))
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, traceId))
                 ensureServiceRunning()
                 delay(300)
                 _uiState.value = _uiState.value.copy(isBusy = false)
