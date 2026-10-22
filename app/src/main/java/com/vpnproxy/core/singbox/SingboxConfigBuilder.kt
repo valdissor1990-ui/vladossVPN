@@ -29,8 +29,12 @@ object SingboxConfigBuilder {
     }.toString()
 
     /** Full VPN configuration. The libbox platform callback creates the Android TUN. */
-    fun buildVpn(config: ParsedConfig, options: RuntimeTunnelOptions = RuntimeTunnelOptions()): String = buildJsonObject {
-        put("log", buildJsonObject { put("level", "warn") })
+    fun buildVpn(config: ParsedConfig, options: RuntimeTunnelOptions = RuntimeTunnelOptions(), logFilePath: String? = null): String = buildJsonObject {
+        put("log", buildJsonObject {
+            put("level", if (logFilePath.isNullOrBlank()) "warn" else "debug")
+            put("timestamp", true)
+            if (!logFilePath.isNullOrBlank()) put("output", logFilePath)
+        })
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 when (options.dnsMode) {
