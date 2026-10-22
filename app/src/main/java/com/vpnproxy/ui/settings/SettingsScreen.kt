@@ -29,6 +29,8 @@ fun SettingsScreen(
     val killSwitch by viewModel.killSwitch.collectAsStateWithLifecycle()
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
     val updateInterval by viewModel.updateInterval.collectAsStateWithLifecycle()
+    val diagnosticTunStack by viewModel.diagnosticTunStack.collectAsStateWithLifecycle()
+    val diagnosticStrictRoute by viewModel.diagnosticStrictRoute.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
@@ -93,6 +95,32 @@ fun SettingsScreen(
                     Text("Выбрать приложения для туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 TextButton(onClick = { showSplitTunnelScreen = true }) { Text("Настроить") }
+            }
+
+            if (BuildConfig.DEBUG) {
+                Text("ДИАГНОСТИКА TUN (DEBUG)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("TUN stack", style = MaterialTheme.typography.bodyLarge)
+                        Text("Применится при следующем подключении", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                    TextButton(onClick = { viewModel.setDiagnosticTunStack(if (diagnosticTunStack == "gvisor") "system" else "gvisor") }) {
+                        Text(diagnosticTunStack)
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("strict_route", style = MaterialTheme.typography.bodyLarge)
+                        Text("Текущее значение: $diagnosticStrictRoute", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                    Switch(checked = diagnosticStrictRoute, onCheckedChange = { viewModel.setDiagnosticStrictRoute(it) })
+                }
             }
 
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
