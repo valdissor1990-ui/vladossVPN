@@ -40,8 +40,12 @@ class LogExporter @Inject constructor(
             val nativeLogFile = File(context.filesDir, "logs/libbox.log")
             val nativeEntries = if (nativeLogFile.isFile) {
                 runCatching {
-                    val bytes = nativeLogFile.readBytes()
-                    val tail = if (bytes.size > 2 * 1024 * 1024) bytes.copyOfRange(bytes.size - 2 * 1024 * 1024, bytes.size) else bytes
+                    val tail = java.io.RandomAccessFile(nativeLogFile, "r").use { file ->
+                        val length = file.length()
+                        val start = (length - 2L * 1024 * 1024).coerceAtLeast(0L)
+                        file.seek(start)
+                        ByteArray((length - start).toInt()).also { file.readFully(it) }
+                    }
                     String(tail, Charsets.UTF_8).lineSequence()
                         .filter { it.isNotBlank() }
                         .takeLast(5000)
