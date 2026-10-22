@@ -6,11 +6,11 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.core.diagnostics.DeviceIdManager
 import com.vpnproxy.core.connection.ConnectionCoordinator
-import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
-import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -188,18 +188,19 @@ class SubscriptionRepository @Inject constructor(
         saveToPrefs()
     }
 
-    suspend fun refreshAll(): Int = refreshMutex.withLock {
-        // Subscription HTTP must not race VPN startup or be routed into a tunnel that is
-        // not ready yet. Keep the currently loaded/cache-backed profiles and refresh later.
-        when (connectionCoordinator.state.value) {
-            is ConnectionState.Connecting,
-            is ConnectionState.Reconnecting,
-            is ConnectionState.Verifying -> {
-                _lastRefreshUsedCache.value = true
-                logCollector.info(TAG, "Skipping subscription refresh while VPN is connecting/verifying; keeping cached profiles")
-                return@withLock _allConfigs.value.size
+    suspend fun refreshAll(force: Boolean = false): Int = refreshMutex.withLock {
+        val state = connectionCoordinator.state.value
+        val vpnActive = isVpnSessionActive(state)
+        // Automatic refresh is allowed only while Disconnected. A caller may set force=true
+        // only for an explicit user action (for example, tapping Refresh in the UI).
+        if (!force && state !is ConnectionState.Disconnected) {
+            _lastRefreshUsedCache.value = true
+            if (BuildConfig.DEBUG && DebugFlags.DISABLE_SUBSCRIPTION_AUTO_REFRESH_WHEN_VPN_ACTIVE && vpnActive) {
+                logCollector.info(TAG, "Skipping subscription refresh while VPN session active; keeping cached profiles")
+            } else {
+                logCollector.info(TAG, "Skipping automatic subscription refresh while state=$state; keeping cached profiles")
             }
-            else -> Unit
+            return@withLock _allConfigs.value.size
         }
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
@@ -222,7 +223,11 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
+                    if (isVpnSessionActive(connectionCoordinator.state.value)) {
+                        logCollector.warn(TAG, "SubRepo refresh failed, ignored while VPN session active: ${sub.name}: ${e.message}")
+                    } else {
+                        logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
+                    }
                     val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
                     if (cached.isNotEmpty()) {
                         if (sub.url == PRIMARY_URL) _lastRefreshUsedCache.value = true
@@ -325,15 +330,20 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-            if (sawTransportFailure && connectionCoordinator.state.value is ConnectionState.Connected) {
-                val message = "Сервер не пропускает трафик"
-                logCollector.warn(TAG, "Connected state but subscription request timed out/failed at transport layer; requesting fallback")
-                connectionCoordinator.send(
-                    ConnectionEvent.CoreError(VpnFailureReason.CoreError(message))
+            if (sawTransportFailure && isVpnSessionActive(connectionCoordinator.state.value)) {
+                logCollector.warn(
+                    TAG,
+                    "SubRepo refresh failed, ignored while VPN session active (transport failure); fallback is disabled for subscription errors"
                 )
             }
             throw IOException("All sources failed", lastFailure)
         }
+
+    private fun isVpnSessionActive(state: ConnectionState): Boolean =
+        state is ConnectionState.Connecting ||
+            state is ConnectionState.Verifying ||
+            state is ConnectionState.Connected ||
+            state is ConnectionState.Reconnecting
 
     private fun isTransportFailure(error: Throwable?): Boolean {
         var current = error
