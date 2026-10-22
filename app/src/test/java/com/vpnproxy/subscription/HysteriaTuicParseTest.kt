@@ -118,4 +118,28 @@ class HysteriaTuicParseTest {
         assertTrue(cfg.extra.orEmpty().contains("x_padding_bytes"))
     }
 
+
+    @Test
+    fun parsesFlatXhttpSessionAliasesWhenExtraIsMissing() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=reality&sni=www.example.org&fp=chrome&pbk=public-key&sid=a1b2" +
+                "&sessionIDPlacement=cookie&sessionIDKey=stream_auth#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertTrue(cfg!!.extra.orEmpty().contains("\"sessionIDPlacement\":\"cookie\""))
+        assertTrue(cfg.extra.orEmpty().contains("\"sessionIDKey\":\"stream_auth\""))
+    }
+
+    @Test
+    fun preservesPlusInDecodedXhttpExtraJson() {
+        val cfg = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@xhttp.example.org:443" +
+                "?type=xhttp&security=reality&sni=www.example.org&fp=chrome&pbk=public-key&sid=a1b2" +
+                "&extra=%7B%22example%22%3A%22a%2Bb%22%7D#XHTTP"
+        )
+        assertNotNull(cfg)
+        assertTrue(cfg!!.extra.orEmpty().contains("a+b"))
+        assertFalse(cfg.extra.orEmpty().contains("a b"))
+    }
 }
