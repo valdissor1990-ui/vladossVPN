@@ -12,12 +12,12 @@ import javax.inject.Singleton
  * The VPN app is removed from user-selected packages. Diagnostic mode can optionally
  * add it to Android's disallowed-application list for comparison testing.
  */
-@Singleton
 data class AppliedApplicationRules(
     val allowedApps: Set<String>,
     val disallowedApps: Set<String>
 )
 
+@Singleton
 class SplitTunnelManager @Inject constructor(
     private val store: UserRulesStore
 ) {
