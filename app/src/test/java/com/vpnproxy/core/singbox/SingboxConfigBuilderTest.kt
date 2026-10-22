@@ -177,4 +177,34 @@ class SingboxConfigBuilderTest {
         assertFalse(transport.containsKey("session_idkey"))
         assertFalse(transport.containsKey("session_i_d_key"))
     }
+
+    @Test
+    fun xhttpDropsUnsupportedSessionIdTableAndDefaultValues() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "xhttp.example.org",
+            port = 443,
+            transport = "xhttp",
+            security = "tls",
+            sni = "www.example.org",
+            path = "/api",
+            host = "www.example.org",
+            mode = "auto",
+            fingerprint = "chrome",
+            name = "xhttp",
+            extra = """{"sessionIDTable":"","sessionIDLength":"0","sessionIDKey":"","seqKey":"","xPaddingBytes":"","uplinkHTTPMethod":"POST"}"""
+        )
+        val transport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+
+        assertFalse(transport.containsKey("session_idtable"))
+        assertFalse(transport.containsKey("session_id_table"))
+        assertFalse(transport.containsKey("sessionIDTable"))
+        assertFalse(transport.containsKey("session_id_length"))
+        assertFalse(transport.containsKey("session_key"))
+        assertFalse(transport.containsKey("seq_key"))
+        assertFalse(transport.containsKey("x_padding_bytes"))
+        assertEquals("POST", transport["uplink_http_method"]!!.jsonPrimitive.content)
+    }
 }
