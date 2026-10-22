@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.connection.TraceId
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
@@ -22,6 +23,13 @@ import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionRepository
+import com.vpnproxy.BuildConfig
+import com.vpnproxy.util.DebugFlags
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -527,12 +535,44 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private fun maskOutboundJson(element: JsonElement): JsonElement = when (element) {
+        is JsonObject -> JsonObject(element.filterKeys {
+            it !in setOf("uuid", "password", "private_key", "token", "short_id")
+        }.mapValues { (_, value) -> maskOutboundJson(value) })
+        is JsonArray -> JsonArray(element.map(::maskOutboundJson))
+        else -> element
+    }
+
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
-        // Reject a known-failed exact profile before changing the active connection trace.
-        if (!autoSwitcher.forceSelect(server)) {
-            logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name} (blacklisted or switch in progress)")
+        if (!autoSwitcher.selectManual(server)) {
+            logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name} (selection operation already active)")
             return
         }
+        val config = server.config
+        val rawExtra = config.extra
+        val extraState = when {
+            rawExtra.isNullOrBlank() -> "null"
+            runCatching { Json.parseToJsonElement(rawExtra) }.getOrNull() is JsonObject &&
+                (runCatching { Json.parseToJsonElement(rawExtra) as JsonObject }.getOrNull()?.isEmpty() == true) -> "{}"
+            else -> "has_fields"
+        }
+        logCollector.info(TAG, "Manual connect to ${config.name} transport=${config.transport} security=${config.security} extra=$extraState")
+        if (config.transport.equals("xhttp", ignoreCase = true)) {
+            val (included, omitted) = SingboxConfigBuilder.xhttpExtraDiagnostics(config)
+            logCollector.info(TAG, "XHTTP included keys=$included omitted keys=$omitted")
+        }
+        runCatching { SingboxConfigBuilder.buildOutbound(config) }.onSuccess { outbound ->
+            val transportObject = outbound["transport"] as? JsonObject
+            val tlsObject = outbound["tls"] as? JsonObject
+            val tlsServerName = (tlsObject?.get("server_name") as? JsonPrimitive)?.content ?: "none"
+            logCollector.info(
+                TAG,
+                "Outbound for ${config.name}: type=${(outbound["type"] as? JsonPrimitive)?.content ?: "unknown"} " +
+                    "transport=${(transportObject?.get("type") as? JsonPrimitive)?.content ?: "raw"} " +
+                    "tls.server_name=$tlsServerName included_extra=${SingboxConfigBuilder.xhttpExtraDiagnostics(config).first} " +
+                    "config=${maskOutboundJson(outbound)}"
+            )
+        }.onFailure { logCollector.warn(TAG, "Outbound diagnostic summary failed for ${config.name}: ${it.message}") }
         manuallySelectedServer = server
 
         // A manual choice supersedes any in-flight automatic ranking. Do not cancel the
@@ -555,7 +595,7 @@ class HomeViewModel @Inject constructor(
                     currentRtt = server.latencyMs
                 )
                 connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId, manual = true))
                 if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
                     connectionCoordinator.state.value is ConnectionState.Error
                 ) {
