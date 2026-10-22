@@ -174,7 +174,10 @@ class VpnProxyService : VpnService() {
                         updateNotification("Проверка интернет-трафика…")
                     }
                     is ConnectionState.Connected -> {
-                        if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) autoSwitcher.markConnected()
+                        if (BuildConfig.DEBUG && DebugFlags.DIAGNOSTIC_MODE) {
+                            autoSwitcher.markConnected()
+                            logCollector.info(TAG, "TUN actual routes after Connected: ${SingBoxPlatform.lastTunDiagnostics}")
+                        }
                         startPassiveTrafficProbe(state.serverName)
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
