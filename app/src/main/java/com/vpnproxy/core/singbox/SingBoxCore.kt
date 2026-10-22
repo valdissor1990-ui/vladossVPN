@@ -2,6 +2,7 @@ package com.vpnproxy.core.singbox
 
 import android.content.Context
 import android.util.Log
+import com.vpnproxy.logging.LogCollector
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.Libbox
@@ -18,7 +19,8 @@ import java.util.Locale
  */
 class SingBoxCore(
     private val context: Context,
-    private val platform: SingBoxPlatform
+    private val platform: SingBoxPlatform,
+    private val logCollector: LogCollector
 ) {
     companion object {
         private const val TAG = "SingBoxCore"
@@ -33,7 +35,7 @@ class SingBoxCore(
                 workingPath = working.absolutePath
                 tempPath = context.cacheDir.absolutePath
                 logMaxLines = 3000
-                debug = true
+                debug = com.vpnproxy.BuildConfig.DEBUG
                 appVersion = runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
                 }.getOrDefault("1")
@@ -54,6 +56,7 @@ class SingBoxCore(
                 Libbox.setup(options)
                 setupComplete = true
                 Log.i(TAG, "Libbox.setup() completed")
+                logCollector.info(TAG, "libbox logger attached")
             } catch (t: Throwable) {
                 Log.e(TAG, "JNI failure during Libbox initialization", t)
                 throw t
@@ -85,7 +88,9 @@ class SingBoxCore(
             Log.w(TAG, "unsupported CommandServerHandler method: triggerNativeCrash")
         }
         override fun writeDebugMessage(message: String?) {
-            Log.d(TAG, message.orEmpty())
+            val line = message.orEmpty()
+            logCollector.debug("LIBBOX", "[LIBBOX] $line")
+            Log.d(TAG, line)
         }
         override fun connectSSHAgent(): Int {
             Log.w(TAG, "unsupported CommandServerHandler method: connectSSHAgent")
