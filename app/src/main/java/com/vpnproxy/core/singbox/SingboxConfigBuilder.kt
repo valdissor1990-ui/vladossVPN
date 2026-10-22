@@ -63,7 +63,7 @@ object SingboxConfigBuilder {
                         put("type", "tls"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 853)
                     })
                     "proxy_dot_1111" -> add(buildJsonObject {
-                        put("type", "tls"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 853); put("detour", "proxy")
+                        put("type", "tls"); put("tag", "proxy-dot"); put("server", "1.1.1.1"); put("server_port", 853); put("detour", "proxy")
                     })
                     "system_no_hijack" -> add(buildJsonObject {
                         put("type", "local"); put("tag", "direct-dns")
@@ -71,7 +71,7 @@ object SingboxConfigBuilder {
                     else -> error("Unsupported diagnostic DNS mode: ${options.dnsMode}")
                 }
             })
-            put("final", if (options.dnsMode == "proxy_dot_8888") "proxy-dot" else "direct-dns")
+            put("final", if (options.dnsMode == "proxy_dot_8888" || options.dnsMode == "proxy_dot_1111") "proxy-dot" else "direct-dns")
             put("strategy", "prefer_ipv4")
         })
         put("inbounds", buildJsonArray {
@@ -101,7 +101,7 @@ object SingboxConfigBuilder {
             add(buildJsonObject { put("type", "block"); put("tag", "block") })
         })
         put("route", buildJsonObject {
-            put("auto_detect_interface", true)
+            put("auto_detect_interface", options.autoDetectInterface)
             put("rules", buildJsonArray {
                 add(buildJsonObject { put("action", "sniff") })
                 if (options.dnsMode != "system_no_hijack") add(buildJsonObject {
