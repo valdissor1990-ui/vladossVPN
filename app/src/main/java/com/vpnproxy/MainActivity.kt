@@ -135,8 +135,10 @@ private fun VPNProxyNavHost(
             SettingsScreen(onBack = { navController.popBackStack() })
         }
 
-        composable(Route.Debug.path) {
-            DebugScreen(onBack = { navController.popBackStack() })
+        if (BuildConfig.DEBUG) {
+            composable(Route.Debug.path) {
+                DebugScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }
