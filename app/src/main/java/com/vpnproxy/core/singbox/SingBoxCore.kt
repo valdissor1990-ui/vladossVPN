@@ -13,6 +13,7 @@ import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.SystemProxyStatus
 import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Owns the libbox 1.14.3 CommandServer in the application's main process.
@@ -67,6 +68,8 @@ class SingBoxCore(
     @Volatile private var commandServer: CommandServer? = null
     @Volatile private var activeConfig: String? = null
 
+    private val firstOutboundLogged = AtomicBoolean(false)
+
     private val handler = object : CommandServerHandler {
         override fun serviceStop() {
             Log.w(TAG, "libbox requested service stop")
@@ -90,6 +93,17 @@ class SingBoxCore(
         override fun writeDebugMessage(message: String?) {
             val line = message.orEmpty()
             logCollector?.debug("LIBBOX", "[LIBBOX] $line")
+            if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
+                logCollector?.error("LIBBOX", "[LIBBOX] exact handshake failure: $line")
+            }
+            if (line.contains("outbound connection to ", ignoreCase = true) &&
+                line.contains("established", ignoreCase = true) &&
+                firstOutboundLogged.compareAndSet(false, true)
+            ) {
+                val endpoint = Regex("outbound connection to ([^\\s]+)", RegexOption.IGNORE_CASE)
+                    .find(line)?.groupValues?.getOrNull(1) ?: "unknown"
+                logCollector?.info("LIBBOX", "Outbound established: $endpoint via protect")
+            }
             Log.d(TAG, line)
         }
         override fun connectSSHAgent(): Int {
