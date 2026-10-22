@@ -146,4 +146,35 @@ class SingboxConfigBuilderTest {
         assertEquals("public-key", tls["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
         assertEquals("a1b2", tls["reality"]!!.jsonObject["short_id"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun xhttpSessionIdAliasesMapToSingBoxCanonicalNames() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "xhttp.example.org",
+            port = 443,
+            transport = "xhttp",
+            security = "reality",
+            sni = "www.example.org",
+            path = "/xhttp",
+            host = "www.example.org",
+            mode = "auto",
+            fingerprint = "chrome",
+            publicKey = "public-key",
+            shortId = "a1b2",
+            flow = "",
+            name = "xhttp",
+            extra = """{"sessionIDPlacement":"cookie","sessionIDKey":"stream_auth"}"""
+        )
+        val transport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+
+        assertEquals("cookie", transport["session_placement"]!!.jsonPrimitive.content)
+        assertEquals("stream_auth", transport["session_key"]!!.jsonPrimitive.content)
+        assertFalse(transport.containsKey("session_idplacement"))
+        assertFalse(transport.containsKey("session_i_d_placement"))
+        assertFalse(transport.containsKey("session_idkey"))
+        assertFalse(transport.containsKey("session_i_d_key"))
+    }
 }
