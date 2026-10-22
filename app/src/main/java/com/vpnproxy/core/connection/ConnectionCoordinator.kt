@@ -208,9 +208,7 @@ class ConnectionCoordinator @Inject constructor(
                     logI("Manual connect requested — fatal lock cleared")
                 }
                 activeTraceId = event.traceId
-                TraceId.newId() // keep generator in sync if needed
-                // Force the known id from the event
-                // (TraceId object may have a newer id from UI; prefer event)
+                TraceId.newId()
                 retryCount = 0
                 logI("ConnectRequested — enter Connecting (selection may still run)")
                 when (current) {
@@ -275,14 +273,12 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServerSelected -> {
                 if (event.traceId != null && event.traceId != activeTraceId) {
-                    // Если мы активно подключаемся и сервер еще не выбран, принимаем его,
-                    // чтобы избежать зависания и срабатывания UI watchdog через 60 секунд.
                     val isWaitingForServer = (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting)
                         && !hasServerSelected
 
                     if (isWaitingForServer) {
                         logW("Accepting ServerSelected with stale traceId to prevent timeout: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
-                        activeTraceId = event.traceId // Синхронизируем traceId, чтобы дальнейшие события прошли
+                        activeTraceId = event.traceId
                     } else {
                         logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
                         return
@@ -393,6 +389,11 @@ class ConnectionCoordinator @Inject constructor(
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
+                if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION) {
+                    logW("DEBUG: SKIP_TRAFFIC_VALIDATION=true — пропуск проверки трафика")
+                    send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true))
+                    return
+                }
                 scope.launch {
                     val passed = trafficValidator.checkTraffic(event.serverName)
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
@@ -415,9 +416,6 @@ class ConnectionCoordinator @Inject constructor(
                     val failedConfig = activeScoredServer?.config
                     logW("Server does not pass traffic: ${event.serverName} (consecutiveFailures=$trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES; remainingCandidates=${fallbackCandidates.size})")
 
-                    // Subscription feeds often contain many fingerprint variants of the same
-                    // endpoint. Three failed validations on one endpoint should move selection
-                    // to a different endpoint, not enable a fatal lock while dozens remain.
                     if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES && failedConfig != null) {
                         val before = fallbackCandidates.size
                         fallbackCandidates = fallbackCandidates.filterNot { candidate ->

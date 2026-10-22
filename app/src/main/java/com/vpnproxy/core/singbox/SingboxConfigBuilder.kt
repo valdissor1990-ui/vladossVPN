@@ -37,17 +37,15 @@ object SingboxConfigBuilder {
             put("level", "debug")
             put("timestamp", true)
         })
+        // DIAG: direct UDP DNS without detour (DoT via proxy may fail if server blocks 853)
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("type", "tls")
-                    put("tag", "remote-dns")
-                    put("server", "1.1.1.1")
-                    put("server_port", 853)
-                    put("detour", "proxy")
+                    put("tag", "direct-dns")
+                    put("server", "8.8.8.8")
                 })
             })
-            put("final", "remote-dns")
+            put("final", "direct-dns")
             put("strategy", "prefer_ipv4")
         })
         put("inbounds", buildJsonArray {
