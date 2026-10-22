@@ -115,7 +115,9 @@ class ServerScanner @Inject constructor(
         }
 
     suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
-        autoSwitcher.clearBlacklist()
+        // Refreshing subscription data invalidates reachability results, not failure history.
+        // AutoSwitcher expires blacklist entries by TTL; clearing them here retries known-bad
+        // profiles on every refresh and can trap startup in the same failing endpoint.
         scannedConfigKeys = emptySet()
         _scannedServers.value = emptyList()
         return scanAll(configs, force = true)
