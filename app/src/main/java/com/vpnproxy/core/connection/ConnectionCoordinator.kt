@@ -275,8 +275,16 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServerSelected -> {
                 if (event.traceId != null && event.traceId != activeTraceId) {
-                    logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
-                    return
+                    // During initial selection, the actor may receive ConnectRequested and
+                    // ServerSelected from adjacent coroutines. Accept the first selection only
+                    // when there is no selected server yet; once selection exists, stale events
+                    // must still be rejected to prevent an older request replacing a newer one.
+                    if (current is ConnectionState.Connecting && !hasServerSelected && activeScoredServer == null) {
+                        logW("Accepting initial ServerSelected with mismatched traceId because no server is selected yet")
+                    } else {
+                        logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        return
+                    }
                 }
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
