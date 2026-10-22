@@ -128,7 +128,7 @@ class AutoSwitcher @Inject constructor(
     fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
         val target = config ?: return
         if (diagnosticFreezeActive()) {
-            logCollector.warn(TAG, "AutoSwitcher suppressed in DIAGNOSTIC_MODE: would switch to ${target.name} (reason=markServerFailed/blacklist suppressed)")
+            logCollector.warn(TAG, "AutoSwitcher suppressed in DIAGNOSTIC_MODE: would blacklist ${target.name} (reason=markServerFailed)")
             return
         }
         val key = serverKey(target)
