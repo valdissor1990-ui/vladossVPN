@@ -11,12 +11,16 @@ import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class TrafficProbeResult(
+    val success: Boolean,
+    val elapsedMs: Long,
+    val statusCode: Int? = null,
+    val exception: Throwable? = null
+)
+
 /**
- * Validates actual traffic through the active Sing-box outbound.
- *
- * The app package is excluded from Android's VPN route to prevent routing loops, so a plain
- * HttpURLConnection would bypass the tunnel and test the underlying network instead. Connect
- * explicitly to Sing-box's local mixed inbound; it routes the request through the selected proxy.
+ * Probes the active Sing-box outbound through its local mixed inbound. The app package may be
+ * excluded from Android's VPN route, so the probe must explicitly use the local HTTP proxy.
  */
 @Singleton
 class TrafficValidator @Inject constructor(
@@ -27,7 +31,18 @@ class TrafficValidator @Inject constructor(
         private const val PROBE_URL = "https://cp.cloudflare.com/generate_204"
     }
 
-    suspend fun checkTraffic(serverName: String? = null, passiveDiagnostic: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+    suspend fun checkTraffic(serverName: String? = null, passiveDiagnostic: Boolean = false): Boolean {
+        val result = probeTraffic(serverName)
+        if (passiveDiagnostic && result.exception != null) {
+            logCollector.warn(
+                TAG,
+                "Passive traffic probe exception=${result.exception.javaClass.simpleName}: ${result.exception.message}"
+            )
+        }
+        return result.success
+    }
+
+    suspend fun probeTraffic(serverName: String? = null): TrafficProbeResult = withContext(Dispatchers.IO) {
         val startedAtNs = System.nanoTime()
         var connection: HttpURLConnection? = null
         try {
@@ -50,30 +65,27 @@ class TrafficValidator @Inject constructor(
                 "Traffic probe completed",
                 mapOf(
                     "server" to (serverName ?: "unknown"),
-                    "proxy" to "127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
+                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
                     "status" to status,
                     "elapsedMs" to elapsedMs,
                     "success" to success
                 )
             )
-            success
+            TrafficProbeResult(success = success, elapsedMs = elapsedMs, statusCode = status)
         } catch (e: Exception) {
             val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
-            if (passiveDiagnostic) {
-                logCollector.warn(TAG, "Passive traffic probe exception=${e.javaClass.simpleName}: ${e.message}")
-            }
             logCollector.warn(
                 TAG,
                 "Traffic probe failed",
                 mapOf(
                     "server" to (serverName ?: "unknown"),
-                    "proxy" to "127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
+                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
                     "elapsedMs" to elapsedMs,
                     "exception" to e.javaClass.simpleName,
                     "message" to (e.message ?: "")
                 )
             )
-            false
+            TrafficProbeResult(success = false, elapsedMs = elapsedMs, exception = e)
         } finally {
             connection?.disconnect()
         }
