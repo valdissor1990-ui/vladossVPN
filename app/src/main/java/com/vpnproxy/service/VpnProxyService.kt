@@ -72,6 +72,7 @@ class VpnProxyService : VpnService() {
     private var vpnJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
+    private var passiveProbeJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
 
     @Volatile
@@ -256,6 +257,7 @@ class VpnProxyService : VpnService() {
                 isReconnecting.set(false)
                 updateNotification(getString(R.string.state_connected))
                 logCollector.info(TAG, "Sing-box VPN started successfully")
+                startPassiveProbe(parsed.name)
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -268,6 +270,57 @@ class VpnProxyService : VpnService() {
 
                 isReconnecting.set(false)
             }
+        }
+    }
+
+    /** Passive diagnostic only: never changes connection state or switches servers. */
+    private fun startPassiveProbe(serverName: String) {
+        passiveProbeJob?.cancel()
+        passiveProbeJob = scope.launch {
+            val endpoints = listOf(
+                "http://cp.cloudflare.com/generate_204",
+                "http://neverssl.com",
+                "https://www.gstatic.com/generate_204"
+            )
+            logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
+            while (_isRunning.value && kotlinx.coroutines.currentCoroutineContext().isActive) {
+                var succeeded = false
+                for (endpoint in endpoints) {
+                    if (!_isRunning.value) break
+                    val startedAt = android.os.SystemClock.elapsedRealtime()
+                    logCollector.info(TAG, "PassiveProbe start server=$serverName proxy=http://127.0.0.1:10809 endpoint=$endpoint")
+                    try {
+                        val proxy = java.net.Proxy(
+                            java.net.Proxy.Type.HTTP,
+                            java.net.InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
+                        )
+                        val connection = java.net.URL(endpoint).openConnection(proxy) as java.net.HttpURLConnection
+                        try {
+                            connection.connectTimeout = 5000
+                            connection.readTimeout = 5000
+                            connection.instanceFollowRedirects = false
+                            connection.requestMethod = "GET"
+                            connection.connect()
+                            val status = connection.responseCode
+                            val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
+                            val success = status in 200..399 || status == 204
+                            logCollector.info(TAG, "PassiveProbe success=$success endpoint=$endpoint status=$status elapsedMs=$elapsed")
+                            if (success) {
+                                succeeded = true
+                                break
+                            }
+                        } finally {
+                            connection.disconnect()
+                        }
+                    } catch (t: Throwable) {
+                        if (t is kotlinx.coroutines.CancellationException) throw t
+                        val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
+                        logCollector.warn(TAG, "PassiveProbe success=false endpoint=$endpoint elapsedMs=$elapsed exception=${t.javaClass.name} message=${t.message}")
+                    }
+                }
+                if (_isRunning.value) delay(5_000)
+            }
+            logCollector.info(TAG, "PassiveProbe lifecycle stopped server=$serverName")
         }
     }
 
@@ -295,6 +348,8 @@ class VpnProxyService : VpnService() {
         throwable: Throwable? = null
     ) {
         try {
+            passiveProbeJob?.cancel()
+            passiveProbeJob = null
             autoSwitcher.stopMonitoring()
             trafficCollector.stop()
             singBoxCore?.stop()
@@ -317,6 +372,8 @@ class VpnProxyService : VpnService() {
         networkReconnector = null
         watchdogJob?.cancel()
         watchdogJob = null
+        passiveProbeJob?.cancel()
+        passiveProbeJob = null
         isReconnecting.set(false)
         kotlinx.coroutines.runBlocking { stopVpnInternal("onDestroy invoked") }
         scope.cancel()
