@@ -79,7 +79,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("boolean", "LOG_DEBUG", "false")
+            buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
+        buildConfigField("boolean", "LOG_DEBUG", "false")
             signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
                 signingConfigs.getByName("release")
             else signingConfigs.getByName("debug")
