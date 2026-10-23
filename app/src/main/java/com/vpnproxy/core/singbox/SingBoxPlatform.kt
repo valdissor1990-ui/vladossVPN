@@ -144,11 +144,17 @@ class SingBoxPlatform(
             val diagnosticOptions = DiagnosticSettings.load(context)
             val disallowSelf = diagnosticOptions.useDisallowSelfPackage
             Log.i(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=" + disallowSelf)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=$disallowSelf")
             Log.i(TAG, "DIAG AUTO_DETECT_INTERFACE=" + diagnosticOptions.autoDetectInterface)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface}")
             Log.i(TAG, "DIAG TUN_STACK=" + diagnosticOptions.tunStack)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG TUN_STACK=${diagnosticOptions.tunStack}")
             Log.i(TAG, "DIAG DNS_MODE=" + diagnosticOptions.dnsMode)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG DNS_MODE=${diagnosticOptions.dnsMode}")
             Log.i(TAG, "DIAG protect_enabled=true")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG protect_enabled=true")
             Log.i(TAG, "DIAG disallow_self=" + disallowSelf)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG disallow_self=$disallowSelf")
 
             if (splitTunnelManager != null) {
                 val applied = runBlocking { splitTunnelManager.applyRules(builder, context, includes, excludes, disallowSelf) }
@@ -178,12 +184,19 @@ class SingBoxPlatform(
             }
 
             Log.i(TAG, "BUILDER disallowSelf=$disallowSelfApplied")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER disallowSelf=$disallowSelfApplied")
             Log.i(TAG, "BUILDER allowedApps=$allowedAppsCount")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER allowedApps=$allowedAppsCount")
             Log.i(TAG, "BUILDER disallowedApps=$disallowedAppsCount")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER disallowedApps=$disallowedAppsCount")
             Log.i(TAG, "BUILDER routes=$configuredRoutes")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER routes=$configuredRoutes")
             Log.i(TAG, "BUILDER dns=$configuredDns")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER dns=$configuredDns")
             Log.i(TAG, "BUILDER mtu=1400")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER mtu=1400")
             Log.i(TAG, "BUILDER blocking=$blocking")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER blocking=$blocking")
             Log.d(TAG, "Attempting to create TUN interface...")
             val pfd = try {
                 builder.establish()
@@ -199,6 +212,7 @@ class SingBoxPlatform(
             tunDescriptor = pfd
             Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
             Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
+            com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
             return pfd.fd
         } catch (e: VpnStartException) {
             throw e
