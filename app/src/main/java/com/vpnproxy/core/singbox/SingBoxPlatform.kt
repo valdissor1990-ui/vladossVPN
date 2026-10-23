@@ -469,18 +469,12 @@ class SingBoxPlatform(
                     .mapNotNull { it.gateway }
                     .filterNot { it.isAnyLocalAddress }
                     .mapNotNull { it.hostAddress }
-                val searchDomains = linkProperties.domains
-                    ?.split(' ')
-                    ?.filter { it.isNotBlank() }
-                    .orEmpty()
-
                 val boxInterface = io.nekohasekai.libbox.NetworkInterface().apply {
                     name = interfaceName
                     index = javaInterface.index
                     mtu = runCatching { javaInterface.mtu }.getOrDefault(0)
                     this.addresses = StringIteratorArray(addresses.iterator())
                     dnsServer = StringIteratorArray(dnsServers.iterator())
-                    dnsSearchDomain = StringIteratorArray(searchDomains.iterator())
                     gateway = StringIteratorArray(gateways.iterator())
                     type = when {
                         capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
