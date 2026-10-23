@@ -39,6 +39,8 @@ internal class VpnLifecycleController(
             stopSession()
             delay(restartDelayMs)
             logCollector.info("VpnLifecycleController", "Restart lifecycle: cooldown elapsed; starting same selected session")
+        } else {
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: core already stopped; starting selected session")
         }
         check(!closed) { "VPN lifecycle controller is closed" }
         startSession()
