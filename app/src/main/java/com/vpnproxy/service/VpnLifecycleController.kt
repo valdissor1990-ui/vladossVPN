@@ -55,7 +55,7 @@ internal class VpnLifecycleController(
     fun close() {
         if (closed) return
         closed = true
-        runCatching { core.stop() }
+        runCatching { core.stopBlocking().getOrThrow() }
             .onFailure { logCollector.warn("VpnLifecycleController", "Sing-box cleanup failed: ${it.message}") }
     }
 }
