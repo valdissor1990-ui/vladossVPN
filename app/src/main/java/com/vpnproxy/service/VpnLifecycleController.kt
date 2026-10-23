@@ -35,8 +35,10 @@ internal class VpnLifecycleController(
     ) = lifecycleMutex.withLock {
         check(!closed) { "VPN lifecycle controller is closed" }
         if (coreIsRunning()) {
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: stop requested; restartDelayMs=$restartDelayMs")
             stopSession()
             delay(restartDelayMs)
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: cooldown elapsed; starting same selected session")
         }
         check(!closed) { "VPN lifecycle controller is closed" }
         startSession()
