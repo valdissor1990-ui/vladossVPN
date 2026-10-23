@@ -2,7 +2,6 @@ package com.vpnproxy.logging
 
 import android.content.Context
 import android.util.Log
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,9 +14,13 @@ import javax.inject.Singleton
 
 /** In-memory ring buffer plus continuously persisted app diagnostics. */
 @Singleton
-class LogCollector @Inject constructor(
-    @ApplicationContext private val context: Context
-) {
+class LogCollector @Inject constructor() {
+    @Volatile private var appContext: Context? = null
+
+    /** Called by Application before planting Timber trees; no-op persistence in isolated unit tests. */
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+    }
     companion object {
         private const val TAG = "LogCollector"
         private const val MAX_ENTRIES = 10_000
@@ -33,7 +36,6 @@ class LogCollector @Inject constructor(
     private var currentFilterTag: String? = null
     private var currentSearchQuery: String? = null
 
-    private val appLogFile: File get() = File(context.filesDir, "logs/app.log")
 
     fun add(entry: LogEntry) {
         buffer.addLast(entry)
@@ -47,14 +49,15 @@ class LogCollector @Inject constructor(
     @Synchronized
     private fun persistEntry(entry: LogEntry) {
         try {
-            val file = appLogFile
+            val baseContext = appContext ?: return
+            val file = File(baseContext.filesDir, "logs/app.log")
             file.parentFile?.mkdirs()
             if (file.exists() && file.length() >= MAX_FILE_BYTES) {
                 val previous = File(file.parentFile, "app.log.1")
                 if (previous.exists()) previous.delete()
                 if (!file.renameTo(previous)) Log.w(TAG, "Could not rotate app log ${file.absolutePath}")
             }
-            FileOutputStream(appLogFile, true).use { output ->
+            FileOutputStream(File(baseContext.filesDir, "logs/app.log"), true).use { output ->
                 output.write((entry.toFormattedString(maskSensitive = true) + "\n").toByteArray(Charsets.UTF_8))
                 output.flush()
                 runCatching { output.fd.sync() }
