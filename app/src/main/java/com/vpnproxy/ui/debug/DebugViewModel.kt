@@ -156,6 +156,13 @@ class DebugViewModel @Inject constructor(
         }
     }
 
+    fun checkExport() {
+        viewModelScope.launch {
+            _message.value = runCatching { logExporter.checkExport() }
+                .getOrElse { "Проверка экспорта завершилась ошибкой: ${it.javaClass.simpleName}: ${it.message}" }
+        }
+    }
+
     fun export() {
         viewModelScope.launch {
             val uri = logExporter.exportToDownloads()
