@@ -265,15 +265,35 @@ class SubscriptionRepository @Inject constructor(
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
                         .header("x-hwid", hwid)
-                        .header("x-device-os", "android")
+                        .header("x-device-os", "Android")
                         .header("x-ver-os", Build.VERSION.RELEASE ?: "")
-                        .header("x-device-model", Build.MODEL ?: "")
+                        .header(
+                            "x-device-model",
+                            listOf(Build.MANUFACTURER, Build.MODEL)
+                                .filter { !it.isNullOrBlank() }
+                                .distinct()
+                                .joinToString(" ")
+                                .ifBlank { "Android device" }
+                        )
                     if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
                         requestBuilder.header("If-None-Match", cachedEtag)
                     }
                     runInterruptible(Dispatchers.IO) {
                         httpClient.newCall(requestBuilder.build()).execute()
                     }.use { response ->
+                        if (response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
+                            logCollector.error(
+                                TAG,
+                                "Subscription server rejected or ignored x-hwid; check panel HWID contract"
+                            )
+                            throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
+                        }
+                        if (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                            response.header("x-hwid-limit").equals("true", ignoreCase = true)
+                        ) {
+                            logCollector.warn(TAG, "Subscription server reports HWID device limit reached")
+                            throw IOException("HWID device limit reached; remove an old device in the subscription panel")
+                        }
                         if (response.code == 304) {
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
