@@ -469,7 +469,7 @@ class AutoSwitcher @Inject constructor(
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
-                    .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+                    .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }).thenBy { it })
                 if (connectionCoordinator.activeTraceId != rankingTraceId) {
                     logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
                     return@launch
@@ -530,7 +530,7 @@ class AutoSwitcher @Inject constructor(
         val ordered = russian + foreign
         val results = healthChecker.testLatency(ordered)
         val ranked = scoringEngine.computeScore(results)
-            .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }, { it.latencyMs }))
+            .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }).thenBy { it })
         _rankedServers.value = ranked
         val best = ranked.firstOrNull() ?: return null
         _currentServer.value = best
