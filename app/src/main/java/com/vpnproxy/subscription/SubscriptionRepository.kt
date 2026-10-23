@@ -89,9 +89,9 @@ class SubscriptionRepository @Inject constructor(
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(1500, TimeUnit.MILLISECONDS)
-        .readTimeout(1500, TimeUnit.MILLISECONDS)
-        .callTimeout(1500, TimeUnit.MILLISECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -359,8 +359,9 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
         val (body, sourceUrl) = fetchWithFallback(sub)
-        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, size=${body.length}")
-        return parser.parse(body, providerTag = sub.name)
+        val parsed = parser.parse(body, providerTag = sub.name)
+        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
+        return parsed
     }
 
     private fun parseUserInfo(info: String, subId: String) {
