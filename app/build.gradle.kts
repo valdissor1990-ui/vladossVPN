@@ -39,7 +39,7 @@ android {
         targetSdk = 35
         versionCode = autoVersionCode
         versionName = autoVersionName
-        buildConfigField("String", "GIT_COMMIT", "\\"${System.getenv("GITHUB_SHA") ?: "local"}\\"")
+        buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
 
