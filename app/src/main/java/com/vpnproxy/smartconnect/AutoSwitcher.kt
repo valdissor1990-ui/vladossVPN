@@ -416,7 +416,7 @@ class AutoSwitcher @Inject constructor(
     }
 
     private fun sameConfig(a: ParsedConfig, b: ParsedConfig): Boolean =
-        a.address.equals(b.address, ignoreCase = true) && a.port == b.port && a.uuid == b.uuid
+        a.connectionKey() == b.connectionKey()
 
     /** Set the chosen server immediately; no latency probes run on the connection path. */
     fun selectImmediate(config: ParsedConfig, candidates: List<ParsedConfig>): ScoredServer {
@@ -615,10 +615,7 @@ class AutoSwitcher @Inject constructor(
     private fun sameServer(
         current: ParsedConfig?,
         candidate: ParsedConfig
-    ): Boolean = current != null &&
-        current.address.equals(candidate.address, ignoreCase = true) &&
-        current.port == candidate.port &&
-        current.uuid == candidate.uuid
+    ): Boolean = current != null && current.connectionKey() == candidate.connectionKey()
 
     fun clearSwitchEvent() {
         _switchEvents.value = null
