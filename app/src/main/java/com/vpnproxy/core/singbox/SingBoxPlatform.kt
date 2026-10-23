@@ -369,6 +369,9 @@ class SingBoxPlatform(
                 }
             }
 
+            // Seed the current physical network before registration. The callback may fire
+            // immediately; do not overwrite its newer selection after register returns.
+            monitoredDefaultNetwork = findCurrentPhysicalNetwork(connectivity)
             interfaceMonitorListener = listener
             interfaceMonitorCallback = callback
             interfaceMonitorThread = thread
@@ -398,8 +401,7 @@ class SingBoxPlatform(
                 throw IllegalStateException("Unable to register Android default network monitor: ${t.message}", t)
             }
 
-            val initialNetwork = findCurrentPhysicalNetwork(connectivity)
-            monitoredDefaultNetwork = initialNetwork
+            val initialNetwork = monitoredDefaultNetwork
             val initial = initialNetwork?.let { resolveInterface(connectivity, it) }
             val initialName = initial?.name.orEmpty()
             val initialIndex = initial?.index ?: -1
