@@ -3,17 +3,26 @@ package com.vpnproxy.core.singbox
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.IpPrefix
+import android.net.LinkProperties
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import android.util.Log
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
+import java.net.Inet6Address
 import java.net.InetAddress
+import java.net.InterfaceAddress
+import java.net.NetworkInterface as JavaNetworkInterface
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -29,6 +38,15 @@ class SingBoxPlatform(
 
     @Volatile private var tunDescriptor: ParcelFileDescriptor? = null
 
+    // One monitor per PlatformInterface instance. The callback and its HandlerThread are
+    // retained until libbox explicitly closes the monitor.
+    private val interfaceMonitorLock = Any()
+    @Volatile private var interfaceMonitorCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var interfaceMonitorListener: InterfaceUpdateListener? = null
+    @Volatile private var interfaceMonitorThread: HandlerThread? = null
+    @Volatile private var interfaceMonitorHandler: Handler? = null
+    @Volatile private var monitoredDefaultNetwork: Network? = null
+
     override fun usePlatformAutoDetectInterfaceControl(): Boolean {
         val enabled = true
         com.vpnproxy.logging.LogCollectorHolder.get()?.debug(TAG, "PLATFORM-AUTO-DETECT enabled=$enabled")
@@ -39,17 +57,32 @@ class SingBoxPlatform(
     override fun autoDetectInterfaceControl(fd: Int) {
         val service = vpnService
         val collector = com.vpnproxy.logging.LogCollectorHolder.get()
-        collector?.debug(TAG, "PROTECT-CALL fd=$fd vpnService=${service != null}")
-        val ok = service?.protect(fd) ?: false
-        collector?.debug(TAG, "PROTECT-RESULT fd=$fd ok=$ok")
-        if (!ok && service != null) {
-            collector?.error(TAG, "PROTECT-FAILED fd=$fd — сокет попадёт в TUN")
-        }
+
+        // libbox's PlatformInterface callback exposes the socket fd only; the outbound tag is
+        // not part of this contract, so do not invent one in diagnostics.
         if (service == null) {
-            Log.d(TAG, "No active VPN service for fd=$fd; probe mode has no TUN to bypass")
-            return
+            val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=not-applicable (no VpnService)"
+            collector?.warn(TAG, line)
+            Log.w(TAG, line)
+            return // Proxy-only probes have no TUN to bypass.
         }
-        check(ok) { "VpnService.protect($fd) failed" }
+
+        val ok = runCatching { service.protect(fd) }
+            .onFailure { error ->
+                collector?.error(TAG, "protect(fd=$fd) threw for outbound=<unknown> result=false: ${error.message}")
+                Log.e(TAG, "protect(fd=$fd) threw for outbound=<unknown> result=false", error)
+            }
+            .getOrDefault(false)
+
+        val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=$ok"
+        if (ok) {
+            collector?.info(TAG, line)
+            Log.i(TAG, line)
+        } else {
+            collector?.error(TAG, "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
+            Log.e(TAG, "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
+            error("VpnService.protect($fd) failed; refusing an unprotected outbound socket")
+        }
     }
 
     override fun openTun(options: TunOptions): Int {
@@ -271,14 +304,329 @@ class SingBoxPlatform(
         destinationAddress: String, destinationPort: Int): ConnectionOwner =
         unsupported("findConnectionOwner")
 
-    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupportedUnit("startDefaultInterfaceMonitor")
-    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) = unsupportedUnit("closeDefaultInterfaceMonitor")
-    override fun getInterfaces(): NetworkInterfaceIterator {
-        unsupportedUnit("getInterfaces")
-        return object : NetworkInterfaceIterator {
-            override fun hasNext(): Boolean = false
-            override fun next(): io.nekohasekai.libbox.NetworkInterface = error("no platform interfaces exposed")
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: error("DefaultInterfaceMonitor: ConnectivityManager unavailable")
+
+        synchronized(interfaceMonitorLock) {
+            // Be defensive if libbox starts the monitor more than once.
+            interfaceMonitorCallback?.let { oldCallback ->
+                runCatching { connectivity.unregisterNetworkCallback(oldCallback) }
+                interfaceMonitorThread?.quitSafely()
+                interfaceMonitorCallback = null
+                interfaceMonitorListener = null
+                interfaceMonitorHandler = null
+                interfaceMonitorThread = null
+                monitoredDefaultNetwork = null
+            }
+
+            val thread = HandlerThread("VLADOSSVPN-default-network").apply { start() }
+            val handler = Handler(thread.looper)
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (!isCurrentMonitor(this)) return
+                    if (!isPhysicalInternetNetwork(connectivity, network)) {
+                        Log.d(TAG, "DefaultInterfaceMonitor: ignoring non-physical network=$network")
+                        return
+                    }
+                    monitoredDefaultNetwork = network
+                    publishDefaultInterface(connectivity, network, this, 0)
+                }
+
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
+                    if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
+                        monitoredDefaultNetwork = network
+                        publishDefaultInterface(connectivity, network, this, 0)
+                    }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                    if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
+                    if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
+                        monitoredDefaultNetwork = network
+                        publishDefaultInterface(connectivity, network, this, 0)
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    if (!isCurrentMonitor(this) || monitoredDefaultNetwork != network) return
+                    val replacement = findCurrentPhysicalNetwork(connectivity, exclude = network)
+                    monitoredDefaultNetwork = replacement
+                    if (replacement == null) {
+                        notifyDefaultInterface(listener, "", -1, false)
+                        logMonitor("DefaultInterfaceMonitor: network lost; no physical default network")
+                    } else {
+                        publishDefaultInterface(connectivity, replacement, this, 0)
+                    }
+                }
+            }
+
+            interfaceMonitorListener = listener
+            interfaceMonitorCallback = callback
+            interfaceMonitorThread = thread
+            interfaceMonitorHandler = handler
+
+            try {
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+                        // On Android 12+, this follows the best matching non-VPN network.
+                        connectivity.registerBestMatchingNetworkCallback(request, callback, handler)
+                    }
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> {
+                        // Android 9-11's default callback can report the VPN itself. SFA uses
+                        // a best-network request on these releases instead.
+                        connectivity.requestNetwork(request, callback, handler)
+                    }
+                    else -> connectivity.registerDefaultNetworkCallback(callback, handler)
+                }
+            } catch (t: Throwable) {
+                interfaceMonitorCallback = null
+                interfaceMonitorListener = null
+                interfaceMonitorHandler = null
+                interfaceMonitorThread = null
+                monitoredDefaultNetwork = null
+                thread.quitSafely()
+                Log.e(TAG, "DefaultInterfaceMonitor registration failed", t)
+                throw IllegalStateException("Unable to register Android default network monitor: ${t.message}", t)
+            }
+
+            val initialNetwork = findCurrentPhysicalNetwork(connectivity)
+            monitoredDefaultNetwork = initialNetwork
+            val initial = initialNetwork?.let { resolveInterface(connectivity, it) }
+            val initialName = initial?.name.orEmpty()
+            val initialIndex = initial?.index ?: -1
+            if (initialNetwork == null) {
+                notifyDefaultInterface(listener, "", -1, false)
+            } else if (initial != null) {
+                notifyDefaultInterface(listener, initialName, initialIndex, isNetworkMetered(connectivity, initialNetwork))
+            } else {
+                // LinkProperties may not be ready yet; publish the real interface from the
+                // callback once Android finishes configuring the network.
+                notifyDefaultInterface(listener, "", -1, false)
+                handler.postDelayed({
+                    if (isCurrentMonitor(callback)) publishDefaultInterface(connectivity, initialNetwork, callback, 1)
+                }, 100L)
+            }
+            logMonitor("DefaultInterfaceMonitor started: current default=${if (initialName.isBlank()) "<pending>" else initialName} index=$initialIndex")
         }
+    }
+
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val callback: ConnectivityManager.NetworkCallback?
+        val thread: HandlerThread?
+        synchronized(interfaceMonitorLock) {
+            callback = interfaceMonitorCallback
+            thread = interfaceMonitorThread
+            interfaceMonitorCallback = null
+            interfaceMonitorListener = null
+            interfaceMonitorHandler = null
+            interfaceMonitorThread = null
+            monitoredDefaultNetwork = null
+        }
+        if (callback != null && connectivity != null) {
+            runCatching { connectivity.unregisterNetworkCallback(callback) }
+                .onFailure { Log.w(TAG, "DefaultInterfaceMonitor unregister failed: ${it.message}") }
+        }
+        thread?.quitSafely()
+        logMonitor("DefaultInterfaceMonitor stopped")
+    }
+
+    override fun getInterfaces(): NetworkInterfaceIterator {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: throw IllegalStateException("getInterfaces: ConnectivityManager unavailable")
+
+        try {
+            val javaInterfaces = JavaNetworkInterface.getNetworkInterfaces().toList()
+            val result = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
+
+            for (network in connectivity.allNetworks) {
+                val linkProperties = connectivity.getLinkProperties(network) ?: continue
+                val capabilities = connectivity.getNetworkCapabilities(network) ?: continue
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                ) continue
+
+                val interfaceName = linkProperties.interfaceName ?: continue
+                val javaInterface = javaInterfaces.firstOrNull { it.name == interfaceName }
+                    ?: runCatching { JavaNetworkInterface.getByName(interfaceName) }.getOrNull()
+                    ?: continue
+
+                val addresses = javaInterface.interfaceAddresses.mapNotNull { address ->
+                    runCatching { address.toPrefix() }.getOrNull()
+                }
+                val dnsServers = linkProperties.dnsServers.mapNotNull { it.hostAddress }
+                val gateways = linkProperties.routes
+                    .filter { it.destination.prefixLength == 0 }
+                    .mapNotNull { it.gateway }
+                    .filterNot { it.isAnyLocalAddress }
+                    .mapNotNull { it.hostAddress }
+                val searchDomains = linkProperties.domains
+                    ?.split(' ')
+                    ?.filter { it.isNotBlank() }
+                    .orEmpty()
+
+                val boxInterface = io.nekohasekai.libbox.NetworkInterface().apply {
+                    name = interfaceName
+                    index = javaInterface.index
+                    mtu = runCatching { javaInterface.mtu }.getOrDefault(0)
+                    this.addresses = StringIteratorArray(addresses.iterator())
+                    dnsServer = StringIteratorArray(dnsServers.iterator())
+                    dnsSearchDomain = StringIteratorArray(searchDomains.iterator())
+                    gateway = StringIteratorArray(gateways.iterator())
+                    type = when {
+                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
+                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Libbox.InterfaceTypeCellular
+                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> Libbox.InterfaceTypeEthernet
+                        else -> Libbox.InterfaceTypeOther
+                    }
+                    var interfaceFlags = 0
+                    if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        interfaceFlags = interfaceFlags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+                    }
+                    if (javaInterface.isLoopback) interfaceFlags = interfaceFlags or OsConstants.IFF_LOOPBACK
+                    if (javaInterface.isPointToPoint) interfaceFlags = interfaceFlags or OsConstants.IFF_POINTOPOINT
+                    if (runCatching { javaInterface.supportsMulticast() }.getOrDefault(false)) {
+                        interfaceFlags = interfaceFlags or OsConstants.IFF_MULTICAST
+                    }
+                    flags = interfaceFlags
+                    metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                }
+                result += boxInterface
+            }
+
+            logMonitor("getInterfaces called: returning ${result.size} interfaces")
+            result.forEachIndexed { index, iface ->
+                val addresses = collectIterator(iface.addresses)
+                logMonitor("Interface[$index]: name=${iface.name} index=${iface.index} addresses=$addresses")
+            }
+            if (result.isEmpty()) {
+                Log.w(TAG, "getInterfaces returned zero physical interfaces; allNetworks=${connectivity.allNetworks.size}, javaInterfaces=${javaInterfaces.map { it.name }}")
+            }
+            return InterfaceArray(result.iterator())
+        } catch (t: Throwable) {
+            Log.e(TAG, "getInterfaces failed", t)
+            com.vpnproxy.logging.LogCollectorHolder.get()?.error(TAG, "getInterfaces failed: ${t.message}")
+            throw IllegalStateException("Unable to enumerate Android network interfaces: ${t.message}", t)
+        }
+    }
+
+    private data class InterfaceSnapshot(val name: String, val index: Int)
+
+    private fun isCurrentMonitor(callback: ConnectivityManager.NetworkCallback): Boolean =
+        interfaceMonitorCallback === callback
+
+    private fun isPhysicalInternetNetwork(connectivity: ConnectivityManager, network: Network): Boolean {
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
+        return !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+    }
+
+    private fun findCurrentPhysicalNetwork(
+        connectivity: ConnectivityManager,
+        exclude: Network? = null
+    ): Network? {
+        val active = runCatching { connectivity.activeNetwork }.getOrNull()
+        if (active != null && active != exclude && isPhysicalInternetNetwork(connectivity, active)) {
+            return active
+        }
+        return connectivity.allNetworks.asSequence()
+            .filter { it != exclude && isPhysicalInternetNetwork(connectivity, it) }
+            .sortedByDescending { network ->
+                connectivity.getNetworkCapabilities(network)
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            }
+            .firstOrNull()
+    }
+
+    private fun resolveInterface(connectivity: ConnectivityManager, network: Network): InterfaceSnapshot? {
+        val linkProperties = connectivity.getLinkProperties(network) ?: return null
+        val name = linkProperties.interfaceName?.takeIf { it.isNotBlank() } ?: return null
+        val javaInterface = runCatching { JavaNetworkInterface.getByName(name) }.getOrNull() ?: return null
+        return InterfaceSnapshot(name, javaInterface.index)
+    }
+
+    private fun isNetworkMetered(connectivity: ConnectivityManager, network: Network): Boolean {
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
+        return !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+
+    private fun publishDefaultInterface(
+        connectivity: ConnectivityManager,
+        network: Network,
+        callback: ConnectivityManager.NetworkCallback,
+        attempt: Int
+    ) {
+        if (!isCurrentMonitor(callback)) return
+        val snapshot = resolveInterface(connectivity, network)
+        if (snapshot == null) {
+            if (attempt < 10) {
+                interfaceMonitorHandler?.postDelayed({
+                    if (isCurrentMonitor(callback) && monitoredDefaultNetwork == network) {
+                        publishDefaultInterface(connectivity, network, callback, attempt + 1)
+                    }
+                }, 100L)
+                return
+            }
+            val currentListener = interfaceMonitorListener ?: return
+            notifyDefaultInterface(currentListener, "", -1, false)
+            logMonitor("DefaultInterfaceMonitor: network changed but interface unresolved for network=$network")
+            return
+        }
+
+        if (monitoredDefaultNetwork != network) return
+        val currentListener = interfaceMonitorListener ?: return
+        notifyDefaultInterface(currentListener, snapshot.name, snapshot.index, isNetworkMetered(connectivity, network))
+        logMonitor("DefaultInterfaceMonitor: network changed to ${snapshot.name} index=${snapshot.index}")
+    }
+
+    private fun notifyDefaultInterface(
+        listener: InterfaceUpdateListener,
+        name: String,
+        index: Int,
+        isExpensive: Boolean
+    ) {
+        runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
+            .onFailure { Log.e(TAG, "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+    }
+
+    private fun logMonitor(message: String) {
+        Log.i(TAG, message)
+        com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, message)
+    }
+
+    private fun collectIterator(iterator: StringIterator): List<String> {
+        val result = mutableListOf<String>()
+        while (iterator.hasNext()) result += iterator.next()
+        return result
+    }
+
+    private class InterfaceArray(
+        private val iterator: Iterator<io.nekohasekai.libbox.NetworkInterface>
+    ) : NetworkInterfaceIterator {
+        override fun hasNext(): Boolean = iterator.hasNext()
+        override fun next(): io.nekohasekai.libbox.NetworkInterface = iterator.next()
+    }
+
+    private class StringIteratorArray(private val iterator: Iterator<String>) : StringIterator {
+        override fun len(): Int = 0
+        override fun hasNext(): Boolean = iterator.hasNext()
+        override fun next(): String = iterator.next()
+    }
+
+    private fun InterfaceAddress.toPrefix(): String = if (address is Inet6Address) {
+        "${Inet6Address.getByAddress(address.address).hostAddress}/$networkPrefixLength"
+    } else {
+        "${address.hostAddress}/$networkPrefixLength"
     }
     override fun clearDNSCache() = unsupportedUnit("clearDNSCache")
     override fun readWIFIState(): WIFIState? = unsupportedNullable("readWIFIState")
