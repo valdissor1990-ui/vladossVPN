@@ -104,10 +104,17 @@ class DebugViewModel @Inject constructor(
     }
 
     fun showLastLibboxLines() {
-        val file = java.io.File(context.filesDir, "logs/libbox.log")
         _libboxTail.value = runCatching {
-            if (!file.isFile) return@runCatching "libbox log unavailable: file not found at ${file.absolutePath}"
-            file.readLines(Charsets.UTF_8).takeLast(100).joinToString("\n").ifBlank { "libbox log is empty" }
+            val callbackLines = logCollector.getAllEntries()
+                .filter { it.tag == "LIBBOX" }
+                .takeLast(100)
+                .joinToString("\n") { it.toFormattedString(maskSensitive = true) }
+            if (callbackLines.isNotBlank()) callbackLines
+            else {
+                val file = java.io.File(context.filesDir, "logs/libbox.log")
+                if (!file.isFile) "No native callback lines yet; file log.output is disabled (${file.absolutePath})"
+                else file.readLines(Charsets.UTF_8).takeLast(100).joinToString("\n").ifBlank { "native libbox file is empty" }
+            }
         }.getOrElse { "libbox log unavailable: ${it.javaClass.simpleName}: ${it.message}" }
     }
 
