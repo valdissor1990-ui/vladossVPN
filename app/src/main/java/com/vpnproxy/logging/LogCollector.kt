@@ -60,7 +60,6 @@ class LogCollector @Inject constructor() {
             FileOutputStream(File(baseContext.filesDir, "logs/app.log"), true).use { output ->
                 output.write((entry.toFormattedString(maskSensitive = true) + "\n").toByteArray(Charsets.UTF_8))
                 output.flush()
-                runCatching { output.fd.sync() }
             }
         } catch (t: Throwable) {
             // Do not log this through Timber: that would recurse into this persistence path.
