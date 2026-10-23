@@ -40,8 +40,10 @@ class LogExporter @Inject constructor(
     /** Export always contains a header and explicit sections for both sources. */
     fun buildExportText(): String = runCatching {
         val sources = readSources()
-        Log.i(TAG, "native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
-        Log.i(TAG, "app bytes=${sources.appBytes} lines=${sources.appLines}")
+        Log.i(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
+        Log.i(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
+        logCollector.info(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
+        logCollector.info(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
         buildString {
             append("=== DIAG SESSION HEADER ===\n")
             append(buildSessionHeader(sources))
@@ -102,6 +104,8 @@ class LogExporter @Inject constructor(
         val entries = sources.appText.lineSequence().toList()
         fun lastContaining(vararg tokens: String): String =
             entries.lastOrNull { line -> tokens.any { token -> line.contains(token, ignoreCase = true) } } ?: "not recorded"
+        fun latestLines(token: String, max: Int = 12): String =
+            entries.filter { it.contains(token, ignoreCase = true) }.takeLast(max).joinToString(" ; ").ifBlank { "not recorded" }
         val options = runCatching { DiagnosticSettings.load(context) }.getOrNull()
         return buildString {
             appendLine("app_version=${BuildConfig.VERSION_NAME}")
@@ -110,8 +114,8 @@ class LogExporter @Inject constructor(
             appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("android_api=${Build.VERSION.SDK_INT}")
             appendLine("DIAG-SETTINGS dns_mode=${options?.dnsMode ?: "unknown"} tun_stack=${options?.tunStack ?: "unknown"} strict_route=${options?.strictRoute ?: "unknown"} route_final=${options?.routeFinal ?: "unknown"} auto_detect_interface=${options?.autoDetectInterface ?: "unknown"} use_disallow_self_package=${options?.useDisallowSelfPackage ?: "unknown"} passive_probe_enabled=${options?.passiveProbeEnabled ?: "unknown"} freeze_autoswitcher=${options?.freezeAutoSwitcherAfterConnected ?: "unknown"}")
-            appendLine("last DIAG-SETTINGS: ${lastContaining("DIAG-SETTINGS")}")
-            appendLine("last DIAG-EFFECTIVE: ${lastContaining("DIAG-EFFECTIVE")}")
+            appendLine("last DIAG-SETTINGS entries: ${latestLines("DIAG-SETTINGS", 8)}")
+            appendLine("last DIAG-EFFECTIVE entries: ${latestLines("DIAG-EFFECTIVE", 10)}")
             appendLine("last ConnectionState: ${lastContaining("ConnectionState", "setState(", "state changed")}")
             appendLine("last SelectedServer: ${lastContaining("SelectedServer", "server selected", "ServerSelected")}")
             appendLine("last ServiceReady timestamp: ${lastContaining("ServiceReady")}")
