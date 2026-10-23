@@ -468,8 +468,8 @@ class AutoSwitcher @Inject constructor(
                 val foreign = allowed.filterNot(::isRussian)
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
+                // Region is a probe-order hint only; it must not override measured quality.
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
-                    .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }).thenBy { it })
                 if (connectionCoordinator.activeTraceId != rankingTraceId) {
                     logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
                     return@launch
@@ -485,29 +485,77 @@ class AutoSwitcher @Inject constructor(
                 _rankedServers.value = ranked
                 logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
 
-                val bestRussian = ranked.firstOrNull { isRussian(it.config) && it.latencyMs < AutoSwitcherConfig.ruFastServerRttMs }
                 val current = _currentServer.value
-                if (bestRussian != null && current != null && sameConfig(current.config, bestRussian.config)) {
-                    _currentServer.value = bestRussian
-                    baselineRtt = bestRussian.latencyMs
-                } else if (bestRussian != null &&
-                    (current == null || !sameConfig(current.config, bestRussian.config)) &&
+                val best = ranked.firstOrNull()
+                if (current != null &&
                     connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
                 ) {
-                    if (suppressIfFrozen("ServerSelected", bestRussian.config.name)) return@launch
-                    if (isInPostConnectWarmup()) {
-                        logCollector.info(
-                            TAG,
-                            "Fast RU server found (${bestRussian.latencyMs}ms: ${bestRussian.config.name}) — ignored during warmup"
-                        )
-                    } else {
-                        _currentServer.value = bestRussian
-                        baselineRtt = bestRussian.latencyMs
-                        consecutiveErrors = 0
-                        _switchEvents.value = "Автопереключение на быстрый сервер РФ: ${bestRussian.config.name}"
-                        connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                        connectionCoordinator.send(ConnectionEvent.ServerSelected(bestRussian, rankingTraceId))
-                        logCollector.info(TAG, "Fast RU server found (${bestRussian.latencyMs}ms); switched to ${bestRussian.config.name}")
+                    val measuredCurrent = ranked.firstOrNull { sameConfig(it.config, current.config) }
+                    when {
+                        best == null -> Unit
+                        measuredCurrent == null -> {
+                            // HealthChecker uses the active VPN route while a tunnel is running.
+                            // Without a comparable current-profile result, ranking alone cannot
+                            // safely justify switching; current-server validation owns recovery.
+                            logCollector.warn(
+                                TAG,
+                                "Background auto-switch suppressed: current server is absent from comparable ranking; awaiting health validation"
+                            )
+                        }
+                        sameConfig(current.config, best.config) -> {
+                            _currentServer.value = measuredCurrent
+                            baselineRtt = measuredCurrent.latencyMs
+                            previousRtt = null
+                            consecutiveErrors = 0
+                        }
+                        suppressIfFrozen("ServerSelected", best.config.name) -> Unit
+                        isInPostConnectWarmup() -> {
+                            logCollector.info(TAG, "Ranking improvement ignored during post-connect warmup")
+                        }
+                        decisionEngine.isInCooldown() -> {
+                            logCollector.debug(TAG, "Ranking-driven switch suppressed during cooldown")
+                        }
+                        !decisionEngine.shouldSwitchForRanking(measuredCurrent.score, best.score) -> {
+                            logCollector.info(
+                                TAG,
+                                "Ranking-driven switch suppressed: candidate advantage below " +
+                                    "${(AutoSwitcherConfig.minimumAutoSwitchScoreGain * 100).toInt()}% hysteresis"
+                            )
+                        }
+                        !decisionEngine.canAttemptSwitch() -> {
+                            logCollector.warn(TAG, "Ranking-driven switch suppressed by switch-window limit")
+                            vpnService?.showUnstableNetworkNotification()
+                        }
+                        !switching.compareAndSet(false, true) -> {
+                            logCollector.warn(TAG, "Ranking-driven switch suppressed: another switch is active")
+                        }
+                        else -> {
+                            try {
+                                if (connectionCoordinator.activeTraceId != rankingTraceId) {
+                                    logCollector.info(TAG, "Ranking-driven switch cancelled: connection trace changed")
+                                    return@launch
+                                }
+                                _currentServer.value = best
+                                baselineRtt = best.latencyMs
+                                previousRtt = null
+                                consecutiveErrors = 0
+                                _switchEvents.value = "Автопереключение на ${best.config.name}"
+                                val switchLimitReached = decisionEngine.recordSuccessfulSwitch()
+                                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+                                connectionCoordinator.send(ConnectionEvent.ServerSelected(best, rankingTraceId))
+                                if (switchLimitReached) {
+                                    vpnService?.showUnstableNetworkNotification()
+                                    logCollector.warn(TAG, "Automatic switch-window limit reached")
+                                }
+                                logCollector.info(
+                                    TAG,
+                                    "Ranking-driven auto-switch -> ${best.config.name}; " +
+                                        "score ${measuredCurrent.score} -> ${best.score}"
+                                )
+                            } finally {
+                                switching.set(false)
+                            }
+                        }
                     }
                 }
             } catch (c: CancellationException) {
@@ -529,8 +577,8 @@ class AutoSwitcher @Inject constructor(
         val foreign = allowed.filterNot(::isRussian)
         val ordered = russian + foreign
         val results = healthChecker.testLatency(ordered)
+        // Use the same measured-quality ordering as background ranking; region is not a score.
         val ranked = scoringEngine.computeScore(results)
-            .sortedWith(compareBy<ScoredServer>({ if (isRussian(it.config)) 0 else 1 }).thenBy { it })
         _rankedServers.value = ranked
         val best = ranked.firstOrNull() ?: return null
         _currentServer.value = best
