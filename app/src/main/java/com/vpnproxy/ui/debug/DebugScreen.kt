@@ -215,6 +215,9 @@ fun DebugScreen(
                                     Button(onClick = { viewModel.showLastLibboxLines() }, modifier = Modifier.fillMaxWidth()) {
                                         Text("Показать последние 100 строк libbox log")
                                     }
+                                    Button(onClick = { viewModel.checkExport() }, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Проверить экспорт")
+                                    }
                                     Button(onClick = { viewModel.export() }, modifier = Modifier.fillMaxWidth()) {
                                         Text("Экспорт лога")
                                     }
