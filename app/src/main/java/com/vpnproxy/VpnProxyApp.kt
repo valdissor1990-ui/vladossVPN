@@ -57,6 +57,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
         // ★ CrashHandler — ДО всего остального, чтобы перехватить краши на раннем старте
         CrashHandler.install(this)
+        logCollector.initialize(this)
 
         if (BuildConfig.LOG_DEBUG) {
             Timber.plant(Timber.DebugTree())
