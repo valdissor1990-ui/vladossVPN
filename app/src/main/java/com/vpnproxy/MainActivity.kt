@@ -21,7 +21,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.vpnproxy.BuildConfig
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.ui.debug.DebugScreen
 import com.vpnproxy.ui.home.HomeScreen
@@ -135,10 +134,8 @@ private fun VPNProxyNavHost(
             SettingsScreen(onBack = { navController.popBackStack() })
         }
 
-        if (BuildConfig.DEBUG) {
-            composable(Route.Debug.path) {
-                DebugScreen(onBack = { navController.popBackStack() })
-            }
+        composable(Route.Debug.path) {
+            DebugScreen(onBack = { navController.popBackStack() })
         }
     }
 }
