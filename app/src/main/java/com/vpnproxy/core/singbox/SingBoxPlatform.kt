@@ -500,13 +500,10 @@ class SingBoxPlatform(
                     metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
                 }
                 result += boxInterface
+                logMonitor("Interface[${result.lastIndex}]: name=$interfaceName index=${javaInterface.index} addresses=$addresses")
             }
 
             logMonitor("getInterfaces called: returning ${result.size} interfaces")
-            result.forEachIndexed { index, iface ->
-                val addresses = collectIterator(iface.addresses)
-                logMonitor("Interface[$index]: name=${iface.name} index=${iface.index} addresses=$addresses")
-            }
             if (result.isEmpty()) {
                 Log.w(TAG, "getInterfaces returned zero physical interfaces; allNetworks=${connectivity.allNetworks.size}, javaInterfaces=${javaInterfaces.map { it.name }}")
             }
@@ -602,12 +599,6 @@ class SingBoxPlatform(
     private fun logMonitor(message: String) {
         Log.i(TAG, message)
         com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, message)
-    }
-
-    private fun collectIterator(iterator: StringIterator): List<String> {
-        val result = mutableListOf<String>()
-        while (iterator.hasNext()) result += iterator.next()
-        return result
     }
 
     private class InterfaceArray(
