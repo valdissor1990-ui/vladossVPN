@@ -41,6 +41,7 @@ fun HomeScreen(
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
+    showDebug: Boolean = true,
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -77,8 +78,10 @@ fun HomeScreen(
                     IconButton(onClick = onNavigateToSubscriptions) {
                         Icon(Icons.Default.Cloud, "Subscriptions")
                     }
-                    IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, "Debug")
+                    if (showDebug) {
+                        IconButton(onClick = onNavigateToDebug) {
+                            Icon(Icons.Default.BugReport, "Debug")
+                        }
                     }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, "Settings")
