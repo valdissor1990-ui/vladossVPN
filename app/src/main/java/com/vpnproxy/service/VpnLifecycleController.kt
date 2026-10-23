@@ -44,12 +44,12 @@ internal class VpnLifecycleController(
 
     fun startCore(configJson: String) {
         check(!closed) { "VPN lifecycle controller is closed" }
-        core.start(configJson)
+        core.startBlocking(configJson).getOrThrow()
     }
 
     fun stopCore() {
         if (closed) return
-        core.stop()
+        core.stopBlocking().getOrThrow()
     }
 
     fun close() {
