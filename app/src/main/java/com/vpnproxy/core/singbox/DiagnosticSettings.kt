@@ -12,7 +12,7 @@ data class DiagnosticOptions(
     val strictRoute: Boolean = false,
     val routeFinal: String = "proxy",
     val passiveProbeEnabled: Boolean = true,
-    val freezeAutoSwitcherAfterConnected: Boolean = true
+    val freezeAutoSwitcherAfterConnected: Boolean = false
 )
 
 object DiagnosticSettings {
@@ -32,7 +32,7 @@ object DiagnosticSettings {
             strictRoute = p.getBoolean("strict_route", false),
             routeFinal = p.getString("route_final", "proxy")?.takeIf { it in routeFinals } ?: "proxy",
             passiveProbeEnabled = p.getBoolean("passive_probe_enabled", true),
-            freezeAutoSwitcherAfterConnected = p.getBoolean("freeze_autoswitcher", true)
+            freezeAutoSwitcherAfterConnected = p.getBoolean("freeze_autoswitcher", false)
         )
     }
 
