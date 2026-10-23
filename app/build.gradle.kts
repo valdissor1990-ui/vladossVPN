@@ -39,6 +39,7 @@ android {
         targetSdk = 35
         versionCode = autoVersionCode
         versionName = autoVersionName
+        buildConfigField("String", "GIT_COMMIT", "\\"${System.getenv("GITHUB_SHA") ?: "local"}\\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
 
@@ -79,7 +80,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
         buildConfigField("boolean", "LOG_DEBUG", "false")
             signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
                 signingConfigs.getByName("release")
