@@ -318,7 +318,7 @@ class VpnProxyService : VpnService() {
                         stopVpnInternal("soft restart for $state", softRestart = true)
                     },
                     startSession = { startVpnSession() },
-                    restartDelayMs = 300L
+                    restartDelayMs = 3_000L
                 )
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
@@ -478,10 +478,24 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
-        val errorMessage = (t.message.orEmpty() + " " + when (reason) {
+        val causalMessages = generateSequence(t as Throwable?) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+        val errorMessage = (causalMessages + " " + when (reason) {
             is VpnFailureReason.CoreError -> reason.message
             else -> reason.toString()
         }).lowercase()
+        val isBindError = errorMessage.contains("address already in use") ||
+            errorMessage.contains("bind:") ||
+            errorMessage.contains("eaddrinuse")
+
+        if (isBindError) {
+            // A local listener collision is a lifecycle failure, not evidence against the remote server.
+            logCollector.error(TAG, "Bind error detected — NOT banning server, increasing restart delay")
+            connectionCoordinator.send(ConnectionEvent.CoreError(VpnFailureReason.BindError))
+            return
+        }
+
         val isConfigError = errorMessage.contains("unknown field") ||
             errorMessage.contains("decode config") ||
             errorMessage.contains("invalid config") ||

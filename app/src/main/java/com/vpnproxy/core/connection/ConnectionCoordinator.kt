@@ -44,6 +44,8 @@ sealed class ConnectionEvent {
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
+    /** Internal timer completion for retrying the same server after a local bind collision. */
+    data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
     data class TrafficValidationResult(val serverName: String, val success: Boolean) : ConnectionEvent()
@@ -346,7 +348,36 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.CoreError -> {
                 logE("CoreError: ${event.reason} (retry=$retryCount; fallbackAttempts=$fallbackAttempts; remainingCandidates=${fallbackCandidates.size})")
-                if (!tryFallback(event.reason, current)) handleFailure(event.reason, current)
+                if (event.reason is VpnFailureReason.BindError) {
+                    logW("BindError — waiting 5s before retry, same server")
+                    scope.launch {
+                        delay(5_000L)
+                        send(ConnectionEvent.BindRetryReady)
+                    }
+                } else if (!tryFallback(event.reason, current)) {
+                    handleFailure(event.reason, current)
+                }
+            }
+
+            is ConnectionEvent.BindRetryReady -> {
+                val stateNow = _state.value
+                if (hasServerSelected && !isFatalErrorLocked &&
+                    (stateNow is ConnectionState.Connecting ||
+                        stateNow is ConnectionState.Reconnecting ||
+                        stateNow is ConnectionState.Connected ||
+                        stateNow is ConnectionState.Verifying)
+                ) {
+                    retryCount = 0
+                    // Force a state edge so the service restarts the same selected server.
+                    val next = if (stateNow is ConnectionState.Connecting) {
+                        ConnectionState.Reconnecting
+                    } else {
+                        ConnectionState.Connecting
+                    }
+                    setState(next, reason = "BindErrorRetrySameServer")
+                } else {
+                    logW("BindRetryReady ignored — state=$stateNow hasServerSelected=$hasServerSelected")
+                }
             }
 
             is ConnectionEvent.Timeout -> {

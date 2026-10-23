@@ -90,8 +90,8 @@ class SingBoxCore(
 
     private val handler = object : CommandServerHandler {
         override fun serviceStop() {
-            Log.w(TAG, "libbox requested service stop")
-            // Do not block a native callback waiting for a lifecycle lock that may be closing this server.
+            logCollector?.info(TAG, "Native callback: serviceStop")
+            // Keep native callbacks non-blocking; cleanup is serialized with all other lifecycle work.
             lifecycleScope.launch {
                 stopAsync().await().onFailure {
                     logCollector?.error(TAG, "serviceStop failed: ${it.message}")
@@ -100,13 +100,8 @@ class SingBoxCore(
         }
 
         override fun serviceReload() {
-            val config = activeConfig ?: return
-            Log.i(TAG, "libbox requested service reload")
-            lifecycleScope.launch {
-                startAsync(config).await().onFailure {
-                    logCollector?.error(TAG, "serviceReload failed: ${it.message}")
-                }
-            }
+            // Diagnostic build: only VpnProxyService may initiate a lifecycle transition.
+            logCollector?.warn(TAG, "Native callback: serviceReload — ignored")
         }
 
         override fun getSystemProxyStatus(): SystemProxyStatus? = null
@@ -204,6 +199,11 @@ class SingBoxCore(
         try {
             setup(context)
             logCollector?.info(TAG, "libbox logger attached")
+            val portFreeBeforeStart = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, 2_000L)
+            if (!portFreeBeforeStart) {
+                throw IllegalStateException("Port ${SingboxConfigBuilder.PROXY_PORT} not free before start — previous instance not cleaned up")
+            }
+            logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} confirmed free, starting CommandServer")
             val createdServer = CommandServer(handler, platform)
             server = createdServer
             createdServer.start()
@@ -247,6 +247,11 @@ class SingBoxCore(
             .onFailure { logCollector?.warn(TAG, "closeTun failed: ${it.message}") }
         lastStopAtMs = System.currentTimeMillis()
         logCollector?.info(TAG, "Core lifecycle: stop completed at ${lastStopAtMs}")
+        val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+        logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} freed=${portFreed} after stop")
+        if (!portFreed) {
+            logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after 5s, next start may fail")
+        }
     }
 
     /**
