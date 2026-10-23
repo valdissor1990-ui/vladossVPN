@@ -24,6 +24,8 @@ object AutoSwitcherConfig {
     const val microProbeBufferBytes = 8 * 1_024
     const val directProbePort = 53
     const val evidenceHistoryLimit = 12
+    /** Minimum relative score gain required for a background auto-switch. */
+    const val minimumAutoSwitchScoreGain = 0.20f
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
     const val serverBlacklistDurationMs = 10 * 60_000L
