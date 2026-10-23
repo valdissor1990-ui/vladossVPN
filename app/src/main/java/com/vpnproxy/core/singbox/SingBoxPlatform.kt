@@ -23,6 +23,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InterfaceAddress
 import java.net.NetworkInterface as JavaNetworkInterface
+import java.util.Collections
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -444,7 +445,7 @@ class SingBoxPlatform(
             ?: throw IllegalStateException("getInterfaces: ConnectivityManager unavailable")
 
         try {
-            val javaInterfaces = JavaNetworkInterface.getNetworkInterfaces().toList()
+            val javaInterfaces = Collections.list(JavaNetworkInterface.getNetworkInterfaces())
             val result = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
             val interfaceLogEntries = mutableListOf<Triple<String, Int, List<String>>>()
 
