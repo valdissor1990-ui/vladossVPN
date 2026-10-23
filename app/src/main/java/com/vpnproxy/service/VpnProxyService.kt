@@ -381,8 +381,6 @@ class VpnProxyService : VpnService() {
             try {
                 val diagnosticEnabled = com.vpnproxy.util.DebugFlags.diagnosticEnabled()
                 val diagnosticOptions = if (diagnosticEnabled) DiagnosticSettings.load(this@VpnProxyService) else DiagnosticOptions(tunStack = "system", strictRoute = true)
-                val libboxLogFile = if (diagnosticEnabled) java.io.File(filesDir, "logs/libbox.log").also { it.parentFile?.mkdirs() } else null
-                if (libboxLogFile != null) logCollector.info(TAG, "libbox log path=${libboxLogFile.absolutePath}")
                 logCollector.info(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=${diagnosticOptions.useDisallowSelfPackage}")
                 logCollector.info(TAG, "DIAG AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface}")
                 logCollector.info(TAG, "DIAG TUN_STACK=${diagnosticOptions.tunStack}")
@@ -397,7 +395,7 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
                 logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
-                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, libboxLogFile?.absolutePath)
+                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)
                 runCatching {
                     val root = org.json.JSONObject(configJson)
                     val route = root.optJSONObject("route")
@@ -431,10 +429,7 @@ class VpnProxyService : VpnService() {
                     logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
                 }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
                 controller.startCore(configJson)
-                if (libboxLogFile != null) {
-                    if (libboxLogFile.isFile) logCollector.info(TAG, "libbox log started")
-                    else logCollector.warn(TAG, "libbox log unavailable: output file not created after core start")
-                }
+                logCollector.info(TAG, "Native libbox logs captured through writeDebugMessage -> LogCollector; file log.output disabled")
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)
                 throw e
