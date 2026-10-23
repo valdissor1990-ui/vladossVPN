@@ -3,13 +3,13 @@ package com.vpnproxy.smartconnect
 import com.vpnproxy.smartconnect.HealthChecker.LatencyResult
 import com.vpnproxy.smartconnect.HealthChecker.SpeedResult
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Скоринг серверов.
- *
- * score = 0.6·(1/latency) + 0.3·(speed/maxSpeed) + 0.1·successRate
+ * Scores reachable connection profiles using latency, measured throughput, and observed
+ * probe success rate. Profile identity uses the complete connection key, not just endpoint.
  */
 @Singleton
 class ScoringEngine @Inject constructor() {
@@ -21,46 +21,64 @@ class ScoringEngine @Inject constructor() {
         val successRate: Float,
         val score: Float
     ) : Comparable<ScoredServer> {
-        override fun compareTo(other: ScoredServer): Int =
-            other.score.compareTo(this.score) // descending
+        override fun compareTo(other: ScoredServer): Int = other.score.compareTo(this.score)
     }
 
-    /**
-     * Вычисляет скоринг на основе latency и speed результатов.
-     */
+    private data class ProbeHistory(var successes: Long = 0L, var attempts: Long = 0L) {
+        fun rate(): Float = if (attempts == 0L) 0f else successes.toFloat() / attempts.toFloat()
+    }
+
+    private val history = ConcurrentHashMap<String, ProbeHistory>()
+
+    private fun recordProbe(config: ParsedConfig, success: Boolean) {
+        history.compute(config.connectionKey()) { _, previous ->
+            val next = previous ?: ProbeHistory()
+            synchronized(next) {
+                next.attempts++
+                if (success) next.successes++
+            }
+            next
+        }
+    }
+
+    private fun successRate(config: ParsedConfig): Float {
+        val item = history[config.connectionKey()] ?: return 0f
+        return synchronized(item) { item.rate() }
+    }
+
     fun computeScore(
         latencyResults: List<LatencyResult>,
         speedResults: List<SpeedResult> = emptyList()
     ): List<ScoredServer> {
-        val speedMap = speedResults.associateBy { it.config.address + it.config.port }
-        val maxSpeed = speedResults.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
+        latencyResults.forEach { recordProbe(it.config, it.success) }
+        val speedMap = speedResults
+            .filter { it.success && it.speedMbps.isFinite() && it.speedMbps > 0f }
+            .associateBy { it.config.connectionKey() }
+        val maxSpeed = speedMap.values.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
 
         return latencyResults
-            .filter { it.success }
+            .filter { it.success && it.latencyMs != Long.MAX_VALUE }
             .map { lr ->
-                val speed = speedMap[lr.config.address + lr.config.port]?.speedMbps ?: 0f
+                val speed = speedMap[lr.config.connectionKey()]?.speedMbps ?: 0f
                 val normalizedLatency = 1.0f / (lr.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
                 val normalizedSpeed = speed / maxSpeed
-                val successRate = 1.0f // TODO: накопление статистики успехов
-
+                val observedSuccessRate = successRate(lr.config)
                 val score = 0.6f * normalizedLatency +
-                            0.3f * normalizedSpeed +
-                            0.1f * successRate
+                    0.3f * normalizedSpeed +
+                    0.1f * observedSuccessRate
 
                 ScoredServer(
                     config = lr.config,
                     latencyMs = lr.latencyMs,
                     speedMbps = speed,
-                    successRate = successRate,
+                    successRate = observedSuccessRate,
                     score = score
                 )
             }
             .sorted()
     }
 
-    /**
-     * Полный цикл: latency-тест → топ-5 → speed-тест → скоринг.
-     */
+    /** Latency probe all profiles, speed-test only the five fastest reachable candidates. */
     suspend fun rankAll(
         configs: List<ParsedConfig>,
         healthChecker: HealthChecker
