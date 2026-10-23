@@ -131,7 +131,8 @@ class LogExporter @Inject constructor(
         }
     }
 
-    private fun exportViaMediaStore(fileName: String, content: String): Uri? = try {
+    private fun exportViaMediaStore(fileName: String, content: String): Uri? {
+        return try {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -157,9 +158,11 @@ class LogExporter @Inject constructor(
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaMediaStore failed", t)
         null
+        }
     }
 
-    private fun exportViaFile(fileName: String, content: String): Uri? = try {
+    private fun exportViaFile(fileName: String, content: String): Uri? {
+        return try {
         val externalRoot = context.getExternalFilesDir(null) ?: return null
         val dir = File(externalRoot, "logs").apply { mkdirs() }
         val file = File(dir, fileName)
@@ -168,6 +171,7 @@ class LogExporter @Inject constructor(
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaFile failed", t)
         null
+        }
     }
 
     fun buildShareIntent(uri: Uri): Intent = Intent(Intent.ACTION_SEND).apply {
