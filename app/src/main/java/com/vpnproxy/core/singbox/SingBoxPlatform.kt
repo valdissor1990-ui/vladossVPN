@@ -446,6 +446,7 @@ class SingBoxPlatform(
         try {
             val javaInterfaces = JavaNetworkInterface.getNetworkInterfaces().toList()
             val result = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
+            val interfaceLogEntries = mutableListOf<Triple<String, Int, List<String>>>()
 
             for (network in connectivity.allNetworks) {
                 val linkProperties = connectivity.getLinkProperties(network) ?: continue
@@ -500,10 +501,13 @@ class SingBoxPlatform(
                     metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
                 }
                 result += boxInterface
-                logMonitor("Interface[${result.lastIndex}]: name=$interfaceName index=${javaInterface.index} addresses=$addresses")
+                interfaceLogEntries += Triple(interfaceName, javaInterface.index, addresses)
             }
 
             logMonitor("getInterfaces called: returning ${result.size} interfaces")
+            interfaceLogEntries.forEachIndexed { index, entry ->
+                logMonitor("Interface[$index]: name=${entry.first} index=${entry.second} addresses=${entry.third}")
+            }
             if (result.isEmpty()) {
                 Log.w(TAG, "getInterfaces returned zero physical interfaces; allNetworks=${connectivity.allNetworks.size}, javaInterfaces=${javaInterfaces.map { it.name }}")
             }
