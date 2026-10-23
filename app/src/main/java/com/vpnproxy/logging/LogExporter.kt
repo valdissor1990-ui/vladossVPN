@@ -116,7 +116,7 @@ class LogExporter @Inject constructor(
             appendLine("DIAG-SETTINGS dns_mode=${options?.dnsMode ?: "unknown"} tun_stack=${options?.tunStack ?: "unknown"} strict_route=${options?.strictRoute ?: "unknown"} route_final=${options?.routeFinal ?: "unknown"} auto_detect_interface=${options?.autoDetectInterface ?: "unknown"} use_disallow_self_package=${options?.useDisallowSelfPackage ?: "unknown"} passive_probe_enabled=${options?.passiveProbeEnabled ?: "unknown"} freeze_autoswitcher=${options?.freezeAutoSwitcherAfterConnected ?: "unknown"}")
             appendLine("last DIAG-SETTINGS entries: ${latestLines("DIAG-SETTINGS", 8)}")
             appendLine("last DIAG-EFFECTIVE entries: ${latestLines("DIAG-EFFECTIVE", 10)}")
-            appendLine("last ConnectionState: ${lastContaining("ConnectionState", "setState(", "state changed")}")
+            appendLine("last ConnectionState: ${lastContaining("ConnectionState", "setState(", "STATE:", "state changed")}")
             appendLine("last SelectedServer: ${lastContaining("SelectedServer", "server selected", "ServerSelected")}")
             appendLine("last ServiceReady timestamp: ${lastContaining("ServiceReady")}")
             appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} app_lines=${sources.appLines}")
