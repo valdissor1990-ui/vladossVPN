@@ -89,11 +89,20 @@ class SingBoxCore(
         }
         override fun writeDebugMessage(message: String?) {
             val line = message.orEmpty()
-            logCollector?.debug("LIBBOX", "[LIBBOX] $line")
-            if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
-                logCollector?.error("LIBBOX", "[LIBBOX] exact handshake failure: $line")
+            // This callback crosses JNI; collector/logcat failures must never escape into libbox.
+            try {
+                logCollector?.debug("LIBBOX", "[LIBBOX] $line")
+                if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
+                    logCollector?.error("LIBBOX", "[LIBBOX] exact handshake failure: $line")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "writeDebugMessage could not append to LogCollector; callback suppressed", t)
             }
-            Log.d(TAG, line)
+            try {
+                Log.d(TAG, line)
+            } catch (_: Throwable) {
+                // Android logging must not escape the native callback either.
+            }
         }
         override fun connectSSHAgent(): Int {
             Log.w(TAG, "unsupported CommandServerHandler method: connectSSHAgent")
