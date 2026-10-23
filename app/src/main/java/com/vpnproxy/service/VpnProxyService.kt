@@ -239,6 +239,20 @@ class VpnProxyService : VpnService() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Android calls this when the user removes the app task from Recents.
+        // Enter the existing serialized teardown path; do not kill the process directly.
+        Log.i(
+            TAG,
+            "onTaskRemoved: task swiped from Recents; " +
+                "serviceState=${_serviceState.value}, isRunning=${_isRunning.value}"
+        )
+        logCollector.info(TAG, "Recent task removed — requesting full VPN shutdown")
+
+        forceStopService("recent task swiped from Recents")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onRevoke() {
