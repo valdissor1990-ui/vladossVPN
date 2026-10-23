@@ -363,10 +363,20 @@ class AutoSwitcher @Inject constructor(
         }
         try {
             val current = _currentServer.value
-            val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
+            // Never auto-switch to a placeholder from selectImmediate(): only use profiles
+            // with a successful, finite latency measurement from the latest ranking.
+            val ranked = _rankedServers.value.filter {
+                !isBlacklisted(it.config) &&
+                    it.config.isValid() &&
+                    it.latencyMs > 0L &&
+                    it.latencyMs != Long.MAX_VALUE
+            }
             val best = ranked.firstOrNull { !sameServer(current?.config, it.config) }
                 ?: ranked.firstOrNull()?.takeIf { current == null }
-                ?: return null
+                ?: run {
+                    logCollector.warn(TAG, "switchToBest skipped: no measured, reachable alternative is available")
+                    return null
+                }
             _currentServer.value = best
             baselineRtt = best.latencyMs
             previousRtt = null
