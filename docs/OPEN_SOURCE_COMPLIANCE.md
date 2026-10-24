@@ -20,6 +20,10 @@ Android Gradle runtime dependencies.
 - Added a native Go dependency audit for the exact sing-box-lx tag and Android
   build tags. The audit collects license/notice files and fails if any
   dependency remains unclassified.
+- Added a separate inventory for the prebuilt `libcronet.a` archives used by
+  `with_naive_outbound`. The exact `cronet-go` and NaiveProxy/Chromium revisions
+  are pinned, and upstream LICENSE/NOTICE/COPYING/README.chromium files are
+  collected into the app assets.
 - Added release checks that verify license assets are present in the APK/AAB.
 
 ## Latest automated inventory
