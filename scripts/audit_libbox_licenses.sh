@@ -141,7 +141,8 @@ for arch in $ARCHES; do
     while IFS= read -r -d '' file; do
       target="$DEST/$file"
       mkdir -p "$(dirname "$target")"
-      cp "$file" "$target"
+      cp -f "$file" "$target"
+      chmod u+w "$target"
     done
   )
 done
