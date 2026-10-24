@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,17 +35,6 @@ fun ServerGridCard(
     val c = server.config
     val flag = extractFlag(c.name)
     val title = c.name.replace(flag, "").trim().ifBlank { c.name }
-    val transportKey = c.transport.lowercase()
-    val protocol = when (transportKey) {
-        "hysteria2", "hy2" -> "HY2"
-        "tuic" -> "TUIC"
-        else -> c.transport.uppercase().ifBlank { "VLESS" }
-    }
-    val protocolColor = when (protocol) {
-        "HY2" -> Color(0xFFFF9800)
-        "TUIC" -> Color(0xFFFFC107)
-        else -> MaterialTheme.colorScheme.primary
-    }
     val scoreLabel = scoreOverride ?: "—"
     val score = scoreLabel.removeSuffix("ms").trim().toDoubleOrNull()
     val scoreColor = scoreColorOverride ?: when {
@@ -55,15 +43,13 @@ fun ServerGridCard(
         score <= 300.0 -> Color(0xFFF9A825)
         else -> Color(0xFFE53935)
     }
-    val statusSymbol = when {
-        server.successRate > 0.5f -> "●"
-        server.successRate == 0f -> "✕"
-        else -> "●"
-    }
-    val statusColor = when {
-        server.successRate > 0.5f -> Color(0xFF43A047)
-        server.successRate == 0f -> Color(0xFFE53935)
-        else -> Color(0xFF9E9E9E)
+    // TCP connect success is only a reachability hint, never proof that the VPN works.
+    // TCP failure is inconclusive too (UDP-based protocols, filtering, local network).
+    val statusSymbol = "●"
+    val statusColor = if (server.successRate > 0.5f) {
+        Color(0xFF43A047) // TCP endpoint responded
+    } else {
+        Color(0xFF9E9E9E) // unverified, not a confirmed failure
     }
 
     Card(
@@ -104,18 +90,6 @@ fun ServerGridCard(
             )
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = protocolColor.copy(alpha = 0.25f)
-                ) {
-                    Text(
-                        text = protocol,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = protocolColor
-                    )
-                }
                 Spacer(Modifier.weight(1f))
                 Text(
                     text = if (score == null) "—" else "${score.roundToInt()} ms",

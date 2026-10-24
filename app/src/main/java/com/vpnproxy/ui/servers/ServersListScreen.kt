@@ -203,25 +203,19 @@ fun ServerListContent(
     }
 
     val filterOptions = remember(servers) {
-        listOf("Все", "VLESS", "HY2", "TUIC") +
+        listOf("Все") +
             servers.map { it.config.providerTag.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
                 .sorted()
-                .filterNot { it in setOf("Все", "VLESS", "HY2", "TUIC") }
+                .filterNot { it == "Все" }
     }
 
     val filtered = remember(servers, query, selectedFilter) {
         servers.filter { server ->
             val config = server.config
-            val transport = config.transport.lowercase()
-            val matchesFilter = when (selectedFilter) {
-                "Все" -> true
-                "HY2" -> transport in setOf("hysteria2", "hy2")
-                "TUIC" -> transport == "tuic"
-                "VLESS" -> transport !in setOf("hysteria2", "hy2", "tuic")
-                else -> config.providerTag.equals(selectedFilter, ignoreCase = true)
-            }
+            val matchesFilter = selectedFilter == "Все" ||
+                config.providerTag.equals(selectedFilter, ignoreCase = true)
             val matchesQuery = query.isBlank() ||
                 config.name.contains(query, ignoreCase = true) ||
                 config.address.contains(query, ignoreCase = true) ||
@@ -240,7 +234,7 @@ fun ServerListContent(
             .padding(bottom = 24.dp)
     ) {
         Text(
-            text = "Найдено ${scanResults.count { it.successRate > 0.5f }} доступных серверов (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU)",
+            text = "Профилей: ${servers.size}; TCP-порт ответил у ${scanResults.count { it.successRate > 0.5f }} (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU). Работа VPN не подтверждена.",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )

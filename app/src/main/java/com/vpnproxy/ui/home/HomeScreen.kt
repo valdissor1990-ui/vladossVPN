@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
@@ -40,7 +39,6 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
-    onNavigateToDebug: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -76,9 +74,6 @@ fun HomeScreen(
                     }
                     IconButton(onClick = onNavigateToSubscriptions) {
                         Icon(Icons.Default.Cloud, "Subscriptions")
-                    }
-                    IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, "Debug")
                     }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, "Settings")
@@ -184,7 +179,37 @@ fun HomeScreen(
                     }
                 }
 
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(18.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (uiState.isAutomaticMode) "Автоматический режим" else "Ручной выбор сервера",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = OnDark
+                            )
+                            Text(
+                                text = if (uiState.isAutomaticMode) "Приложение выберет сервер само" else "Выберите сервер в списке ниже",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnDarkSecondary
+                            )
+                        }
+                        Switch(
+                            checked = uiState.isAutomaticMode,
+                            onCheckedChange = viewModel::setAutomaticMode,
+                            enabled = !uiState.isBusy
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
 
                 ConnectionStatsCard(
                     state = uiState.connectionState,

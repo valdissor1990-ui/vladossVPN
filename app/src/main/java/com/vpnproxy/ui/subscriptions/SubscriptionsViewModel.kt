@@ -72,11 +72,11 @@ class SubscriptionsViewModel @Inject constructor(
             try {
                 repository.refreshAll()
                 val scanResults = serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
-                val reachableCount = scanResults.count { it.successRate > 0.5f }
-                _message.value = "Найдено $reachableCount уникальных серверов"
+                val tcpResponsiveCount = scanResults.count { it.successRate > 0.5f }
+                _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
                 logCollector.info(
                     "SubscriptionsVM",
-                    "Refreshed and scanned: reachableUnique=$reachableCount; scannedUnique=${scanResults.size}"
+                    "Refreshed and scanned: tcpResponsive=$tcpResponsiveCount; scannedUnique=${scanResults.size}"
                 )
             } catch (c: CancellationException) {
                 throw c

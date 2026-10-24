@@ -102,11 +102,11 @@ class ServerScanner @Inject constructor(
                 )
                 scannedConfigKeys = requestedKeys
                 _scannedServers.value = results
-                val available = results.filter { it.successRate > 0.5f }
-                val ruAvailable = available.count { isRussianServer(it.config) }
+                val tcpResponsive = results.filter { it.successRate > 0.5f }
+                val ruTcpResponsive = tcpResponsive.count { isRussianServer(it.config) }
                 logCollector.info(
                     TAG,
-                    "Scan complete: ${available.size}/${unique.size} unique reachable profiles, RU=$ruAvailable (input=${configs.size})"
+                    "Scan complete: ${unique.size} profiles retained; TCP endpoint responded for ${tcpResponsive.size}, RU=$ruTcpResponsive (input=${configs.size}). TCP reachability does not verify VPN protocol/tunnel."
                 )
                 results
             } finally {
@@ -144,8 +144,15 @@ class ServerScanner @Inject constructor(
             _scannedServers.value.size == keys.size
     }
 
+    /**
+     * Returns all scanned profiles. TCP connect is only an endpoint reachability hint;
+     * it must not exclude UDP protocols or be interpreted as VPN tunnel availability.
+     * Responsive TCP endpoints remain first for convenient ordering.
+     */
     fun availableServers(): List<ScoredServer> =
-        _scannedServers.value.filter { it.successRate > 0.5f }
+        _scannedServers.value.sortedWith(
+            compareBy<ScoredServer>({ if (it.successRate > 0.5f) 0 else 1 }, { it.latencyMs })
+        )
 
     fun isRussianServer(config: ParsedConfig): Boolean {
         val labels = "${config.name} ${config.providerTag}"
