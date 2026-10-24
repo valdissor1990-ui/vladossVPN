@@ -47,7 +47,7 @@ jobs:
           ls -la app/libs/
 
       - name: Generate dependency license report
-        run: ./gradlew generateLicenseReport --no-parallel --stacktrace
+        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
 
       - name: Upload dependency license report
         if: always()
@@ -55,8 +55,7 @@ jobs:
         with:
           name: dependency-license-report
           path: |
-            build/reports/dependency-license/**
-            **/build/reports/dependency-license/**
+            app/build/reports/dependency-license/**
           if-no-files-found: warn
 
       - name: Run unit tests
