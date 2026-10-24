@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE_VERSION="1.14.3-lx.21"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -110,7 +110,7 @@ if unknown_types or unknown_urls:
     sys.exit(1)
 
 with open(output_path, "w", newline="", encoding="utf-8") as output:
-    csv.writer(output, lineterminator="\\n").writerows(rows)
+    csv.writer(output, lineterminator="\n").writerows(rows)
 PY
 
 cp "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" \
