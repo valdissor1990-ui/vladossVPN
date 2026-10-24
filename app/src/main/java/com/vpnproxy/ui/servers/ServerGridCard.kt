@@ -55,15 +55,13 @@ fun ServerGridCard(
         score <= 300.0 -> Color(0xFFF9A825)
         else -> Color(0xFFE53935)
     }
-    val statusSymbol = when {
-        server.successRate > 0.5f -> "●"
-        server.successRate == 0f -> "✕"
-        else -> "●"
-    }
-    val statusColor = when {
-        server.successRate > 0.5f -> Color(0xFF43A047)
-        server.successRate == 0f -> Color(0xFFE53935)
-        else -> Color(0xFF9E9E9E)
+    // TCP connect success is only a reachability hint, never proof that the VPN works.
+    // TCP failure is inconclusive too (UDP-based protocols, filtering, local network).
+    val statusSymbol = "●"
+    val statusColor = if (server.successRate > 0.5f) {
+        Color(0xFF43A047) // TCP endpoint responded
+    } else {
+        Color(0xFF9E9E9E) // unverified, not a confirmed failure
     }
 
     Card(
