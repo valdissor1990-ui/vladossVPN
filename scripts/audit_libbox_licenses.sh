@@ -86,7 +86,7 @@ for row in rows:
                 row[1] = source_url
                 break
 with open(path, "w", newline="", encoding="utf-8") as output:
-    csv.writer(output, lineterminator="\\n").writerows(rows)
+    csv.writer(output, lineterminator="\n").writerows(rows)
 PY
 
 if grep -q ',Unknown$' "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"; then
