@@ -204,6 +204,12 @@ while IFS= read -r -d '' file; do
 done
 cp "$ROOT/app/src/main/assets/licenses/cronet-native-NOTICE.txt" \
   "$CRONET_DEST/CRONET-NATIVE-NOTICE.txt"
+NOTICE_COUNT="$(find "$CRONET_DEST" -type f | wc -l | tr -d ' ')"
+echo "Collected $NOTICE_COUNT Cronet/Chromium license and notice files"
+if [ "$NOTICE_COUNT" -lt 50 ]; then
+  echo "Cronet/Chromium license collection is unexpectedly incomplete"
+  exit 1
+fi
 
 printf 'Audited sing-box-lx v%s for Android ABIs (%s), plus Cronet/NaiveProxy notices at %s. Report: %s\n' \
   "$CORE_VERSION" "$ARCHES" "$NAIVEPROXY_COMMIT" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
