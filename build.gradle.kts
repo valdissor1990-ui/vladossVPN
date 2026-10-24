@@ -7,3 +7,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0" apply false
     id("com.github.jk1.dependency-license-report") version "3.1.4"
 }
+
+// Audit only the runtime dependencies shipped in the two release variants.
+licenseReport {
+    projects = subprojects.toTypedArray()
+    configurations = arrayOf("directReleaseRuntimeClasspath", "playReleaseRuntimeClasspath")
+}
