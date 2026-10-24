@@ -46,6 +46,13 @@ jobs:
           ./scripts/download_libbox.sh
           ls -la app/libs/
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.8'
+
+      - name: Audit bundled libbox Go dependencies
+        run: bash scripts/audit_libbox_licenses.sh
+
       - name: Generate dependency license report
         run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
 
@@ -56,6 +63,7 @@ jobs:
           name: dependency-license-report
           path: |
             app/build/reports/dependency-license/**
+            app/build/reports/license-audit/**
           if-no-files-found: warn
 
       - name: Run unit tests
