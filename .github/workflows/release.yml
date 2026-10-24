@@ -174,6 +174,16 @@ jobs:
           unzip -l "$AAB" | grep -q 'base/assets/index.html'
           echo "GPL-3.0 text and sing-box-lx notices are present in APK and AAB"
 
+      - name: Package license and third-party notices
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-notices
+          cp LICENSE THIRD_PARTY_NOTICES.md docs/OPEN_SOURCE_COMPLIANCE.md build/release-notices/
+          cp -R app/src/main/assets/licenses build/release-notices/assets-licenses
+          cp -R app/build/reports/dependency-license build/release-notices/gradle-report
+          cp -R app/build/reports/license-audit build/release-notices/native-report
+          (cd build/release-notices && zip -qr "$GITHUB_WORKSPACE/license-notices.zip" .)
+
       - name: Extract version info
         id: ver
         run: |
@@ -270,6 +280,8 @@ jobs:
             app/build/outputs/apk/direct/release/app-direct-*-release.apk
             app/build/outputs/bundle/playRelease/*.aab
             LICENSE
+            THIRD_PARTY_NOTICES.md
+            license-notices.zip
             app/src/main/assets/licenses/GPL-3.0-or-later.txt
             app/src/main/assets/licenses/sing-box-lx-NOTICE.txt
             docs/OPEN_SOURCE_COMPLIANCE.md
