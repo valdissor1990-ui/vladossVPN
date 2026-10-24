@@ -8,6 +8,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.github.jk1.dependency-license-report")
 }
 
 val keystorePropsFile = rootProject.file("keystore.properties")
