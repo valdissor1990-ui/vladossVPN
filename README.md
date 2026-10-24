@@ -24,7 +24,7 @@ chmod +x scripts/download_libbox.sh
 ./gradlew assembleDirectRelease
 ```
 
-Полный `libbox.aar` скачивается скриптом из официального релиза 1.14.3; Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
+Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.3-lx.21`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
 
 ## Архитектура
 
