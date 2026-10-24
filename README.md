@@ -40,6 +40,7 @@ chmod +x scripts/download_libbox.sh
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Протоколы](docs/PROTOCOLS.md)
 - [Диагностика](docs/TROUBLESHOOTING.md)
+- [Аудит open-source лицензий и критерии завершения](docs/OPEN_SOURCE_COMPLIANCE.md)
 
 ## Disclaimer
 
@@ -47,4 +48,6 @@ chmod +x scripts/download_libbox.sh
 
 ## Лицензия
 
-GPL-3.0.
+Проект заявлен под GPL-3.0-or-later; полный текст находится в [LICENSE](LICENSE). Уведомления для включённого sing-box-lx/libbox находятся в [app/src/main/assets/licenses](app/src/main/assets/licenses).
+
+Для формирования отчёта по Gradle-зависимостям запустите `./gradlew generateLicenseReport`. Отчёт автоматизированного сканирования не заменяет проверку лицензий, встроенных в локальный `libbox.aar`.
