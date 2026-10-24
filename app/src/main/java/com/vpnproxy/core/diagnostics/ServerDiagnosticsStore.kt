@@ -21,12 +21,14 @@ import javax.inject.Singleton
 class ServerDiagnosticsStore @Inject constructor(
     @ApplicationContext context: Context
 ) {
-    private val journal = File(context.filesDir, DIRECTORY_NAME).resolve(FILE_NAME)
+    private val journal: File
+
+    init {
+        journal = File(context.filesDir, DIRECTORY_NAME).resolve(FILE_NAME)
+    }
 
     @VisibleForTesting
-    internal constructor(directory: File, testOnly: Boolean) : thisDirectory(directory)
-
-    private constructor(directory: File) {
+    internal constructor(directory: File, testOnly: Boolean) {
         journal = File(directory, FILE_NAME)
     }
 
