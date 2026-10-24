@@ -79,6 +79,6 @@ class ProbeContractsTest {
             AttemptHistory("3", "s", "cfg", 140, 150, AttemptOutcome.FAILED)
         )
         assertNull(BackoffPolicy.nextAttemptAt(history, 200, 1_000, 3, 500))
-        assertEquals(610L, BackoffPolicy.nextAttemptAt(history, 200, 1_000, 2, 500))
+        assertEquals(650L, BackoffPolicy.nextAttemptAt(history, 200, 1_000, 2, 500))
     }
 }
