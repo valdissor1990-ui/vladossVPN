@@ -84,6 +84,13 @@ jobs:
       - name: Audit bundled libbox Go dependencies
         run: bash scripts/audit_libbox_licenses.sh
 
+      - name: Verify native license audit output
+        run: |
+          set -euo pipefail
+          test -s app/src/main/assets/licenses/libbox-go-licenses.csv
+          test -d app/src/main/assets/licenses/libbox
+          test "$(find app/src/main/assets/licenses/libbox -type f | wc -l)" -gt 0
+
       - name: Generate dependency license report
         run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
 
@@ -158,9 +165,13 @@ jobs:
           unzip -l "$APK" | grep -q 'assets/licenses/GPL-3.0-or-later.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/'
+          unzip -l "$APK" | grep -q 'assets/index.html'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/'
+          unzip -l "$AAB" | grep -q 'base/assets/index.html'
           echo "GPL-3.0 text and sing-box-lx notices are present in APK and AAB"
 
       - name: Extract version info
