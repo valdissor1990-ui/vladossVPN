@@ -21,5 +21,26 @@ go-licenses report ./experimental/libbox \
   > "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
 cp "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" \
   "$ROOT/app/build/reports/license-audit/libbox-go-licenses.csv"
+
+# Collect license and notice files for native dependencies. go-licenses may also
+# copy source trees for reciprocal licenses into this temporary directory; only
+# license/notice documents are copied into the APK assets. The pinned source tag
+# is publicly available and is identified in sing-box-lx-NOTICE.txt.
+go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses"
+DEST="$ROOT/app/src/main/assets/licenses/libbox"
+rm -rf "$DEST"
+mkdir -p "$DEST"
+(
+  cd "$WORK/go-licenses"
+  find . -type f \\
+    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \\
+    -print0 |
+  while IFS= read -r -d '' file; do
+    target="$DEST/$file"
+    mkdir -p "$(dirname "$target")"
+    cp "$file" "$target"
+  done
+)
+
 printf 'Audited sing-box-lx v%s Android libbox Go dependency graph. Report: %s\n' \
   "$CORE_VERSION" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
