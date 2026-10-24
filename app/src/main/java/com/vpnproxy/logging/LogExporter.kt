@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.diagnostics.ServerDiagnosticsStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,7 +24,8 @@ import javax.inject.Singleton
 @Singleton
 class LogExporter @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val serverDiagnosticsStore: ServerDiagnosticsStore
 ) {
     companion object { private const val TAG = "LogExporter" }
 
@@ -55,6 +57,10 @@ class LogExporter @Inject constructor(
             append(sources.nativeText)
             if (sources.nativeText.isNotEmpty() && !sources.nativeText.endsWith("\n")) append("\n")
             append("=== NATIVE LIBBOX LOG END ===\n")
+            append("\n=== SERVER DIAGNOSTICS JSONL START ===\n")
+            append(readServerDiagnostics())
+            if (!endsWith("\n")) append("\n")
+            append("=== SERVER DIAGNOSTICS JSONL END ===\n")
         }
     }.getOrElse { t ->
         Log.e(TAG, "buildExportText failed", t)
@@ -72,6 +78,12 @@ class LogExporter @Inject constructor(
         val result = "Проверка экспорта: app bytes=${sources.appBytes}, lines=${sources.appLines}; native bytes=${sources.nativeBytes}, lines=${sources.nativeLines}; test file=${file.name}, bytes=${file.length()}"
         logCollector.info(TAG, result)
         return result
+    }
+
+    private fun readServerDiagnostics(): String {
+        val file = serverDiagnosticsStore.currentJournal() ?: return "[no server diagnostic events recorded]"
+        return runCatching { file.readText(Charsets.UTF_8).takeLast(2 * 1024 * 1024) }
+            .getOrElse { "[server diagnostics read failed: ${it.javaClass.simpleName}]" }
     }
 
     private fun readSources(): Sources {
