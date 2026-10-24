@@ -40,6 +40,7 @@ chmod +x scripts/download_libbox.sh
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Протоколы](docs/PROTOCOLS.md)
 - [Диагностика](docs/TROUBLESHOOTING.md)
+- [Сторонние лицензии и уведомления](THIRD_PARTY_NOTICES.md)
 - [Аудит open-source лицензий и критерии завершения](docs/OPEN_SOURCE_COMPLIANCE.md)
 
 ## Disclaimer
