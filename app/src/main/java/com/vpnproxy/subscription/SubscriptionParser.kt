@@ -97,6 +97,11 @@ class SubscriptionParser @Inject constructor(
         if (trimmed.isBlank()) return emptyList()
 
         val decoded = tryBase64Decode(trimmed)
+        if (decoded != null && decoded.trimStart().startsWith("{") &&
+            decoded.contains("\"add\"") && decoded.contains("\"id\"")
+        ) {
+            parseVmessJson(decoded, providerTag)?.let { return listOf(it) }
+        }
         if (decoded != null && (decoded.contains("vless://") || decoded.contains("hysteria2://") || decoded.contains("hy2://") || decoded.contains("tuic://"))) {
             return parseVlessLines(decoded, providerTag)
         }
@@ -144,6 +149,38 @@ class SubscriptionParser @Inject constructor(
                     else -> null
                 }
             }
+    }
+
+    private fun parseVmessJson(jsonText: String, providerTag: String): ParsedConfig? {
+        return try {
+            val obj = Json.parseToJsonElement(jsonText).jsonObject
+            val address = obj["add"]?.jsonPrimitive?.content ?: return null
+            val port = obj["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null
+            val uuid = obj["id"]?.jsonPrimitive?.content ?: return null
+            val network = (obj["net"]?.jsonPrimitive?.content ?: "tcp").lowercase()
+            val tlsValue = obj["tls"]?.jsonPrimitive?.content.orEmpty()
+            val security = if (tlsValue.equals("tls", true)) "tls" else "none"
+            val name = obj["ps"]?.jsonPrimitive?.content ?: "$address:$port"
+            ParsedConfig(
+                uuid = uuid, address = address, port = port, transport = network,
+                security = security, sni = obj["sni"]?.jsonPrimitive?.content ?: obj["servername"]?.jsonPrimitive?.content,
+                path = obj["path"]?.jsonPrimitive?.content, host = obj["host"]?.jsonPrimitive?.content,
+                mode = null, fingerprint = obj["fp"]?.jsonPrimitive?.content, publicKey = null,
+                shortId = null, flow = null, name = name, providerTag = providerTag
+            ).takeIf { it.isValid() }
+        } catch (e: Exception) {
+            logCollector.warn(TAG, "Failed to parse VMess JSON: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    private fun parseVmessUri(uri: String, providerTag: String): ParsedConfig? = try {
+        val encoded = uri.removePrefix("vmess://")
+        val decoded = String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
+        parseVmessJson(decoded, providerTag)
+    } catch (e: Exception) {
+        logCollector.warn(TAG, "Failed to decode VMess URI: ${e.javaClass.simpleName}")
+        null
     }
 
     fun parseHysteria2Uri(uri: String, providerTag: String = ""): ParsedConfig? {
