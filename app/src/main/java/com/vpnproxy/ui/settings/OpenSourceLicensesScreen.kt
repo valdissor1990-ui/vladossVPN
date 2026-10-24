@@ -1,5 +1,6 @@
 package com.vpnproxy.ui.settings
 
+import android.content.Context
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.horizontalScroll
@@ -46,6 +47,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     var showInventory by remember { mutableStateOf(false) }
     var showGoInventory by remember { mutableStateOf(false) }
     var selectedLicense by remember { mutableStateOf("GPL-3.0-or-later") }
+    var selectedLibboxLicense by remember { mutableStateOf<String?>(null) }
 
     val coreNotice = remember {
         context.assets.open("licenses/sing-box-lx-NOTICE.txt")
@@ -54,6 +56,14 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     }
     val hasGoInventory = remember {
         context.assets.list("licenses")?.contains("libbox-go-licenses.csv") == true
+    }
+    val libboxLicenseFiles = remember {
+        listAssetFiles(context, "licenses/libbox")
+    }
+    val selectedLibboxLicenseText = remember(selectedLibboxLicense) {
+        selectedLibboxLicense?.let { path ->
+            context.assets.open(path).bufferedReader().use { it.readText() }
+        }
     }
     val goInventoryText = remember(hasGoInventory) {
         if (hasGoInventory) {
@@ -84,7 +94,18 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
             ) {
+                Text("Модули, версия и тип лицензии", style = MaterialTheme.typography.titleMedium)
                 Text(goInventoryText, style = MaterialTheme.typography.bodySmall)
+                Text("Лицензии и уведомления нативных зависимостей", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+                libboxLicenseFiles.forEach { file ->
+                    TextButton(onClick = { selectedLibboxLicense = file }) {
+                        Text(file.substringAfterLast("/"))
+                    }
+                }
+                selectedLibboxLicenseText?.let { text ->
+                    Text(selectedLibboxLicense ?: "", style = MaterialTheme.typography.titleSmall)
+                    Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp, bottom = 24.dp))
+                }
             }
         }
         return
@@ -187,5 +208,15 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
             )
         }
+    }
+}
+
+
+private fun listAssetFiles(context: Context, path: String): List<String> {
+    val children = context.assets.list(path)?.toList().orEmpty()
+    return children.flatMap { child ->
+        val childPath = "$path/$child"
+        val nested = context.assets.list(childPath)?.toList().orEmpty()
+        if (nested.isEmpty()) listOf(childPath) else listAssetFiles(context, childPath)
     }
 }
