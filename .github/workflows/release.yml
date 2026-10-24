@@ -77,6 +77,16 @@ jobs:
           jar tf /tmp/libbox-classes.jar | grep -q "^go/Seq.class$"
           echo "Verified full libbox 1.14.3 with Go bridge classes"
 
+      - name: Generate dependency license report
+        run: ./gradlew generateLicenseReport --no-parallel --stacktrace
+
+      - name: Upload dependency license report
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-license-report
+          path: build/reports/dependency-license/**
+          if-no-files-found: warn
+
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -128,6 +138,19 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew bundlePlayRelease --stacktrace
+
+      - name: Verify bundled open-source license assets
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
+          AAB=app/build/outputs/bundle/playRelease/app-play-release.aab
+          test -f "$APK"
+          test -f "$AAB"
+          unzip -l "$APK" | grep -q 'assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
+          echo "GPL-3.0 text and sing-box-lx notices are present in APK and AAB"
 
       - name: Extract version info
         id: ver
@@ -224,6 +247,10 @@ jobs:
           files: |
             app/build/outputs/apk/direct/release/app-direct-*-release.apk
             app/build/outputs/bundle/playRelease/*.aab
+            LICENSE
+            app/src/main/assets/licenses/GPL-3.0-or-later.txt
+            app/src/main/assets/licenses/sing-box-lx-NOTICE.txt
+            docs/OPEN_SOURCE_COMPLIANCE.md
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
