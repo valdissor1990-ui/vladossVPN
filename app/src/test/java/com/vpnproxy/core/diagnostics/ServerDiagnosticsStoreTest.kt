@@ -35,7 +35,7 @@ class ServerDiagnosticsStoreTest {
             assertTrue(line.startsWith("{"))
             assertTrue(line.contains("\"event\":\"speed_test_completed\""))
             assertTrue(line.contains("\"protocol\":\"hysteria2\""))
-            assertTrue(line.contains("\"uploadMbps\":\"1.8\""))
+            assertTrue(line.contains("\"uploadMbps\":1.8"))
             assertFalse(line.contains("password"))
             assertFalse(line.contains("example.com"))
         } finally {
