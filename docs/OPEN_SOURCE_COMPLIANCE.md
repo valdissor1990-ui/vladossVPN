@@ -1,41 +1,37 @@
 # Open-source license compliance
 
-## Scope
+## Scope and source pins
 
-This Android app packages a local `libbox.aar` from sing-box-lx
-(`1.14.3-lx.21`) and uses AndroidX, Kotlin, OkHttp, Hilt, Room, WorkManager,
-SnakeYAML, Timber, JUnit and other Gradle dependencies. The repository README
-declares GPL-3.0 for the project.
+VLADOSS VPN is declared under GPL-3.0-or-later. The Android app packages
+`libbox.aar` from `Leadaxe/sing-box-lx` release `v1.14.3-lx.21` and has
+Android Gradle runtime dependencies.
 
-## Findings from the initial audit
+## Implemented in this branch
 
-- The README declares GPL-3.0, but the repository did not contain a root
-  `LICENSE` file.
-- The app's resource packaging excludes common `META-INF/LICENSE*` and
-  `META-INF/NOTICE*` resources. The build therefore must not rely on those
-  resources alone to provide notices.
-- The bundled `libbox.aar` is from sing-box-lx, which identifies its license as
-  GPL-3.0 inherited from sing-box. The associated upstream notice must be
-  preserved.
-- A complete inventory of direct and transitive Maven dependencies and the
-  native Go dependencies inside the AAR has not yet been verified.
+- Added the full GPL-3.0-or-later text to the source repository and Android
+  assets.
+- Preserved the sing-box-lx copyright and additional naming/association
+  condition in an explicit notice file.
+- Added an in-app Open Source Licenses entry.
+- Added a Gradle dependency-license report for the Direct and Play release
+  runtime classpaths. The generated report and available license/notice files
+  are packaged into the APK/AAB and are available from the in-app screen.
+- Added a native Go dependency audit for the exact sing-box-lx tag and Android
+  build tags. It generates a CSV inventory and collects license/notice files.
+- Added release checks that verify license assets are present in the APK/AAB.
 
-## Required completion criteria
+## Remaining verification before declaring full compliance
 
-1. Keep the complete GPL-3.0 text in the source repository and in the APK.
-2. Preserve the upstream copyright and additional notices applicable to
-   sing-box/sing-box-lx.
-3. Generate a dependency-license report for the release runtime classpath;
-   resolve every missing/unknown license and include required notices and texts.
-4. Inspect the pinned AAR's bundled native libraries and corresponding source
-   availability. A Maven report cannot fully identify dependencies compiled
-   into a local AAR.
-5. Provide an accessible in-app open-source licenses screen or equivalent
-   discoverable UI entry that opens the notices and full license texts.
-6. Make the license audit part of CI and retain its report as a release artifact.
-7. Re-run the release build and inspect the produced APK contents before
-   calling the project compliant.
+1. Confirm the native Go audit completes with no unknown license classifications
+   and inspect any upstream custom/additional license terms.
+2. Confirm the generated native and Gradle inventories are present in the final
+   APK and AAB, and inspect the actual release outputs.
+3. Confirm the source corresponding to the exact APK/AAB is published and the
+   pinned libbox source and build instructions are clearly accessible.
+4. Review the final notices and source-distribution method for the exact
+   distribution channel (direct APK vs. Play AAB) with qualified legal counsel.
 
-**Status: in progress.** The presence of these audit notes and the core GPL
-text does not by itself establish complete compliance. This is a technical
-checklist, not a legal opinion.
+The release workflow is intended to block packaging if the native license audit
+cannot classify a dependency. Do not treat a passing build alone as a legal
+opinion; the generated reports and the applicable upstream license texts must
+be reviewed for each release.
