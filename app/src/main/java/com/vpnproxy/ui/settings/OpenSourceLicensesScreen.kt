@@ -129,7 +129,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             ) {
                 gradleNoticeFiles.forEach { file ->
                     TextButton(onClick = { selectedGradleNotice = file }) {
-                        Text(file.substringAfterLast("/"))
+                        Text(file.removePrefix("licenses/gradle/"))
                     }
                 }
                 selectedGradleNoticeText?.let { text ->
@@ -171,7 +171,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 Text("Лицензии и уведомления нативных зависимостей", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
                 libboxLicenseFiles.forEach { file ->
                     TextButton(onClick = { selectedLibboxLicense = file }) {
-                        Text(file.substringAfterLast("/"))
+                        Text(file.removePrefix("licenses/libbox/"))
                     }
                 }
                 selectedLibboxLicenseText?.let { text ->
