@@ -185,7 +185,7 @@ cat > "$NAIVE_WORK/.git/info/sparse-checkout" <<'EOF'
 /src/**/CREDITS*
 /src/**/AUTHORS*
 /src/**/PATENTS
-/src/**/README.chromium
+/src/**/README.chromium*
 EOF
 git -C "$NAIVE_WORK" fetch --depth=1 --filter=blob:none origin "$NAIVEPROXY_COMMIT"
 git -C "$NAIVE_WORK" checkout --detach FETCH_HEAD
@@ -193,7 +193,7 @@ git -C "$NAIVE_WORK" checkout --detach FETCH_HEAD
 CRONET_DEST="$DEST/cronet-naiveproxy"
 mkdir -p "$CRONET_DEST"
 find "$NAIVE_WORK" -type f \
-  \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' -o -iname 'COPYRIGHT*' -o -iname 'CREDITS*' -o -iname 'AUTHORS*' -o -iname 'PATENTS' -o -iname 'README.chromium' \) \
+  \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' -o -iname 'COPYRIGHT*' -o -iname 'CREDITS*' -o -iname 'AUTHORS*' -o -iname 'PATENTS' -o -iname 'README.chromium*' \) \
   ! -path "$NAIVE_WORK/.git/*" -print0 |
 while IFS= read -r -d '' file; do
   rel="${file#"$NAIVE_WORK"/}"
