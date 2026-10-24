@@ -59,6 +59,13 @@ for module_dir in "$GOMODCACHE"/github.com/jackpal/go-nat-pmp@*; do
   done
 done
 
+# Re-scan after adding canonical license text to temporary copies, so the final
+# inventory uses classified license types rather than the short-form notices.
+for arch in $ARCHES; do
+  GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
+    > "$WORK/report-$arch.csv"
+done
+
 # Build a union of license rows across Android ABIs, preserving different license
 # options while removing duplicate rows. All source URLs are pinned to exact refs.
 python3 - "$WORK" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" "$CORE_VERSION" <<'PY'
@@ -77,7 +84,7 @@ replacements = {
 rows = []
 seen = set()
 for arch in ("arm64", "arm", "386", "amd64"):
-    with open(os.path.join(work, f"raw-{arch}.csv"), newline="", encoding="utf-8") as source:
+    with open(os.path.join(work, f"report-{arch}.csv"), newline="", encoding="utf-8") as source:
         for row in csv.reader(source):
             if len(row) < 3:
                 continue
