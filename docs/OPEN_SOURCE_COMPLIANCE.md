@@ -24,15 +24,13 @@ Android Gradle runtime dependencies.
 
 ## Latest automated inventory
 
-The CI inventory for the pinned `v1.14.3-lx.21` core produced:
+The CI inventory for the pinned `v1.14.3-lx.21` core is generated across the
+Android ABIs `arm64`, `arm`, `386`, and `amd64`, then merged into one CSV.
+The release audit fails if a license type or source URL remains unknown.
+Gradle release dependencies are inventoried separately in the HTML report.
 
-- 156 resolved Gradle release dependency entries in the HTML report.
-- 128 native Go package/license rows in the CSV report.
-- Zero unknown native license types and zero unresolved native source URLs
-  after mapping local submodules to the pinned upstream source tree.
-
-The counts are specific to this dependency graph and must be regenerated for
-each release.
+The final counts are specific to the pinned dependency graph and are regenerated
+for each release.
 
 ## Remaining verification before declaring full compliance
 
