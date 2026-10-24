@@ -15,6 +15,13 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
+    /** Ensure path always starts with / (some subscription links omit the leading slash). */
+    private fun normalizePath(path: String?): String {
+        val p = path?.trim().orEmpty()
+        if (p.isEmpty()) return "/"
+        return if (p.startsWith("/")) p else "/$p"
+    }
+
     fun build(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
@@ -40,13 +47,15 @@ object SingboxConfigBuilder {
             put("level", "debug")
             put("timestamp", true)
         })
-        // DIAG: UDP DNS without detour (type required in sing-box 1.14+)
+        // DNS must use detour=direct so resolution works under TUN + strict_route.
+        // Without detour, queries to 8.8.8.8 can be forced into the tunnel and fail.
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("type", "udp")
                     put("tag", "direct-dns")
                     put("server", "8.8.8.8")
+                    put("detour", "direct")
                 })
             })
             put("final", "direct-dns")
@@ -175,7 +184,7 @@ object SingboxConfigBuilder {
             if (isVless) when (config.transport.lowercase()) {
                 "ws" -> put("transport", buildJsonObject {
                     put("type", "ws")
-                    put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
+                    put("path", normalizePath(config.path))
                     config.host?.takeIf { it.isNotBlank() }?.let { host ->
                         put("headers", buildJsonObject { put("Host", host) })
                     }
@@ -186,14 +195,14 @@ object SingboxConfigBuilder {
                 })
                 "http" -> put("transport", buildJsonObject {
                     put("type", "http")
-                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
                     config.host?.takeIf { it.isNotBlank() }?.let { host ->
                         put("host", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(host)) })
                     }
                 })
                 "httpupgrade" -> put("transport", buildJsonObject {
                     put("type", "httpupgrade")
-                    put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
+                    put("path", normalizePath(config.path))
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
@@ -231,12 +240,16 @@ object SingboxConfigBuilder {
                         if (value is JsonPrimitive && value.isString && value.content.isBlank()) return@forEach
                         if (value is JsonPrimitive && value.booleanOrNull == false) return@forEach
                         if (singBoxKey in allowedKeys) {
-                            put(singBoxKey, value)
+                            if (singBoxKey == "path" && value is JsonPrimitive && value.isString) {
+                                put(singBoxKey, JsonPrimitive(normalizePath(value.content)))
+                            } else {
+                                put(singBoxKey, value)
+                            }
                         }
                     }
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
-                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
                     put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
                 })
             }
