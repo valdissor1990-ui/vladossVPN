@@ -519,6 +519,11 @@ fun ServerListContent(
     }
 }
 
+private fun extractFlagForGlassCard(name: String): String {
+    val match = Regex("[\\uD83C][\\uDDE6-\\uDDFF]{2}").find(name)
+    return match?.value.orEmpty()
+}
+
 @Composable
 private fun GlassServerCard(
     server: ScoredServer,
@@ -529,7 +534,7 @@ private fun GlassServerCard(
     onDetailsClick: () -> Unit
 ) {
     val config = server.config
-    val flag = extractFlag(config.name)
+    val flag = extractFlagForGlassCard(config.name)
     val title = config.name.replace(flag, "").trim().ifBlank { config.name }
     val transport = when (config.transport.lowercase()) {
         "hysteria2", "hy2" -> "HY2"
