@@ -35,6 +35,12 @@ private val bundledLicenseFiles = listOf(
     "GPL-3.0-or-later",
     "Apache-2.0",
     "BSD-3-Clause",
+    "BSD-2-Clause",
+    "MIT",
+    "ISC",
+    "MPL-2.0",
+    "Unlicense",
+    "CC0-1.0",
     "EPL-2.0",
     "GPL-2.0-only",
     "Classpath-exception-2.0"
