@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
@@ -76,9 +75,6 @@ fun HomeScreen(
                     }
                     IconButton(onClick = onNavigateToSubscriptions) {
                         Icon(Icons.Default.Cloud, "Subscriptions")
-                    }
-                    IconButton(onClick = onNavigateToDebug) {
-                        Icon(Icons.Default.BugReport, "Debug")
                     }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, "Settings")
@@ -166,6 +162,31 @@ fun HomeScreen(
                     onClick = { viewModel.toggleConnection() }
                 )
 
+                Spacer(Modifier.height(16.dp))
+
+                Text(
+                    text = "Режим выбора сервера",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OnDarkSecondary
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = uiState.automaticMode,
+                        onClick = { viewModel.setAutomaticMode(true) },
+                        label = { Text("Автоматический режим") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = !uiState.automaticMode,
+                        onClick = { viewModel.setAutomaticMode(false) },
+                        label = { Text("Ручной выбор сервера") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 if (uiState.isScanningServers) {
                     Spacer(Modifier.height(12.dp))
                     Row(
