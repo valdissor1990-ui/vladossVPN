@@ -56,7 +56,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         ) {
             Text("Лицензия VPN-ядра", style = MaterialTheme.typography.titleLarge)
             Text(
-                "Приложение включает sing-box-lx/libbox под GPL-3.0-or-later. " +
+                "Проект VLADOSS VPN заявлен под GPL-3.0-or-later и включает ядро sing-box-lx/libbox под GPL-3.0-or-later. " +
                     "Программное обеспечение предоставляется без гарантий в пределах, допускаемых применимым правом. " +
                     "Исходный код проекта: https://github.com/valdissor1990-ui/vladossVPN",
                 style = MaterialTheme.typography.bodyMedium,
