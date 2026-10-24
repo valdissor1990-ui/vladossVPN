@@ -10,7 +10,7 @@ git clone --depth 1 --recurse-submodules --branch "v${CORE_VERSION}" \
   https://github.com/Leadaxe/sing-box-lx "$WORK/sing-box-lx"
 
 mkdir -p "$WORK/bin" "$ROOT/app/src/main/assets/licenses" "$ROOT/app/build/reports/license-audit"
-GOBIN="$WORK/bin" go install github.com/google/go-licenses/v2@latest
+GOBIN="$WORK/bin" go install github.com/google/go-licenses/v2@v2.0.1
 export PATH="$WORK/bin:$PATH"
 
 # Match the Android libbox tag set from cmd/internal/build_libbox/main.go at the pinned tag.
