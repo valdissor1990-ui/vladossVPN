@@ -3,7 +3,8 @@ THIRD-PARTY SOFTWARE NOTICES
 VLADOSS VPN is declared under GPL-3.0-or-later. The full license text is
 provided as LICENSE in the source repository and in the app's licenses assets.
 The software is provided without warranty to the extent permitted by applicable
-law.
+law. The exact source commit used for each build is embedded in
+licenses/SOURCE_COMMIT.txt.
 
 1. VPN core: sing-box-lx / libbox
 - Pinned release: Leadaxe/sing-box-lx v1.14.3-lx.21
@@ -26,15 +27,32 @@ law.
   assets/licenses directory.
 
 3. Native Go dependencies included in libbox
-- The release build checks out the exact sing-box-lx source tag and runs the
-  license audit against the Android libbox package with the Android build tags.
-- The generated inventory is bundled as licenses/libbox-go-licenses.csv.
+- The audit uses the exact sing-box-lx source tag, Android build tags, and
+  Android GOOS/GOARCH variants arm64, arm, 386, and amd64.
+- The merged inventory is bundled as licenses/libbox-go-licenses.csv.
 - License and notice files collected by the audit are bundled under
   licenses/libbox.
-- The source tag and submodule revisions are available from the upstream
-  source repository and its pinned submodules.
+- Unknown license types and unresolved source URLs block the audit.
+
+4. Prebuilt Cronet / Chromium native libraries
+- The with_naive_outbound build tag includes libcronet.a archives from the
+  SagerNet/cronet-go Android packages.
+- Pinned cronet-go wrapper source:
+  https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
+- Pinned per-ABI libcronet.a package source:
+  https://github.com/SagerNet/cronet-go/tree/c10c03c318db6d47bec8705c8290bad34bc32b64
+- The pinned NaiveProxy / Chromium source revision:
+  https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
+- The cronet-go Go wrapper has its own GPL-3.0-or-later license. The native
+  archives have a BSD-style three-clause base license plus third-party
+  components with separate license and notice requirements.
+- The native archive inventory is bundled as
+  assets/licenses/cronet-native-licenses.csv. The pinned source's LICENSE,
+  src/LICENSE, and third-party LICENSE/NOTICE/COPYING/CREDITS/AUTHORS/PATENTS/
+  README.chromium files are bundled under
+  assets/licenses/libbox/cronet-naiveproxy.
 
 The CI/release workflow runs these inventories before packaging and fails if
-the native dependency audit cannot classify the dependencies. The generated
-reports and included files are the evidence to review for each release; this
-notice alone is not a legal certification.
+the native Go audit cannot classify a license or resolve a source URL. The
+reports and included upstream notices are evidence to review for each release;
+this notice alone is not a legal certification.
