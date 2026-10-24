@@ -68,6 +68,16 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      - name: Record exact source revision in license assets
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/licenses
+          cat > app/src/main/assets/licenses/SOURCE_COMMIT.txt <<EOF
+          VLADOSS VPN source commit: $GITHUB_SHA
+          Source: https://github.com/valdissor1990-ui/vladossVPN/tree/$GITHUB_SHA
+          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.21
+          EOF
+
       - name: Download full libbox 1.14.3
         run: |
           chmod +x scripts/download_libbox.sh
@@ -163,11 +173,13 @@ jobs:
           test -f "$APK"
           test -f "$AAB"
           unzip -l "$APK" | grep -q 'assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/SOURCE_COMMIT.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox-go-licenses.csv'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox/'
           unzip -l "$APK" | grep -q 'assets/index.html'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/SOURCE_COMMIT.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox-go-licenses.csv'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/'
