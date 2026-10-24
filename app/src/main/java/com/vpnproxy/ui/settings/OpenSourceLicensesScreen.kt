@@ -140,7 +140,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
             ) {
-                Text("Модули, версия и тип лицензии", style = MaterialTheme.typography.titleMedium)
+                Text("Пакеты, тип лицензии и ссылка на лицензию", style = MaterialTheme.typography.titleMedium)
                 Text(goInventoryText, style = MaterialTheme.typography.bodySmall)
                 Text("Лицензии и уведомления нативных зависимостей", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
                 libboxLicenseFiles.forEach { file ->
