@@ -135,7 +135,7 @@ cp "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" \
 # archives. Their binary licenses and third-party notices are separate from the
 # cronet-go Go wrapper license, so publish a distinct inventory.
 cat > "$ROOT/app/src/main/assets/licenses/cronet-native-licenses.csv" <<EOF
-component,source,license,additional_notices
+component,source,primary_license,third_party_notices
 libcronet.a (android/arm64),https://github.com/SagerNet/naiveproxy/tree/$NAIVEPROXY_COMMIT,BSD-3-Clause,licenses/libbox/cronet-naiveproxy/
 libcronet.a (android/arm),https://github.com/SagerNet/naiveproxy/tree/$NAIVEPROXY_COMMIT,BSD-3-Clause,licenses/libbox/cronet-naiveproxy/
 libcronet.a (android/386),https://github.com/SagerNet/naiveproxy/tree/$NAIVEPROXY_COMMIT,BSD-3-Clause,licenses/libbox/cronet-naiveproxy/
