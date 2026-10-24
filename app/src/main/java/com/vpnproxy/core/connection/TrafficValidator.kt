@@ -30,11 +30,11 @@ class TrafficValidator @Inject constructor(
     companion object {
         private const val TAG = "TrafficValidator"
         private const val PROBE_URL = "https://cp.cloudflare.com/generate_204"
-        private const val CONNECT_TIMEOUT_MS = 4_000
-        private const val READ_TIMEOUT_MS = 4_000
-        private const val PORT_WAIT_TIMEOUT_MS = 2_000L
+        private const val CONNECT_TIMEOUT_MS = 8_000
+        private const val READ_TIMEOUT_MS = 8_000
+        private const val PORT_WAIT_TIMEOUT_MS = 3_000L
         private const val PORT_POLL_MS = 100
-        private const val PORT_CONNECT_TIMEOUT_MS = 100
+        private const val PORT_CONNECT_TIMEOUT_MS = 150
     }
 
     suspend fun checkTraffic(serverName: String? = null): Boolean = withContext(Dispatchers.IO) {
