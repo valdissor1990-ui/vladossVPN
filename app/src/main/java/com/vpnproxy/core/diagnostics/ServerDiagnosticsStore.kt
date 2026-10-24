@@ -18,19 +18,16 @@ import javax.inject.Singleton
  * No network or upload code belongs in this class.
  */
 @Singleton
-class ServerDiagnosticsStore @Inject constructor(
-    @ApplicationContext context: Context
-) {
+class ServerDiagnosticsStore private constructor(
     private val journal: File
-
-    init {
-        journal = File(context.filesDir, DIRECTORY_NAME).resolve(FILE_NAME)
-    }
+) {
+    @Inject
+    constructor(@ApplicationContext context: Context) :
+        this(File(context.filesDir, DIRECTORY_NAME).resolve(FILE_NAME))
 
     @VisibleForTesting
-    internal constructor(directory: File, testOnly: Boolean) {
-        journal = File(directory, FILE_NAME)
-    }
+    internal constructor(directory: File, testOnly: Boolean) :
+        this(File(directory, FILE_NAME))
 
     fun record(event: ServerDiagnosticEvent) {
         synchronized(lock) {
