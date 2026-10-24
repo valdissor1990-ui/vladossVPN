@@ -1,7 +1,12 @@
 package com.vpnproxy.ui.settings
 
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,17 +18,34 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+
+private val bundledLicenseFiles = listOf(
+    "GPL-3.0-or-later",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "EPL-2.0",
+    "GPL-2.0-only",
+    "Classpath-exception-2.0"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    var showInventory by remember { mutableStateOf(false) }
+    var selectedLicense by remember { mutableStateOf("GPL-3.0-or-later") }
+
     val gplText = remember {
         context.assets.open("licenses/GPL-3.0-or-later.txt")
             .bufferedReader()
@@ -33,6 +55,38 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         context.assets.open("licenses/sing-box-lx-NOTICE.txt")
             .bufferedReader()
             .use { it.readText() }
+    }
+    val selectedLicenseText = remember(selectedLicense) {
+        context.assets.open("licenses/$selectedLicense.txt")
+            .bufferedReader()
+            .use { it.readText() }
+    }
+
+    if (showInventory) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Сторонние компоненты") },
+                    navigationIcon = {
+                        IconButton(onClick = { showInventory = false }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Назад к лицензиям")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            AndroidView(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                factory = { viewContext ->
+                    WebView(viewContext).apply {
+                        settings.javaScriptEnabled = false
+                        webViewClient = WebViewClient()
+                        loadUrl("file:///android_asset/index.html")
+                    }
+                }
+            )
+        }
+        return
     }
 
     Scaffold(
@@ -66,11 +120,36 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             Text(
                 coreNotice,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
+                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
             )
-            Text("GNU General Public License, версия 3", style = MaterialTheme.typography.titleMedium)
+
+            Text("Список сторонних Gradle-компонентов", style = MaterialTheme.typography.titleMedium)
             Text(
-                gplText,
+                "Отчёт сформирован по release-зависимостям приложения. Он содержит названия, версии, лицензии и ссылки на проекты. " +
+                    "Составные нативные зависимости внутри libbox.aar требуют отдельной проверки по исходникам sing-box-lx.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
+            )
+            TextButton(onClick = { showInventory = true }) {
+                Text("Открыть полный отчёт")
+            }
+
+            Text("Тексты лицензий", style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp)
+            ) {
+                bundledLicenseFiles.forEach { licenseName ->
+                    TextButton(onClick = { selectedLicense = licenseName }) {
+                        Text(if (selectedLicense == licenseName) "• $licenseName" else licenseName)
+                    }
+                }
+            }
+            Text(selectedLicense, style = MaterialTheme.typography.titleSmall)
+            Text(
+                selectedLicenseText,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
             )
