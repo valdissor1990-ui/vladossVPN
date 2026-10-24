@@ -240,7 +240,7 @@ fun ServerListContent(
             .padding(bottom = 24.dp)
     ) {
         Text(
-            text = "Найдено ${scanResults.count { it.successRate > 0.5f }} доступных серверов (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU)",
+            text = "Профилей: ${servers.size}; TCP-порт ответил у ${scanResults.count { it.successRate > 0.5f }} (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU). Работа VPN не подтверждена.",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
