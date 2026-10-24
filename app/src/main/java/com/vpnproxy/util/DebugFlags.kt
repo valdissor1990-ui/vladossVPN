@@ -5,5 +5,5 @@ package com.vpnproxy.util
  */
 object DebugFlags {
     /** Пропуск TrafficValidator → сразу Connected (проверка туннеля в браузере). */
-    const val SKIP_TRAFFIC_VALIDATION = true
+    const val SKIP_TRAFFIC_VALIDATION = false
 }
