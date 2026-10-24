@@ -2,7 +2,7 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ main, 'feat/**' ]
+    branches: [ main, 'feat/**', 'chore/**' ]
   pull_request:
     branches: [ main ]
 
@@ -45,6 +45,19 @@ jobs:
           chmod +x scripts/download_libbox.sh
           ./scripts/download_libbox.sh
           ls -la app/libs/
+
+      - name: Generate dependency license report
+        run: ./gradlew generateLicenseReport --no-parallel --stacktrace
+
+      - name: Upload dependency license report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-license-report
+          path: |
+            build/reports/dependency-license/**
+            **/build/reports/dependency-license/**
+          if-no-files-found: warn
 
       - name: Run unit tests
         run: ./gradlew testDirectDebugUnitTest --stacktrace
