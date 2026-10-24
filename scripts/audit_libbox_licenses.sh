@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 CORE_VERSION="1.14.3-lx.21"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+ARCHES="arm64 arm 386 amd64"
 
 git clone --depth 1 --recurse-submodules --branch "v${CORE_VERSION}" \
   https://github.com/Leadaxe/sing-box-lx "$WORK/sing-box-lx"
@@ -17,8 +18,14 @@ export PATH="$WORK/bin:$PATH"
 export GOFLAGS="-tags=with_gvisor,with_quic,with_wireguard,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_xhttp,with_awg,with_lx_command,with_lx_chain,with_lx_idle_suspend,with_openvpn,with_openconnect,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird"
 
 cd "$WORK/sing-box-lx"
-# First pass resolves the exact build-tagged dependency graph and populates the module cache.
-go-licenses report ./experimental/libbox > "$WORK/libbox-licenses-raw.csv"
+
+# Resolve package graphs for all Android ABIs supported by gomobile. Do not use
+# the Linux runner's default GOOS/GOARCH: it would report Linux-only packages.
+for arch in $ARCHES; do
+  echo "Resolving Android dependency graph for GOARCH=$arch"
+  GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
+    > "$WORK/raw-$arch.csv"
+done
 
 # Some upstream modules carry a short GPL-3.0-or-later notice plus additional
 # naming/association terms instead of the full license text. Preserve the notice
@@ -52,15 +59,14 @@ for module_dir in "$GOMODCACHE"/github.com/jackpal/go-nat-pmp@*; do
   done
 done
 
-go-licenses report ./experimental/libbox \
-  > "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
-
-# Repair source URLs for local submodule replacements and pin them to this release tree.
-python3 - "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" "$CORE_VERSION" <<'PY'
+# Build a union of license rows across Android ABIs, preserving different license
+# options while removing duplicate rows. All source URLs are pinned to exact refs.
+python3 - "$WORK" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" "$CORE_VERSION" <<'PY'
 import csv
+import os
 import sys
 
-path, version = sys.argv[1], sys.argv[2]
+work, output_path, version = sys.argv[1], sys.argv[2], sys.argv[3]
 release_root = f"https://github.com/Leadaxe/sing-box-lx/tree/v{version}"
 replacements = {
     "github.com/metacubex/utls": f"{release_root}/submodules/utls",
@@ -68,57 +74,70 @@ replacements = {
     "github.com/sagernet/sing-tun": f"{release_root}/submodules/sing-tun",
     "github.com/sagernet/wireguard-go": f"{release_root}/submodules/wireguard-go",
 }
-with open(path, newline="", encoding="utf-8") as source:
-    rows = list(csv.reader(source))
-for row in rows:
-    if len(row) < 3:
-        continue
-    package, url, _license = row[:3]
-    # These pinned upstream notice files explicitly say GPL version 3 or any later version.
-    if _license == "GPL-3.0":
-        row[2] = "GPL-3.0-or-later"
-    if url.startswith("https://github.com/sagernet/sing-box/blob/HEAD/"):
-        row[1] = url.replace(
-            "https://github.com/sagernet/sing-box/blob/HEAD/",
-            f"https://github.com/Leadaxe/sing-box-lx/blob/v{version}/",
-            1,
-        )
-    elif url == "Unknown":
-        for prefix, source_url in replacements.items():
-            if package == prefix or package.startswith(prefix + "/"):
-                row[1] = source_url
-                break
-with open(path, "w", newline="", encoding="utf-8") as output:
-    csv.writer(output, lineterminator="\n").writerows(rows)
-PY
+rows = []
+seen = set()
+for arch in ("arm64", "arm", "386", "amd64"):
+    with open(os.path.join(work, f"raw-{arch}.csv"), newline="", encoding="utf-8") as source:
+        for row in csv.reader(source):
+            if len(row) < 3:
+                continue
+            package, url, license_name = row[:3]
+            if license_name == "GPL-3.0":
+                license_name = "GPL-3.0-or-later"
+            if url.startswith("https://github.com/sagernet/sing-box/blob/HEAD/"):
+                url = url.replace(
+                    "https://github.com/sagernet/sing-box/blob/HEAD/",
+                    f"https://github.com/Leadaxe/sing-box-lx/blob/v{version}/",
+                    1,
+                )
+            elif url == "Unknown":
+                for prefix, source_url in replacements.items():
+                    if package == prefix or package.startswith(prefix + "/"):
+                        url = source_url
+                        break
+            row = [package, url, license_name]
+            key = tuple(row)
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
 
-if grep -q ',Unknown$' "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"; then
-  echo "Native license audit still contains unknown license types:"
-  grep ',Unknown$' "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
-  exit 1
-fi
+unknown_types = [row for row in rows if row[2] == "Unknown"]
+unknown_urls = [row for row in rows if row[1] == "Unknown"]
+if unknown_types or unknown_urls:
+    print("Unresolved native license entries:")
+    for row in unknown_types + unknown_urls:
+        print(",".join(row))
+    sys.exit(1)
+
+with open(output_path, "w", newline="", encoding="utf-8") as output:
+    csv.writer(output, lineterminator="\\n").writerows(rows)
+PY
 
 cp "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" \
   "$ROOT/app/build/reports/license-audit/libbox-go-licenses.csv"
 
-# Save license and notice documents. go-licenses may also copy reciprocal
-# source trees into this temporary directory; only license/notice documents
-# are copied into the APK assets.
-go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses"
+# Check and collect license/notice files for each target ABI. go-licenses may
+# copy reciprocal source trees into temp; only license/notice documents are
+# included in APK assets.
 DEST="$ROOT/app/src/main/assets/licenses/libbox"
 rm -rf "$DEST"
 mkdir -p "$DEST"
-(
-  cd "$WORK/go-licenses"
-  find . -type f \
-    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
-    -print0 |
-  while IFS= read -r -d '' file; do
-    target="$DEST/$file"
-    mkdir -p "$(dirname "$target")"
-    cp "$file" "$target"
-  done
-)
+for arch in $ARCHES; do
+  echo "Checking Android license graph for GOARCH=$arch"
+  GOOS=android GOARCH="$arch" go-licenses check ./experimental/libbox
+  GOOS=android GOARCH="$arch" go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses-$arch"
+  (
+    cd "$WORK/go-licenses-$arch"
+    find . -type f \
+      \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
+      -print0 |
+    while IFS= read -r -d '' file; do
+      target="$DEST/$file"
+      mkdir -p "$(dirname "$target")"
+      cp "$file" "$target"
+    done
+  )
+done
 
-printf 'Audited sing-box-lx v%s Android libbox Go dependency graph. Report: %s\n' \
-  "$CORE_VERSION" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
+printf 'Audited sing-box-lx v%s for Android ABIs (%s). Report: %s\n' \
+  "$CORE_VERSION" "$ARCHES" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
