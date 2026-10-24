@@ -74,6 +74,9 @@ for row in rows:
     if len(row) < 3:
         continue
     package, url, _license = row[:3]
+    # These pinned upstream notice files explicitly say GPL version 3 or any later version.
+    if _license == "GPL-3.0":
+        row[2] = "GPL-3.0-or-later"
     if url.startswith("https://github.com/sagernet/sing-box/blob/HEAD/"):
         row[1] = url.replace(
             "https://github.com/sagernet/sing-box/blob/HEAD/",
