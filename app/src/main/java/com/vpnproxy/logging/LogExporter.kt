@@ -77,17 +77,24 @@ class LogExporter @Inject constructor(
     private fun readSources(): Sources {
         val appFile = File(context.filesDir, "logs/app.log")
         val appRotated = File(context.filesDir, "logs/app.log.1")
-        val appText = buildString {
+        val appTextRaw = buildString {
             if (appRotated.isFile) append(runCatching { appRotated.readText(Charsets.UTF_8) }.getOrDefault(""))
             if (appFile.isFile) append(runCatching { appFile.readText(Charsets.UTF_8) }.getOrDefault(""))
             if (isEmpty()) append(logCollector.getAllEntries().joinToString("\n") { it.toFormattedString(maskSensitive = true) })
         }.trimEnd()
+        // Re-sanitize historical files too: older app/native logs may predate masking.
+        val appText = appTextRaw.lineSequence()
+            .joinToString("\n") { line -> SensitiveMasker.mask(line) }
+            .trimEnd()
         val nativeFile = File(context.filesDir, "logs/libbox.log")
         val nativeText = if (nativeFile.isFile) {
             runCatching { nativeFile.readText(Charsets.UTF_8) }.getOrElse {
                 "[native log read failed: ${it.javaClass.simpleName}: ${it.message}]"
             }.lineSequence().filter { it.isNotBlank() }
-                .joinToString("\n") { line -> if (line.startsWith("[LIBBOX]")) line else "[LIBBOX] $line" }
+                .joinToString("\n") { line ->
+                    val tagged = if (line.startsWith("[LIBBOX]")) line else "[LIBBOX] $line"
+                    SensitiveMasker.mask(tagged)
+                }
         } else ""
         return Sources(
             appText = appText,
