@@ -57,6 +57,13 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     var selectedLibboxLicense by remember { mutableStateOf<String?>(null) }
     var selectedGradleNotice by remember { mutableStateOf<String?>(null) }
 
+    val sourceRevisionText = remember {
+        if (context.assets.list("licenses")?.contains("SOURCE_COMMIT.txt") == true) {
+            context.assets.open("licenses/SOURCE_COMMIT.txt").bufferedReader().use { it.readText() }
+        } else {
+            "Исходный код проекта: https://github.com/valdissor1990-ui/vladossVPN"
+        }
+    }
     val coreNotice = remember {
         context.assets.open("licenses/sing-box-lx-NOTICE.txt")
             .bufferedReader()
@@ -211,6 +218,9 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
             )
+            Text("Исходный код и версия", style = MaterialTheme.typography.titleMedium)
+            Text(sourceRevisionText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
+
             Text("Уведомления компонента", style = MaterialTheme.typography.titleMedium)
             Text(
                 coreNotice,
