@@ -32,6 +32,7 @@ for root in "$WORK/sing-box-lx" "$GOMODCACHE/github.com/sagernet" "$GOMODCACHE/g
     if grep -q "GNU General Public License" "$license_file" &&
        grep -qE "either version 3|version 3 of the License" "$license_file" &&
        ! grep -q "GNU GENERAL PUBLIC LICENSE" "$license_file"; then
+      chmod u+w "$license_file"
       printf '\n\n' >> "$license_file"
       cat "$ROOT/app/src/main/assets/licenses/GPL-3.0-or-later.txt" >> "$license_file"
     fi
@@ -43,7 +44,15 @@ done
 # module-cache copy used by the audit.
 for module_dir in "$GOMODCACHE"/github.com/jackpal/go-nat-pmp@*; do
   [ -d "$module_dir" ] || continue
-  cp "$ROOT/app/src/main/assets/licenses/Apache-2.0.txt" "$module_dir/LICENSE-APACHE.txt"
+  for license_file in "$module_dir"/LICENSE*; do
+    [ -f "$license_file" ] || continue
+    if grep -q "Licensed under the Apache License, Version 2.0" "$license_file" &&
+       ! grep -q "Version 2.0, January 2004" "$license_file"; then
+      chmod u+w "$license_file"
+      printf '\n\n' >> "$license_file"
+      cat "$ROOT/app/src/main/assets/licenses/Apache-2.0.txt" >> "$license_file"
+    fi
+  done
 done
 
 go-licenses report ./experimental/libbox \
