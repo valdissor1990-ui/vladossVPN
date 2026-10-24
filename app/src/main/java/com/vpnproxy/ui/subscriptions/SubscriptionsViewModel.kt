@@ -76,7 +76,7 @@ class SubscriptionsViewModel @Inject constructor(
                 _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
                 logCollector.info(
                     "SubscriptionsVM",
-                    "Refreshed and scanned: reachableUnique=$reachableCount; scannedUnique=${scanResults.size}"
+                    "Refreshed and scanned: tcpResponsive=$tcpResponsiveCount; scannedUnique=${scanResults.size}"
                 )
             } catch (c: CancellationException) {
                 throw c
