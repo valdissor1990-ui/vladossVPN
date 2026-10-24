@@ -40,8 +40,11 @@ class LogCollector @Inject constructor() {
     fun add(entry: LogEntry) {
         buffer.addLast(entry)
         while (buffer.size > MAX_ENTRIES) buffer.pollFirst()
-        _logs.value = buffer.toList()
-        applyFilters()
+        // Reuse the snapshot for both flows. Creating two snapshots and filtering the
+        // entire 10k-entry buffer for every log line creates avoidable allocation/CPU load.
+        val entries = buffer.toList()
+        _logs.value = entries
+        applyFilters(entries)
         persistEntry(entry)
     }
 
@@ -89,8 +92,18 @@ class LogCollector @Inject constructor() {
         applyFilters()
     }
 
-    private fun applyFilters() {
-        _filteredLogs.value = buffer.toList().filter { entry ->
+    private fun applyFilters(entries: List<LogEntry> = buffer.toList()) {
+        // The default view contains every entry. Avoid a full O(n) filter pass on
+        // every log line unless the user has actually enabled a filter.
+        if (currentFilterLevel == LogLevel.TRACE &&
+            currentFilterTag == null &&
+            currentSearchQuery.isNullOrBlank()
+        ) {
+            _filteredLogs.value = entries
+            return
+        }
+
+        _filteredLogs.value = entries.filter { entry ->
             entry.level.ordinal >= currentFilterLevel.ordinal &&
                 (currentFilterTag == null || entry.tag == currentFilterTag) &&
                 (currentSearchQuery.isNullOrBlank() || entry.message.contains(currentSearchQuery!!, ignoreCase = true))
