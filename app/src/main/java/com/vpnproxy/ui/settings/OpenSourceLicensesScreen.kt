@@ -220,8 +220,8 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
 
             Text("Список сторонних Gradle-компонентов", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Отчёт сформирован по release-зависимостям приложения. Он содержит названия, версии, лицензии и ссылки на проекты. " +
-                    "Составные нативные зависимости внутри libbox.aar требуют отдельной проверки по исходникам sing-box-lx.",
+                "Отчёт сформирован по release-зависимостям приложения и содержит названия, лицензии и ссылки, обнаруженные из метаданных. " +
+                    "Для нативных Go-зависимостей libbox используется отдельный аудит точного upstream-тега; его инвентарь и собранные уведомления доступны ниже.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
             )
