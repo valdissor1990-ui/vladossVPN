@@ -78,13 +78,13 @@ jobs:
           echo "Verified full libbox 1.14.3 with Go bridge classes"
 
       - name: Generate dependency license report
-        run: ./gradlew generateLicenseReport --no-parallel --stacktrace
+        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
 
       - name: Upload dependency license report
         uses: actions/upload-artifact@v7
         with:
           name: dependency-license-report
-          path: build/reports/dependency-license/**
+          path: app/build/reports/dependency-license/**
           if-no-files-found: warn
 
       - name: Decode keystore
