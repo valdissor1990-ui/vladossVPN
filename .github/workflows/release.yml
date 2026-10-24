@@ -100,6 +100,10 @@ jobs:
         run: |
           set -euo pipefail
           test -s app/src/main/assets/licenses/libbox-go-licenses.csv
+          test -s app/src/main/assets/licenses/cronet-native-licenses.csv
+          test -s app/src/main/assets/licenses/cronet-native-NOTICE.txt
+          test -s app/src/main/assets/licenses/libbox/cronet-naiveproxy/LICENSE
+          test -s app/src/main/assets/licenses/libbox/cronet-naiveproxy/src/LICENSE
           test -d app/src/main/assets/licenses/libbox
           test "$(find app/src/main/assets/licenses/libbox -type f | wc -l)" -gt 0
 
@@ -178,12 +182,20 @@ jobs:
           unzip -l "$APK" | grep -q 'assets/licenses/SOURCE_COMMIT.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-licenses.csv'
+          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-NOTICE.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/LICENSE'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox/'
           unzip -l "$APK" | grep -q 'assets/index.html'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/SOURCE_COMMIT.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-licenses.csv'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-NOTICE.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/LICENSE'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/'
           unzip -l "$AAB" | grep -q 'base/assets/index.html'
           echo "GPL-3.0 text and sing-box-lx notices are present in APK and AAB"
