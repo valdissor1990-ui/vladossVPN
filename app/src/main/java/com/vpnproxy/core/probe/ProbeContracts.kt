@@ -109,7 +109,7 @@ object BackoffPolicy {
             .sorted()
             .toList()
         if (failures.size < threshold) return null
-        return failures[failures.size - threshold] + backoffMs
+        return failures.last() + backoffMs
     }
 
     fun minimumRetentionMs(windowMs: Long, safetyMarginMs: Long): Long {
