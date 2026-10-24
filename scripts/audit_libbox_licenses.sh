@@ -32,8 +32,8 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 (
   cd "$WORK/go-licenses"
-  find . -type f \\
-    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \\
+  find . -type f \
+    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
     -print0 |
   while IFS= read -r -d '' file; do
     target="$DEST/$file"
