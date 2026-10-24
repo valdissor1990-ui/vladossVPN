@@ -46,11 +46,6 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     var showInventory by remember { mutableStateOf(false) }
     var selectedLicense by remember { mutableStateOf("GPL-3.0-or-later") }
 
-    val gplText = remember {
-        context.assets.open("licenses/GPL-3.0-or-later.txt")
-            .bufferedReader()
-            .use { it.readText() }
-    }
     val coreNotice = remember {
         context.assets.open("licenses/sing-box-lx-NOTICE.txt")
             .bufferedReader()
