@@ -39,7 +39,6 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
-    onNavigateToDebug: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
