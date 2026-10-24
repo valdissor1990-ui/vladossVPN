@@ -61,27 +61,32 @@ class ServerDiagnosticsStore private constructor(
     }
 
     private fun ServerDiagnosticEvent.toJsonLine(): String {
-        val fields = linkedMapOf<String, String?>(
-            "schemaVersion" to "1",
-            "timestamp" to timestampEpochMs.toString(),
+        val fields = linkedMapOf<String, Any?>(
+            "schemaVersion" to 1,
+            "timestamp" to timestampEpochMs,
             "event" to eventType,
             "runId" to runId,
             "serverId" to serverId,
             "protocol" to normalizeProtocol(protocol),
             "stage" to stage,
-            "dnsMs" to dnsMs?.toString(),
-            "connectMs" to connectMs?.toString(),
-            "handshakeMs" to handshakeMs?.toString(),
-            "downloadMbps" to downloadMbps?.finiteNumber(),
-            "uploadMbps" to uploadMbps?.finiteNumber(),
-            "durationMs" to durationMs?.toString(),
-            "bytesDownloaded" to bytesDownloaded?.toString(),
-            "bytesUploaded" to bytesUploaded?.toString(),
-            "success" to success?.toString(),
+            "dnsMs" to dnsMs,
+            "connectMs" to connectMs,
+            "handshakeMs" to handshakeMs,
+            "downloadMbps" to downloadMbps?.takeIf { it.isFinite() && it >= 0.0 },
+            "uploadMbps" to uploadMbps?.takeIf { it.isFinite() && it >= 0.0 },
+            "durationMs" to durationMs,
+            "bytesDownloaded" to bytesDownloaded,
+            "bytesUploaded" to bytesUploaded,
+            "success" to success,
             "errorCode" to normalizeErrorCode(errorCode)
         )
         return fields.entries.joinToString(prefix = "{", postfix = "}") { (key, value) ->
-            "${key.jsonString()}:${value?.let { it.jsonString() } ?: "null"}"
+            val encoded = when (value) {
+                null -> "null"
+                is String -> value.jsonString()
+                else -> value.toString()
+            }
+            "${key.jsonString()}:$encoded"
         }
     }
 
@@ -148,6 +153,9 @@ data class ServerDiagnosticEvent(
         require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) { "runId must be opaque" }
         require(serverId == null || serverId.matches(Regex("[a-fA-F0-9]{8,64}"))) {
             "serverId must be a hexadecimal hash, not a hostname or profile name"
+        }
+        require(stage == null || stage.matches(Regex("[a-z_]{1,32}"))) {
+            "stage must be a stable code, not free-form text"
         }
         require(listOf(dnsMs, connectMs, handshakeMs, durationMs, bytesDownloaded, bytesUploaded)
             .filterNotNull().all { it >= 0L }) { "timings and byte counts must be non-negative" }
