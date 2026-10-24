@@ -144,8 +144,15 @@ class ServerScanner @Inject constructor(
             _scannedServers.value.size == keys.size
     }
 
+    /**
+     * Returns all scanned profiles. TCP connect is only an endpoint reachability hint;
+     * it must not exclude UDP protocols or be interpreted as VPN tunnel availability.
+     * Responsive TCP endpoints remain first for convenient ordering.
+     */
     fun availableServers(): List<ScoredServer> =
-        _scannedServers.value.filter { it.successRate > 0.5f }
+        _scannedServers.value.sortedWith(
+            compareBy<ScoredServer>({ if (it.successRate > 0.5f) 0 else 1 }, { it.latencyMs })
+        )
 
     fun isRussianServer(config: ParsedConfig): Boolean {
         val labels = "${config.name} ${config.providerTag}"
