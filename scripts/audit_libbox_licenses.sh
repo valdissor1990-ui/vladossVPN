@@ -23,7 +23,7 @@ cd "$WORK/sing-box-lx"
 # the Linux runner's default GOOS/GOARCH: it would report Linux-only packages.
 for arch in $ARCHES; do
   echo "Resolving Android dependency graph for GOARCH=$arch"
-  GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
+  CGO_ENABLED=1 GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
     > "$WORK/raw-$arch.csv"
 done
 
@@ -62,7 +62,7 @@ done
 # Re-scan after adding canonical license text to temporary copies, so the final
 # inventory uses classified license types rather than the short-form notices.
 for arch in $ARCHES; do
-  GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
+  CGO_ENABLED=1 GOOS=android GOARCH="$arch" go-licenses report ./experimental/libbox \
     > "$WORK/report-$arch.csv"
 done
 
@@ -131,8 +131,8 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 for arch in $ARCHES; do
   echo "Checking Android license graph for GOARCH=$arch"
-  GOOS=android GOARCH="$arch" go-licenses check ./experimental/libbox
-  GOOS=android GOARCH="$arch" go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses-$arch"
+  CGO_ENABLED=1 GOOS=android GOARCH="$arch" go-licenses check ./experimental/libbox
+  CGO_ENABLED=1 GOOS=android GOARCH="$arch" go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses-$arch"
   (
     cd "$WORK/go-licenses-$arch"
     find . -type f \
