@@ -72,6 +72,16 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     val hasGoInventory = remember {
         context.assets.list("licenses")?.contains("libbox-go-licenses.csv") == true
     }
+    val hasCronetInventory = remember {
+        context.assets.list("licenses")?.contains("cronet-native-licenses.csv") == true
+    }
+    val cronetInventoryText = remember(hasCronetInventory) {
+        if (hasCronetInventory) {
+            context.assets.open("licenses/cronet-native-licenses.csv")
+                .bufferedReader()
+                .use { it.readText() }
+        } else ""
+    }
     val libboxLicenseFiles = remember {
         listAssetFiles(context, "licenses/libbox")
     }
@@ -147,7 +157,16 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
             ) {
-                Text("Пакеты, тип лицензии и ссылка на лицензию", style = MaterialTheme.typography.titleMedium)
+                if (hasCronetInventory) {
+                    Text("Предсобранные Cronet/Chromium-библиотеки", style = MaterialTheme.typography.titleMedium)
+                    Text(cronetInventoryText, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Основная BSD-лицензия не заменяет уведомления отдельных сторонних компонентов; они перечислены в файлах лицензий ниже.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
+                    )
+                }
+                Text("Go-пакеты, тип лицензии и ссылка на лицензию", style = MaterialTheme.typography.titleMedium)
                 Text(goInventoryText, style = MaterialTheme.typography.bodySmall)
                 Text("Лицензии и уведомления нативных зависимостей", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
                 libboxLicenseFiles.forEach { file ->
@@ -231,7 +250,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             Text("Список сторонних Gradle-компонентов", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Отчёт сформирован по release-зависимостям приложения и содержит названия, лицензии и ссылки, обнаруженные из метаданных. " +
-                    "Для нативных Go-зависимостей libbox используется отдельный аудит точного upstream-тега; его инвентарь и собранные уведомления доступны ниже.",
+                    "Для нативных Go-зависимостей и встроенных Cronet/Chromium-библиотек есть отдельные инвентари и собранные уведомления ниже.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
             )
