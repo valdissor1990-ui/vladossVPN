@@ -135,6 +135,10 @@ android {
     }
 }
 
+licenseReport {
+    configurations = arrayOf("directReleaseRuntimeClasspath", "playReleaseRuntimeClasspath")
+}
+
 dependencies {
     // Full sing-box-lx 1.14.3-lx.21 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
