@@ -28,6 +28,8 @@ class LogCollector @Inject constructor() {
     }
 
     private val buffer = ConcurrentLinkedDeque<LogEntry>()
+    private val bufferLock = Any()
+    private var entryCount = 0
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
     private val _filteredLogs = MutableStateFlow<List<LogEntry>>(emptyList())
@@ -38,12 +40,19 @@ class LogCollector @Inject constructor() {
 
 
     fun add(entry: LogEntry) {
-        buffer.addLast(entry)
-        while (buffer.size > MAX_ENTRIES) buffer.pollFirst()
-        // Reuse the snapshot for both flows. Creating two snapshots and filtering the
-        // entire 10k-entry buffer for every log line creates avoidable allocation/CPU load.
-        val entries = buffer.toList()
+        // ConcurrentLinkedDeque.size() is O(n); maintain a count under a small lock
+        // instead of traversing the whole queue on every log line.
+        val entries = synchronized(bufferLock) {
+            buffer.addLast(entry)
+            entryCount++
+            while (entryCount > MAX_ENTRIES) {
+                if (buffer.pollFirst() != null) entryCount-- else break
+            }
+            // Reuse one snapshot for both StateFlows.
+            buffer.toList()
+        }
         _logs.value = entries
+        // The default unfiltered view can reuse the same snapshot without scanning it.
         applyFilters(entries)
         persistEntry(entry)
     }
@@ -89,10 +98,12 @@ class LogCollector @Inject constructor() {
         currentFilterLevel = level ?: LogLevel.TRACE
         currentFilterTag = tag
         currentSearchQuery = query
-        applyFilters()
+        applyFilters(snapshot())
     }
 
-    private fun applyFilters(entries: List<LogEntry> = buffer.toList()) {
+    private fun snapshot(): List<LogEntry> = synchronized(bufferLock) { buffer.toList() }
+
+    private fun applyFilters(entries: List<LogEntry>) {
         // The default view contains every entry. Avoid a full O(n) filter pass on
         // every log line unless the user has actually enabled a filter.
         if (currentFilterLevel == LogLevel.TRACE &&
@@ -112,12 +123,15 @@ class LogCollector @Inject constructor() {
 
     /** Clears only the visible/in-memory buffer; persistent diagnostic history is retained. */
     fun clear() {
-        buffer.clear()
+        synchronized(bufferLock) {
+            buffer.clear()
+            entryCount = 0
+        }
         _logs.value = emptyList()
         _filteredLogs.value = emptyList()
     }
 
-    fun getAllEntries(): List<LogEntry> = buffer.toList()
+    fun getAllEntries(): List<LogEntry> = snapshot()
 }
 
 /** Timber Tree forwarding all app-level messages to LogCollector. */
