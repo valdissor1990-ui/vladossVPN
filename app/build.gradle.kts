@@ -139,6 +139,20 @@ licenseReport {
     configurations = arrayOf("directReleaseRuntimeClasspath", "playReleaseRuntimeClasspath")
 }
 
+val generatedLicenseAssets = layout.buildDirectory.dir("generated/licenseAssets")
+
+android.sourceSets.getByName("main").assets.srcDir(generatedLicenseAssets)
+
+val syncDependencyLicenseAssets = tasks.register<Sync>("syncDependencyLicenseAssets") {
+    dependsOn("generateLicenseReport")
+    from(layout.buildDirectory.dir("reports/dependency-license"))
+    into(generatedLicenseAssets)
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncDependencyLicenseAssets)
+}
+
 dependencies {
     // Full sing-box-lx 1.14.3-lx.21 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
