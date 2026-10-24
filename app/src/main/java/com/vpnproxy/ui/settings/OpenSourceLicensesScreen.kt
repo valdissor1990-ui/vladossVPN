@@ -44,6 +44,7 @@ private val bundledLicenseFiles = listOf(
 fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var showInventory by remember { mutableStateOf(false) }
+    var showGoInventory by remember { mutableStateOf(false) }
     var selectedLicense by remember { mutableStateOf("GPL-3.0-or-later") }
 
     val coreNotice = remember {
@@ -51,10 +52,42 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             .bufferedReader()
             .use { it.readText() }
     }
+    val hasGoInventory = remember {
+        context.assets.list("licenses")?.contains("libbox-go-licenses.csv") == true
+    }
+    val goInventoryText = remember(hasGoInventory) {
+        if (hasGoInventory) {
+            context.assets.open("licenses/libbox-go-licenses.csv")
+                .bufferedReader()
+                .use { it.readText() }
+        } else ""
+    }
     val selectedLicenseText = remember(selectedLicense) {
         context.assets.open("licenses/$selectedLicense.txt")
             .bufferedReader()
             .use { it.readText() }
+    }
+
+    if (showGoInventory) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Нативные зависимости libbox") },
+                    navigationIcon = {
+                        IconButton(onClick = { showGoInventory = false }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Назад к лицензиям")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
+            ) {
+                Text(goInventoryText, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        return
     }
 
     if (showInventory) {
@@ -127,6 +160,11 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             )
             TextButton(onClick = { showInventory = true }) {
                 Text("Открыть полный отчёт")
+            }
+            if (hasGoInventory) {
+                TextButton(onClick = { showGoInventory = true }) {
+                    Text("Открыть отчёт нативного ядра")
+                }
             }
 
             Text("Тексты лицензий", style = MaterialTheme.typography.titleMedium)
