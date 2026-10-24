@@ -2,6 +2,8 @@ package com.vpnproxy.core.scanner
 
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.diagnostics.ServerDiagnosticEvent
+import com.vpnproxy.core.diagnostics.ServerDiagnosticsStore
 import com.vpnproxy.core.ping.PingExecutor
 import com.vpnproxy.core.ping.PingProtocol
 import com.vpnproxy.core.ping.PingRegion
@@ -38,7 +40,8 @@ class ServerScanner @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val connectionCoordinator: ConnectionCoordinator,
     private val autoSwitcher: AutoSwitcher,
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val diagnosticsStore: ServerDiagnosticsStore
 ) {
     companion object {
         private const val TAG = "ServerScanner"
@@ -160,6 +163,8 @@ class ServerScanner @Inject constructor(
     fun configKey(config: ParsedConfig): String = config.connectionKey()
 
     private suspend fun probe(config: ParsedConfig): ScoredServer {
+        val startedAt = System.nanoTime()
+        val runId = ServerDiagnosticsStore.newRunId()
         val target = PingTarget(
             id = pingTargetId(config),
             displayName = config.name,
@@ -172,6 +177,18 @@ class ServerScanner @Inject constructor(
         return try {
             val result = pingExecutor.ping(target, SERVER_TIMEOUT_MS)
             val latency = result.rttMs?.takeIf { result.success } ?: Long.MAX_VALUE
+            diagnosticsStore.record(
+                ServerDiagnosticEvent(
+                    eventType = "probe_completed",
+                    runId = runId,
+                    serverId = diagnosticServerId(config),
+                    protocol = config.transport,
+                    stage = "tcp_connect",
+                    connectMs = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(0L),
+                    success = result.success && result.rttMs != null,
+                    errorCode = if (result.success && result.rttMs != null) null else "PROBE_FAILED"
+                )
+            )
             ScoredServer(
                 config = config,
                 latencyMs = latency,
@@ -184,10 +201,28 @@ class ServerScanner @Inject constructor(
         } catch (c: CancellationException) {
             throw c
         } catch (e: Exception) {
-            logCollector.debug(TAG, "TCP probe failed for ${config.name}: ${e.message}")
+            diagnosticsStore.record(
+                ServerDiagnosticEvent(
+                    eventType = "probe_failed",
+                    runId = runId,
+                    serverId = diagnosticServerId(config),
+                    protocol = config.transport,
+                    stage = "tcp_connect",
+                    connectMs = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(0L),
+                    success = false,
+                    errorCode = "PROBE_EXCEPTION"
+                )
+            )
+            logCollector.debug(TAG, "TCP probe failed for ${config.name}: ${e.javaClass.simpleName}")
             ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
         }
     }
+
+    private fun diagnosticServerId(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest("${config.address.lowercase()}:${config.port}".toByteArray(Charsets.UTF_8))
+            .take(12)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private fun pingTargetId(config: ParsedConfig): String =
         MessageDigest.getInstance("SHA-256")
