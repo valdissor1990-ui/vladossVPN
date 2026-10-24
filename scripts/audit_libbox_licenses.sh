@@ -57,6 +57,92 @@ done
 
 go-licenses report ./experimental/libbox \
   > "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
+
+# Repair source URLs for packages whose local submodule replacement prevents
+# go-licenses from discovering a canonical web URL. Pin every link to the exact
+# upstream release tree used for this AAR.
+python3 - "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" "$CORE_VERSION" <<'PY'
+import csv
+import sys
+
+path, version = sys.argv[1], sys.argv[2]
+release_root = f"https://github.com/Leadaxe/sing-box-lx/tree/v{version}"
+replacements = {
+    "github.com/metacubex/utls": f"{release_root}/submodules/utls",
+    "github.com/sagernet/gvisor": f"{release_root}/submodules/gvisor",
+    "github.com/sagernet/sing-tun": f"{release_root}/submodules/sing-tun",
+    "github.com/sagernet/wireguard-go": f"{release_root}/submodules/wireguard-go",
+}
+rows = list(csv.reader(open(path, newline="", encoding="utf-8")))
+for row in rows:
+    if len(row) < 3:
+        continue
+    package, url, _license = row[:3]
+    if url.startswith("https://github.com/sagernet/sing-box/blob/HEAD/"):
+        row[1] = url.replace(
+            "https://github.com/sagernet/sing-box/blob/HEAD/",
+            f"https://github.com/Leadaxe/sing-box-lx/blob/v{version}/",
+            1,
+        )
+    elif url == "Unknown":
+        for prefix, source_url in replacements.items():
+            if package == prefix or package.startswith(prefix + "/"):
+                row[1] = source_url
+                break
+with open(path, "w", newline="", encoding="utf-8") as output:
+    csv.writer(output, lineterminator="\\n").writerows(rows)
+PY
+
+if grep -q ',Unknown
+# Save the license documents and notices required by the classified dependencies.
+# go-licenses may copy source trees for reciprocal licenses into this temporary
+# directory; only license/notice documents are copied into APK assets.
+go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses"
+DEST="$ROOT/app/src/main/assets/licenses/libbox"
+rm -rf "$DEST"
+mkdir -p "$DEST"
+(
+  cd "$WORK/go-licenses"
+  find . -type f \
+    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
+    -print0 |
+  while IFS= read -r -d '' file; do
+    target="$DEST/$file"
+    mkdir -p "$(dirname "$target")"
+    cp "$file" "$target"
+  done
+)
+
+printf 'Audited sing-box-lx v%s Android libbox Go dependency graph. Report: %s\n' \
+  "$CORE_VERSION" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
+ "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"; then
+  echo "Native license audit still contains unknown license types:"
+  grep ',Unknown
+# Save the license documents and notices required by the classified dependencies.
+# go-licenses may copy source trees for reciprocal licenses into this temporary
+# directory; only license/notice documents are copied into APK assets.
+go-licenses save ./experimental/libbox --save_path="$WORK/go-licenses"
+DEST="$ROOT/app/src/main/assets/licenses/libbox"
+rm -rf "$DEST"
+mkdir -p "$DEST"
+(
+  cd "$WORK/go-licenses"
+  find . -type f \
+    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
+    -print0 |
+  while IFS= read -r -d '' file; do
+    target="$DEST/$file"
+    mkdir -p "$(dirname "$target")"
+    cp "$file" "$target"
+  done
+)
+
+printf 'Audited sing-box-lx v%s Android libbox Go dependency graph. Report: %s\n' \
+  "$CORE_VERSION" "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
+ "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv"
+  exit 1
+fi
+
 cp "$ROOT/app/src/main/assets/licenses/libbox-go-licenses.csv" \
   "$ROOT/app/build/reports/license-audit/libbox-go-licenses.csv"
 
