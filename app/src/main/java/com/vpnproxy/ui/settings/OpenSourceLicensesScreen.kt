@@ -46,8 +46,10 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var showInventory by remember { mutableStateOf(false) }
     var showGoInventory by remember { mutableStateOf(false) }
+    var showGradleNotices by remember { mutableStateOf(false) }
     var selectedLicense by remember { mutableStateOf("GPL-3.0-or-later") }
     var selectedLibboxLicense by remember { mutableStateOf<String?>(null) }
+    var selectedGradleNotice by remember { mutableStateOf<String?>(null) }
 
     val coreNotice = remember {
         context.assets.open("licenses/sing-box-lx-NOTICE.txt")
@@ -59,6 +61,14 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     }
     val libboxLicenseFiles = remember {
         listAssetFiles(context, "licenses/libbox")
+    }
+    val gradleNoticeFiles = remember {
+        listAssetFiles(context, "licenses/gradle")
+    }
+    val selectedGradleNoticeText = remember(selectedGradleNotice) {
+        selectedGradleNotice?.let { path ->
+            context.assets.open(path).bufferedReader().use { it.readText() }
+        }
     }
     val selectedLibboxLicenseText = remember(selectedLibboxLicense) {
         selectedLibboxLicense?.let { path ->
@@ -76,6 +86,36 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         context.assets.open("licenses/$selectedLicense.txt")
             .bufferedReader()
             .use { it.readText() }
+    }
+
+    if (showGradleNotices) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Уведомления Gradle-компонентов") },
+                    navigationIcon = {
+                        IconButton(onClick = { showGradleNotices = false }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Назад к лицензиям")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
+            ) {
+                gradleNoticeFiles.forEach { file ->
+                    TextButton(onClick = { selectedGradleNotice = file }) {
+                        Text(file.substringAfterLast("/"))
+                    }
+                }
+                selectedGradleNoticeText?.let { text ->
+                    Text(selectedGradleNotice ?: "", style = MaterialTheme.typography.titleSmall)
+                    Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp, bottom = 24.dp))
+                }
+            }
+        }
+        return
     }
 
     if (showGoInventory) {
@@ -181,6 +221,11 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             )
             TextButton(onClick = { showInventory = true }) {
                 Text("Открыть полный отчёт")
+            }
+            if (gradleNoticeFiles.isNotEmpty()) {
+                TextButton(onClick = { showGradleNotices = true }) {
+                    Text("Открыть уведомления Gradle-компонентов")
+                }
             }
             if (hasGoInventory) {
                 TextButton(onClick = { showGoInventory = true }) {
