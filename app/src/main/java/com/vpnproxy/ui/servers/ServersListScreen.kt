@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -623,6 +625,8 @@ private fun rttColor(rtt: Long): Color = when {
 @Composable
 fun ServersListScreen(
     onBack: () -> Unit,
+    onNavigateHome: () -> Unit = onBack,
+    onNavigateSettings: () -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     Scaffold(
@@ -645,7 +649,7 @@ fun ServersListScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            ServerListContent(viewModel = viewModel)
+            ServerListContent(viewModel = viewModel, onNavigateHome = onNavigateHome, onNavigateSettings = onNavigateSettings)
         }
     }
 }
