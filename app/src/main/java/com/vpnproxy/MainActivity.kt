@@ -114,6 +114,7 @@ private fun VPNProxyNavHost(
             HomeScreen(
                 viewModel = vm,
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
+                onNavigateToDebug = { navController.navigate(Route.Debug.path) },
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) }
             )
         }
