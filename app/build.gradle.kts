@@ -145,7 +145,14 @@ android.sourceSets.getByName("main").assets.srcDir(generatedLicenseAssets)
 
 val syncDependencyLicenseAssets = tasks.register<Sync>("syncDependencyLicenseAssets") {
     dependsOn("generateLicenseReport")
-    from(layout.buildDirectory.dir("reports/dependency-license"))
+    val reportDir = layout.buildDirectory.dir("reports/dependency-license")
+    from(reportDir) {
+        include("index.html")
+    }
+    from(reportDir) {
+        include("**/META-INF/LICENSE*", "**/META-INF/NOTICE*", "**/NOTICE", "**/COPYING*")
+        into("licenses/gradle")
+    }
     into(generatedLicenseAssets)
 }
 
