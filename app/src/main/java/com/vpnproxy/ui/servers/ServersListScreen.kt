@@ -272,6 +272,11 @@ fun ServerListContent(
                     fontSize = 13.sp,
                     color = Color(0xFFD5E6FF).copy(alpha = 0.8f)
                 )
+                Text(
+                    "Профилей: ${servers.size}. TCP-проверка не подтверждает работу VPN.",
+                    fontSize = 11.sp,
+                    color = Color(0xFFD5E6FF).copy(alpha = 0.72f)
+                )
             }
             if (scanningServers || deepProbeRunning) {
                 CircularProgressIndicator(
