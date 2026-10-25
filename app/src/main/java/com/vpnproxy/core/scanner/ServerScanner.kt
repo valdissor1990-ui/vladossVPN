@@ -93,7 +93,7 @@ class ServerScanner @Inject constructor(
                     }.awaitAll()
                     val otherResults = otherConfigs.map { config ->
                         async(Dispatchers.IO) {
-                            semaphore.withPermit { probe(config) }
+                            semaphore.withPermit { probe(config, generation) }
                         }
                     }.awaitAll()
                     russianResults + otherResults
