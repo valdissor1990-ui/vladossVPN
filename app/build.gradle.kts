@@ -26,9 +26,12 @@ val versionProps = Properties().apply {
 }
 val baseMajor = versionProps.getProperty("major", "1").toInt()
 val baseMinor = versionProps.getProperty("minor", "0").toInt()
-val autoVersionCode = if (runNumber > 0) 10000 + runNumber
+val requestedVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+val autoVersionCode = requestedVersionCode ?: if (runNumber > 0) 10000 + runNumber
                       else (System.currentTimeMillis() / 60_000L).toInt()
-val autoVersionName = "$baseMajor.$baseMinor.$runNumber"
+val requestedVersionName = System.getenv("APP_VERSION_NAME")?.trim()
+    ?.takeIf { it.matches(Regex("\\d+\\.\\d+\\.\\d+")) }
+val autoVersionName = requestedVersionName ?: "$baseMajor.$baseMinor.$runNumber"
 
 android {
     namespace = "com.vpnproxy"
