@@ -47,6 +47,8 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
+    var subscriptionMenuExpanded by remember { mutableStateOf(false) }
 
     var showServers by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
@@ -168,6 +170,49 @@ fun HomeScreen(
                     enabled = !uiState.isBusy,
                     onClick = { viewModel.toggleConnection() }
                 )
+
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Text("Подписка для автоподбора серверов", style = MaterialTheme.typography.labelMedium, color = OnDarkSecondary)
+                        Box {
+                            TextButton(
+                                onClick = { subscriptionMenuExpanded = true },
+                                enabled = !uiState.isBusy,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val selectedName = subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
+                                    ?: "Все подписки"
+                                Text(selectedName, color = OnDark, modifier = Modifier.weight(1f))
+                                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = OnDark)
+                            }
+                            DropdownMenu(
+                                expanded = subscriptionMenuExpanded,
+                                onDismissRequest = { subscriptionMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Все подписки") },
+                                    onClick = {
+                                        viewModel.setAutomaticSubscription(HomeViewModel.ALL_SUBSCRIPTIONS_ID)
+                                        subscriptionMenuExpanded = false
+                                    }
+                                )
+                                subscriptions.forEach { subscription ->
+                                    DropdownMenuItem(
+                                        text = { Text(subscription.name) },
+                                        onClick = {
+                                            viewModel.setAutomaticSubscription(subscription.id)
+                                            subscriptionMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (uiState.isScanningServers) {
                     Spacer(Modifier.height(12.dp))
