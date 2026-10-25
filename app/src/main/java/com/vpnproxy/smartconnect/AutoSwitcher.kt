@@ -1,5 +1,7 @@
 package com.vpnproxy.smartconnect
 
+import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -7,6 +9,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,7 +33,8 @@ class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
     private val logCollector: LogCollector,
-    private val connectionCoordinator: ConnectionCoordinator
+    private val connectionCoordinator: ConnectionCoordinator,
+    @ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
@@ -159,7 +163,14 @@ class AutoSwitcher @Inject constructor(
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
-                delay(AutoSwitcherConfig.healthCheckIntervalMs)
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val batterySaver = powerManager?.isPowerSaveMode == true
+                val intervalMs = if (batterySaver) {
+                    AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
+                } else {
+                    AutoSwitcherConfig.healthCheckIntervalMs
+                }
+                delay(intervalMs)
                 if (isInPostConnectWarmup()) {
                     logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
                     continue
