@@ -227,7 +227,7 @@ class ServerScanner @Inject constructor(
 
     private fun persistScanResults(results: List<ScoredServer>) {
         val editor = scanCache.edit()
-        scanCache.all.keys.filter { it.startsWith("server_") }.forEach(editor::remove)
+        scanCache.all.keys.filter { it.startsWith("server_") }.forEach { key -> editor.remove(key) }
         results.forEach { server ->
             val key = cacheKey(server.config)
             editor.putLong("server_${key}_latency", server.latencyMs)
