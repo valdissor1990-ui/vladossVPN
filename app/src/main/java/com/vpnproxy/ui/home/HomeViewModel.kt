@@ -298,9 +298,15 @@ class HomeViewModel @Inject constructor(
         modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, validId).apply()
         _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
         logCollector.info(TAG, "Automatic server subscription scope changed: $validId")
+        if (_uiState.value.isAutomaticMode && connectionCoordinator.state.value is ConnectionState.Connected) {
+            viewModelScope.launch(Dispatchers.IO) {
+                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
+            }
+        }
     }
 
     private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
+        if (!_uiState.value.isAutomaticMode) return configs
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
