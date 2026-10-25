@@ -30,8 +30,8 @@ class TrafficValidator @Inject constructor(
             "https://cp.cloudflare.com/generate_204",
             "https://connectivitycheck.gstatic.com/generate_204"
         )
-        private const val CONNECT_TIMEOUT_MS = 4_000
-        private const val READ_TIMEOUT_MS = 4_000
+        private const val CONNECT_TIMEOUT_MS = 8_000
+        private const val READ_TIMEOUT_MS = 8_000
         private const val PORT_WAIT_TIMEOUT_MS = 3_000L
         private const val PORT_POLL_MS = 100L
         private const val PORT_CONNECT_TIMEOUT_MS = 150
