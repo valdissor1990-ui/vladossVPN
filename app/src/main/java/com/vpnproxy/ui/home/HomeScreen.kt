@@ -168,8 +168,12 @@ fun HomeScreen(
 
                 GlowPowerButton(
                     state = uiState.connectionState,
-                    enabled = !uiState.isBusy,
-                    onClick = { viewModel.toggleConnection() }
+                    enabled = !uiState.isBusy || uiState.isScanningServers,
+                    isScanning = uiState.isScanningServers,
+                    onClick = {
+                        if (uiState.isScanningServers) viewModel.cancelServerScan()
+                        else viewModel.toggleConnection()
+                    }
                 )
 
                 Spacer(Modifier.height(12.dp))

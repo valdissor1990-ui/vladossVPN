@@ -209,17 +209,8 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean {
-        val name = config.name.lowercase()
-        val provider = config.providerTag.lowercase()
-        val sni = config.sni.orEmpty().lowercase()
-        val ruToken = Regex("(^|[^a-z0-9])ru([^a-z0-9]|$)")
-        return config.providerTag.contains("🇷🇺") ||
-            ruToken.containsMatchIn(provider) ||
-            name.contains("🇷🇺") ||
-            ruToken.containsMatchIn(name) ||
-            name.contains(".ru") || sni.contains(".ru")
-    }
+    private fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
+        serverScanner.isRussianServer(config)
 
     private fun sameConfig(a: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig, b: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
         a.connectionKey() == b.connectionKey()
@@ -280,6 +271,13 @@ class HomeViewModel @Inject constructor(
 
     fun setVpnPermissionRequester(requester: () -> Unit) {
         vpnPermissionRequester = requester
+    }
+
+    fun cancelServerScan() {
+        if (_uiState.value.isScanningServers) {
+            serverScanner.cancelScan()
+            logCollector.info(TAG, "Server scan cancellation requested from home button")
+        }
     }
 
     fun toggleConnection() {

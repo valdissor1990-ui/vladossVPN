@@ -1,6 +1,8 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.PowerManager
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -43,7 +46,14 @@ class AutoSwitcher @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val healthMonitor = HealthMonitor(logCollector, healthChecker)
     private val decisionEngine = SwitchDecisionEngine()
-    private val serverBlacklist = ConcurrentHashMap<String, Long>()
+    // Persist failure TTLs across process death and APK updates. Keys include transport so
+    // a failure on cellular cannot poison the same profile on Wi-Fi (or vice versa).
+    private val blacklistPreferences = context.getSharedPreferences("server_failure_blacklist_v2", Context.MODE_PRIVATE)
+    private val serverBlacklist = ConcurrentHashMap<String, Long>().apply {
+        blacklistPreferences.all.forEach { (key, value) ->
+            if (value is Long) put(key, value)
+        }
+    }
     private var healthCheckJob: Job? = null
 
     private val _currentServer = MutableStateFlow<ScoredServer?>(null)
@@ -140,19 +150,59 @@ class AutoSwitcher @Inject constructor(
     }
 
     // Blacklist the exact profile, not every variant sharing endpoint/UUID.
-    // XHTTP variants can differ in session placement, mode, path, TLS fingerprint, etc.
-    private fun serverKey(config: ParsedConfig): String = config.connectionKey()
+    // Hash profile identity before persisting it; preference keys do not expose config details.
+    private fun serverKey(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun currentNetworkBucket(): String {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "other"
+        val active = manager.activeNetwork
+        val activeCapabilities = active?.let(manager::getNetworkCapabilities)
+        fun bucket(capabilities: NetworkCapabilities?): String? = when {
+            capabilities == null -> null
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "other"
+            else -> null
+        }
+        bucket(activeCapabilities)?.let { return it }
+
+        // With VpnService active, activeNetwork is normally TRANSPORT_VPN. Inspect
+        // validated non-VPN networks to identify the underlying Wi-Fi/mobile transport.
+        val underlying = manager.allNetworks
+            .asSequence()
+            .filter { it != active }
+            .mapNotNull { network -> manager.getNetworkCapabilities(network) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+            .mapNotNull(::bucket)
+            .firstOrNull { it == "wifi" || it == "cellular" }
+        return underlying ?: if (active == null) "offline" else "other"
+    }
+
+    private fun blacklistKey(config: ParsedConfig): String =
+        "${currentNetworkBucket()}|${serverKey(config)}"
 
     private fun pruneBlacklist(nowMs: Long = System.currentTimeMillis()) {
-        serverBlacklist.entries.removeIf { it.value <= nowMs }
+        val expired = serverBlacklist.entries.filter { it.value <= nowMs }.map { it.key }
+        expired.forEach { key ->
+            serverBlacklist.remove(key)
+            blacklistPreferences.edit().remove(key).apply()
+        }
     }
 
     fun isBlacklisted(config: ParsedConfig?, nowMs: Long = System.currentTimeMillis()): Boolean {
         val target = config ?: return false
         pruneBlacklist(nowMs)
-        val expiresAt = serverBlacklist[serverKey(target)] ?: return false
+        val key = blacklistKey(target)
+        val expiresAt = serverBlacklist[key] ?: return false
         if (expiresAt <= nowMs) {
-            serverBlacklist.remove(serverKey(target))
+            serverBlacklist.remove(key)
+            blacklistPreferences.edit().remove(key).apply()
             return false
         }
         return true
@@ -161,14 +211,17 @@ class AutoSwitcher @Inject constructor(
     fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
         val target = config ?: return
         if (suppressIfFrozen("markServerFailed", target.name)) return
-        val key = serverKey(target)
-        serverBlacklist[key] = nowMs + ttlMs
-        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms after failed start: ${target.name}", mapOf("server" to key))
+        val key = blacklistKey(target)
+        val expiresAt = nowMs + ttlMs
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
     }
 
     fun clearBlacklist() {
         if (suppressIfFrozen("blacklist-clear")) return
         serverBlacklist.clear()
+        blacklistPreferences.edit().clear().apply()
         logCollector.info(TAG, "Server blacklist cleared after subscription update")
     }
 

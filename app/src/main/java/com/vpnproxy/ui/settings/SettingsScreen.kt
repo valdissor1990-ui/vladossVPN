@@ -28,14 +28,11 @@ fun SettingsScreen(
     val autoStart by viewModel.autoStart.collectAsStateWithLifecycle()
     val killSwitch by viewModel.killSwitch.collectAsStateWithLifecycle()
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
-    val updateInterval by viewModel.updateInterval.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
-    var showIntervalDialog by remember { mutableStateOf(false) }
     var showSplitTunnelScreen by remember { mutableStateOf(false) }
     var showOpenSourceLicenses by remember { mutableStateOf(false) }
-    val intervals = listOf(1, 3, 6, 12, 24)
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -109,14 +106,6 @@ fun SettingsScreen(
                 }
                 Switch(checked = autoStart, onCheckedChange = { viewModel.setAutoStart(it) })
             }
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Интервал обновления подписок", style = MaterialTheme.typography.bodyLarge)
-                    Text("Каждые $updateInterval ч", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                }
-                TextButton(onClick = { showIntervalDialog = true }) { Text("Изменить") }
-            }
-
             Text("ОБНОВЛЕНИЯ ПРИЛОЖЕНИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -167,25 +156,6 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(32.dp))
         }
-    }
-
-    if (showIntervalDialog) {
-        AlertDialog(
-            onDismissRequest = { showIntervalDialog = false },
-            title = { Text("Интервал обновления") },
-            text = {
-                Column {
-                    intervals.forEach { h ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = updateInterval == h, onClick = { viewModel.setUpdateInterval(h); showIntervalDialog = false })
-                            Spacer(Modifier.width(8.dp))
-                            Text("Каждые $h ч")
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showIntervalDialog = false }) { Text("Отмена") } }
-        )
     }
 
     UpdateDialog(

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
@@ -29,7 +31,8 @@ fun GlowPowerButton(
     state: ConnectionUiState,
     enabled: Boolean = true,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isScanning: Boolean = false
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -117,7 +120,11 @@ fun GlowPowerButton(
             shadowElevation = if (state == ConnectionUiState.CONNECTED || state == ConnectionUiState.UNSTABLE) 24.dp else 8.dp,
             tonalElevation = 0.dp
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.padding(horizontal = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 when (state) {
                     ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE ->
                         Icon(Icons.Default.Shield, null,
@@ -129,6 +136,15 @@ fun GlowPowerButton(
                     else ->
                         Icon(Icons.Default.Shield, null,
                             tint = OnDarkMuted, modifier = Modifier.size(72.dp))
+                }
+                if (isScanning) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "ОСТАНОВИТЬ\nСКАНИРОВАНИЕ",
+                        color = OnDark,
+                        textAlign = TextAlign.Center,
+                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }

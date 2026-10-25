@@ -25,7 +25,7 @@ class ScoringEngineTest {
 
     @Test
     fun successRateUsesObservedProbeHistoryInsteadOfConstantOne() {
-        val engine = ScoringEngine()
+        val engine = ScoringEngine(null)
         val profile = config("profile")
 
         engine.computeScore(listOf(HealthChecker.LatencyResult(profile, Long.MAX_VALUE, false)))
@@ -37,7 +37,7 @@ class ScoringEngineTest {
 
     @Test
     fun speedMeasurementsAreMatchedByFullProfileIdentity() {
-        val engine = ScoringEngine()
+        val engine = ScoringEngine(null)
         val tcp = config("tcp", "tcp")
         val ws = config("ws", "ws")
 
@@ -60,7 +60,7 @@ class ScoringEngineTest {
 
     @Test
     fun failedSpeedProbeDoesNotCountAsMeasuredThroughput() {
-        val engine = ScoringEngine()
+        val engine = ScoringEngine(null)
         val profile = config("profile")
 
         val ranked = engine.computeScore(

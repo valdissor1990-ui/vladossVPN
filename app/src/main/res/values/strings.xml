@@ -32,7 +32,6 @@
     <!-- Settings -->
     <string name="settings_auto_start">Автозапуск после перезагрузки</string>
     <string name="settings_auto_start_desc">Запускать VPN при загрузке устройства</string>
-    <string name="settings_update_interval">Интервал обновления подписок</string>
     <string name="settings_kill_switch">Kill Switch</string>
     <string name="settings_kill_switch_desc">Блокировать трафик при разрыве туннеля</string>
     <string name="settings_check_updates">Проверять обновления</string>

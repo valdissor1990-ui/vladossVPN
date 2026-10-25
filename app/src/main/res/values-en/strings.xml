@@ -28,7 +28,6 @@
 
     <string name="settings_auto_start">Auto-start after boot</string>
     <string name="settings_auto_start_desc">Start VPN on device boot</string>
-    <string name="settings_update_interval">Subscription refresh interval</string>
     <string name="settings_kill_switch">Kill Switch</string>
     <string name="settings_kill_switch_desc">Block traffic when tunnel drops</string>
     <string name="settings_check_updates">Check for updates</string>

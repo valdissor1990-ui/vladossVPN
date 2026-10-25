@@ -419,7 +419,7 @@ fun ServerListContent(
                             items = russianServers,
                             key = { "ru-${viewModel.configKey(it.config)}" }
                         ) { scoredServer ->
-                            val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
+                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "—"
                             val scoreValue = scoreLabel.toDoubleOrNull()
                             val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
                             GlassServerCard(
@@ -450,7 +450,7 @@ fun ServerListContent(
                             items = otherServers,
                             key = { "other-${viewModel.configKey(it.config)}" }
                         ) { scoredServer ->
-                            val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
+                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "—"
                             val scoreValue = scoreLabel.toDoubleOrNull()
                             val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
                             GlassServerCard(
@@ -643,7 +643,7 @@ private fun GlassServerCard(
             )
             Spacer(Modifier.width(4.dp))
             Text(
-                if (isOnline) "Доступен" else "Не проверен",
+                if (isOnline) "TCP доступен" else "TCP не проверен",
                 fontSize = 9.sp,
                 color = Color(0xFFDDE7FF).copy(alpha = 0.9f),
                 modifier = Modifier.weight(1f),
@@ -664,7 +664,7 @@ private fun GlassServerCard(
             }
             Spacer(Modifier.weight(1f))
             Text(
-                if (scoreLabel == "—") "— ms" else "${scoreLabel} ms",
+                if (scoreLabel == "—") "TCP —" else "TCP ${scoreLabel} ms",
                 color = scoreColor,
                 fontSize = 11.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
