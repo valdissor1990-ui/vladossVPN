@@ -300,10 +300,8 @@ class HomeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
         updateAutoSwitcherProviderScope()
         logCollector.info(TAG, "Automatic server subscription scope changed: $validId")
-        if (_uiState.value.isAutomaticMode && connectionCoordinator.state.value is ConnectionState.Connected) {
-            viewModelScope.launch(Dispatchers.IO) {
-                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
-            }
+        if (connectionCoordinator.state.value is ConnectionState.Connected) {
+            refreshAutomaticScopeCandidates()
         }
     }
 
@@ -331,15 +329,44 @@ class HomeViewModel @Inject constructor(
         autoSwitcher.setProviderScope(providerTag)
     }
 
+    private fun refreshAutomaticScopeCandidates() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                if (configs.isEmpty()) {
+                    // Clear old fallback candidates immediately so a removed/empty provider
+                    // cannot silently fall back to another provider.
+                    connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+                    autoSwitcher.rankInBackground(emptyList())
+                    return@launch
+                }
+                if (!serverScanner.isScanCurrent(configs)) {
+                    serverScanner.scanAll(configs, force = true)
+                }
+                val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
+                val candidates = serverScanner.availableServers()
+                    .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
+                    .filterNot { autoSwitcher.isBlacklisted(it.config) }
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
+                autoSwitcher.rankInBackground(configs)
+                logCollector.info(TAG, "Fallback candidates refreshed for selected provider scope: ${candidates.size}")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Failed to refresh fallback candidates for selected provider scope", e)
+                // Fail closed: stale candidates from the previously selected provider are unsafe.
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+            }
+        }
+    }
+
     fun setAutomaticMode(enabled: Boolean) {
         modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
         _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
         updateAutoSwitcherProviderScope()
         logCollector.info(TAG, "Server selection mode changed: " + (if (enabled) "automatic" else "manual"))
         if (connectionCoordinator.state.value is ConnectionState.Connected) {
-            viewModelScope.launch(Dispatchers.IO) {
-                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
-            }
+            refreshAutomaticScopeCandidates()
         }
     }
 
