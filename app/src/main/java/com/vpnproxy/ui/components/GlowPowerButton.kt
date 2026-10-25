@@ -140,7 +140,7 @@ fun GlowPowerButton(
                 if (isScanning) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "ОСТАНОВИТЬ\\nСКАНИРОВАНИЕ",
+                        text = "ОСТАНОВИТЬ\nСКАНИРОВАНИЕ",
                         color = OnDark,
                         textAlign = TextAlign.Center,
                         style = androidx.compose.material3.MaterialTheme.typography.labelSmall
