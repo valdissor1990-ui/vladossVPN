@@ -41,21 +41,20 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
+    /** Builds full VPN config (TUN + local mixed proxy). */
     fun buildVpn(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
             put("timestamp", true)
         })
-        // DNS must use detour=direct so resolution works under TUN + strict_route.
-        // Without detour, queries to 8.8.8.8 can be forced into the tunnel and fail.
+        // Do NOT set detour:"direct" on DNS — sing-box 1.14.3 rejects it:
+        // "detour to an empty direct outbound makes no sense"
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("type", "udp")
                     put("tag", "direct-dns")
                     put("server", "8.8.8.8")
-                    put("detour", "direct")
                 })
             })
             put("final", "direct-dns")
