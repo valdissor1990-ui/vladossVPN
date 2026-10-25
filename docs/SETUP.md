@@ -1,130 +1,49 @@
-# VPNProxy — одноразовая настройка
+# Настройка и сборка VLADOSSVPN
 
-После этих шагов каждый `git push` в `main` будет собирать, подписывать и публиковать APK.
+## Сборка в GitHub Actions
 
----
+Основная ветка `main` — единственный источник релизов.
 
-## 1. Gradle Wrapper JAR (обязательно)
+- Pull request в `main` запускает проверочную сборку из workflow **Pull Request Build Validation**.
+- Push в `main` запускает **Build, Sign & Release**: сборку APK/AAB, проверку нативного ядра и лицензий, затем публикацию GitHub Release.
+- Релизная версия задаётся в `.github/workflows/release.yml` переменными `APP_VERSION_NAME` и `APP_VERSION_CODE`. Перед следующим релизом обновляйте их согласованно с конфигурацией приложения и проверяйте итоговые versionName/versionCode в собранном APK.
 
-Файл `gradle/wrapper/gradle-wrapper.jar` — бинарный, его нельзя залить текстом через API.
+## Секреты подписи
 
-**Вариант A — через Gradle (рекомендуется):**
+В Settings → Secrets and variables → Actions должны быть настроены:
 
-```bash
-# Установить Gradle 8.11.1, затем в корне репозитория:
-cd vladossVPN
-gradle wrapper --gradle-version 8.11.1
-# Создаст gradle/wrapper/gradle-wrapper.jar + обновит скрипты
+| Secret | Назначение |
+|---|---|
+| `KEYSTORE_BASE64` | Keystore в Base64 |
+| `KEYSTORE_PASSWORD` | Пароль keystore |
+| `KEY_ALIAS` | Alias ключа |
+| `KEY_PASSWORD` | Пароль ключа |
 
-git add gradle/wrapper/gradle-wrapper.jar gradlew gradlew.bat
-git commit -m "chore: add gradle-wrapper.jar"
-git push origin main
-```
-
-**Вариант B — скачать вручную:**
-
-```bash
-cd vladossVPN
-mkdir -p gradle/wrapper
-curl -L -o gradle/wrapper/gradle-wrapper.jar \
-  https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
-
-chmod +x gradlew
-./gradlew --version   # должно показать Gradle 8.11.1
-
-git add gradle/wrapper/gradle-wrapper.jar
-git commit -m "chore: add gradle-wrapper.jar"
-git push origin main
-```
-
-**Вариант C — Android Studio:**  
-File → Open → проект → Sync Project with Gradle Files.
-
----
-
-## 2. Keystore + GitHub Secrets (обязательно для подписанных релизов)
-
-```bash
-keytool -genkeypair -v \
-  -keystore release.keystore \
-  -alias vpnproxy \
-  -keyalg RSA -keysize 2048 -validity 10000 \
-  -storepass "ВАШ_ПАРОЛЬ" \
-  -keypass "ВАШ_ПАРОЛЬ" \
-  -dname "CN=VPNProxy, OU=Dev, O=VPNProxy, L=Moscow, C=RU"
-
-base64 -w0 release.keystore > release.keystore.b64
-# macOS: base64 -i release.keystore -o release.keystore.b64
-```
-
-Откройте: https://github.com/valdissor1990-ui/vladossVPN/settings/secrets/actions
-
-| Secret | Значение |
-|--------|----------|
-| `KEYSTORE_BASE64` | содержимое `release.keystore.b64` |
-| `KEYSTORE_PASSWORD` | пароль хранилища |
-| `KEY_ALIAS` | `vpnproxy` |
-| `KEY_PASSWORD` | пароль ключа |
-
-**Сохраните keystore и пароли** (1Password / Bitwarden). Потеря keystore = нельзя обновлять приложение поверх старой подписи.
-
----
-
-## 3. Нативные библиотеки (для реального VPN)
-
-Без них UI соберётся, но VPN не подключится (`Failed to load libxray.so`).
-
-```bash
-chmod +x scripts/download_xray.sh
-./scripts/download_xray.sh
-```
-
-Для production Xray используйте [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite):
-
-```bash
-mkdir -p app/libs
-# скачайте AAR из Releases и положите как app/libs/AndroidLibXrayLite.aar
-```
-
-В `app/build.gradle.kts`:
-
-```kotlin
-implementation(files("libs/AndroidLibXrayLite.aar"))
-```
-
-Потребуется адаптировать `XrayCore.kt` под API библиотеки (`Xray.run` и т.д.) — см. `docs/ARCHITECTURE.md`.
-
----
-
-## 4. Проверка пайплайна
-
-```bash
-git push origin main
-# или пустой коммит:
-git commit --allow-empty -m "chore: trigger release"
-git push origin main
-```
-
-Смотрите: https://github.com/valdissor1990-ui/vladossVPN/actions  
-Успех → вкладка Releases → APK `v1.0.XXXX`.
-
----
+Храните исходный keystore и пароли в надёжном менеджере паролей. Потеря ключа может помешать выпускать обновления с той же подписью. Не добавляйте keystore, пароли или файлы секретов в Git.
 
 ## Локальная сборка
 
-```bash
-./gradlew assembleDirectDebug
-adb install -r app/build/outputs/apk/direct/debug/app-direct-debug.apk
-```
-
-Release (нужен keystore локально или secrets в CI):
+Нужны JDK 17, Android SDK и Gradle Wrapper. CI при необходимости скачивает отсутствующий `gradle-wrapper.jar`; локально его можно создать командой из установленного Gradle:
 
 ```bash
-./gradlew assembleDirectRelease
+gradle wrapper --gradle-version 8.11.1
+./gradlew :app:assembleDirectDebug
 ```
 
----
+Для production-сборки локально должны быть настроены те же параметры подписи, что и в CI.
 
-## Типовые ошибки
+## Нативное ядро
 
-См. [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+Проект использует `sing-box-lx libbox`, а не Xray. Скрипт `scripts/download_libbox.sh` скачивает AAR конкретной версии и проверяет SHA-256, Go bridge и наличие нативной библиотеки:
+
+```bash
+./scripts/download_libbox.sh
+```
+
+Не добавляйте скачанные `app/libs/*.aar` и нативные `.so` в Git: они загружаются и проверяются скриптами сборки.
+
+## Проверка результата
+
+После push откройте вкладку Actions и дождитесь успешного завершения **Unit Tests** и **Build, Sign & Release**. Затем проверьте GitHub Release: APK для прямой установки, AAB для Google Play и файлы лицензий/уведомлений должны соответствовать одной версии и одному исходному commit SHA.
+
+Реальная проверка VPN-трафика на Android-устройстве остаётся обязательной после изменений сетевого кода.
