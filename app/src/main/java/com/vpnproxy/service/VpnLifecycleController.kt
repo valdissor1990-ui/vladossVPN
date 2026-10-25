@@ -35,8 +35,12 @@ internal class VpnLifecycleController(
     ) = lifecycleMutex.withLock {
         check(!closed) { "VPN lifecycle controller is closed" }
         if (coreIsRunning()) {
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: stop requested; restartDelayMs=$restartDelayMs")
             stopSession()
             delay(restartDelayMs)
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: cooldown elapsed; starting same selected session")
+        } else {
+            logCollector.info("VpnLifecycleController", "Restart lifecycle: core already stopped; starting selected session")
         }
         check(!closed) { "VPN lifecycle controller is closed" }
         startSession()
@@ -44,18 +48,18 @@ internal class VpnLifecycleController(
 
     fun startCore(configJson: String) {
         check(!closed) { "VPN lifecycle controller is closed" }
-        core.start(configJson)
+        core.startBlocking(configJson).getOrThrow()
     }
 
     fun stopCore() {
         if (closed) return
-        core.stop()
+        core.stopBlocking().getOrThrow()
     }
 
     fun close() {
         if (closed) return
         closed = true
-        runCatching { core.stop() }
+        runCatching { core.stopBlocking().getOrThrow() }
             .onFailure { logCollector.warn("VpnLifecycleController", "Sing-box cleanup failed: ${it.message}") }
     }
 }

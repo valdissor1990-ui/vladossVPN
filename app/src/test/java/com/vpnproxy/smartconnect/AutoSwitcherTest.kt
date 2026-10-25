@@ -70,4 +70,24 @@ class AutoSwitcherTest {
             engine.latestEvidence(nowMs = 1_000L + AutoSwitcherConfig.evidenceWindowMs + 1)
         )
     }
+
+    @Test
+    fun rankingSwitch_requiresMaterialScoreImprovement() {
+        val engine = SwitchDecisionEngine()
+
+        assertTrue(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.21f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.19f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.20f - 0.001f))
+    }
+
+    @Test
+    fun rankingSwitch_doesNotSwitchWithoutComparableCurrentScore() {
+        val engine = SwitchDecisionEngine()
+
+        assertFalse(engine.shouldSwitchForRanking(currentScore = null, candidateScore = 10.0f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 0.0f, candidateScore = 10.0f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = Float.NaN, candidateScore = 10.0f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = Float.POSITIVE_INFINITY))
+    }
+
 }

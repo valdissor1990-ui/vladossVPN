@@ -109,6 +109,22 @@ internal class SwitchDecisionEngine {
     }
 
     /** Returns true when the policy limit has been reached after recording this switch. */
+    /**
+     * Background ranking may only replace a healthy current server when the candidate has
+     * a material, measurable advantage. A missing current score is not enough evidence:
+     * callers must use the existing failure-validation/fallback path instead.
+     */
+    fun shouldSwitchForRanking(
+        currentScore: Float?,
+        candidateScore: Float,
+        minimumRelativeGain: Float = AutoSwitcherConfig.minimumAutoSwitchScoreGain
+    ): Boolean {
+        if (currentScore == null || !currentScore.isFinite() || currentScore <= 0f) return false
+        if (!candidateScore.isFinite() || candidateScore <= 0f) return false
+        if (!minimumRelativeGain.isFinite() || minimumRelativeGain < 0f) return false
+        return candidateScore >= currentScore * (1f + minimumRelativeGain)
+    }
+
     @Synchronized
     fun recordSuccessfulSwitch(nowMs: Long = System.currentTimeMillis()): Boolean {
         trimSwitchWindow(nowMs)

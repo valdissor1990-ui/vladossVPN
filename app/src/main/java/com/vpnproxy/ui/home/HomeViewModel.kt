@@ -11,6 +11,8 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.core.connection.TraceId
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
@@ -118,6 +120,8 @@ class HomeViewModel @Inject constructor(
                         armConnectingWatchdog()
                     }
                     is ConnectionState.Connected -> {
+                        val diagnosticOptions = DiagnosticSettings.load(context)
+                        autoSwitcher.setDiagnosticFreeze(DebugFlags.diagnosticEnabled() && diagnosticOptions.freezeAutoSwitcherAfterConnected)
                         cancelConnectingWatchdog()
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(

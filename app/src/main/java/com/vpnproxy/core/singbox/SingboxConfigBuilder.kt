@@ -1,12 +1,14 @@
 package com.vpnproxy.core.singbox
 
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import com.vpnproxy.logging.LogCollectorHolder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -15,11 +17,11 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
-    /** Ensure path always starts with / (some subscription links omit the leading slash). */
+    /** Ensure transport paths start with / even when subscriptions omit the leading slash. */
     private fun normalizePath(path: String?): String {
-        val p = path?.trim().orEmpty()
-        if (p.isEmpty()) return "/"
-        return if (p.startsWith("/")) p else "/$p"
+        val value = path?.trim().orEmpty()
+        if (value.isEmpty()) return "/"
+        return if (value.startsWith("/")) value else "/$value"
     }
 
     fun build(config: ParsedConfig): String = buildJsonObject {
@@ -41,23 +43,41 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /** Builds full VPN config (TUN + local mixed proxy). */
-    fun buildVpn(config: ParsedConfig): String = buildJsonObject {
+    /** Builds a multi-server proxy config for DeepProbe; each inbound is pinned to one outbound. */
+    fun buildVpn(config: ParsedConfig, options: DiagnosticOptions = DiagnosticOptions()): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
             put("timestamp", true)
         })
-        // Do NOT set detour:"direct" on DNS — sing-box 1.14.3 rejects it:
-        // "detour to an empty direct outbound makes no sense"
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
-                add(buildJsonObject {
-                    put("type", "udp")
-                    put("tag", "direct-dns")
-                    put("server", "8.8.8.8")
-                })
+                when (options.dnsMode) {
+                    "proxy_dot_8888" -> add(buildJsonObject {
+                        put("type", "tls")
+                        put("tag", "proxy-dot")
+                        put("server", "8.8.8.8")
+                        put("server_port", 853)
+                        put("detour", "proxy")
+                    })
+                    "direct_udp_8888" -> add(buildJsonObject {
+                        put("type", "udp"); put("tag", "direct-dns"); put("server", "8.8.8.8")
+                    })
+                    "direct_udp_1111" -> add(buildJsonObject {
+                        put("type", "udp"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 1111)
+                    })
+                    "direct_dot_1111" -> add(buildJsonObject {
+                        put("type", "tls"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 853)
+                    })
+                    "proxy_dot_1111" -> add(buildJsonObject {
+                        put("type", "tls"); put("tag", "proxy-dot"); put("server", "1.1.1.1"); put("server_port", 853); put("detour", "proxy")
+                    })
+                    "system_no_hijack" -> add(buildJsonObject {
+                        put("type", "local"); put("tag", "direct-dns")
+                    })
+                    else -> error("Unsupported diagnostic DNS mode: ${options.dnsMode}")
+                }
             })
-            put("final", "direct-dns")
+            put("final", if (options.dnsMode == "proxy_dot_8888" || options.dnsMode == "proxy_dot_1111") "proxy-dot" else "direct-dns")
             put("strategy", "prefer_ipv4")
         })
         put("inbounds", buildJsonArray {
@@ -71,8 +91,8 @@ object SingboxConfigBuilder {
                 })
                 put("mtu", 1400)
                 put("auto_route", true)
-                put("strict_route", true)
-                put("stack", "system")
+                put("strict_route", options.strictRoute)
+                put("stack", options.tunStack)
             })
             add(buildJsonObject {
                 put("type", "mixed")
@@ -87,10 +107,10 @@ object SingboxConfigBuilder {
             add(buildJsonObject { put("type", "block"); put("tag", "block") })
         })
         put("route", buildJsonObject {
-            put("auto_detect_interface", true)
+            put("auto_detect_interface", options.autoDetectInterface)
             put("rules", buildJsonArray {
                 add(buildJsonObject { put("action", "sniff") })
-                add(buildJsonObject {
+                if (options.dnsMode != "system_no_hijack") add(buildJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
                 })
@@ -99,7 +119,7 @@ object SingboxConfigBuilder {
                     put("outbound", "proxy")
                 })
             })
-            put("final", "proxy")
+            put("final", options.routeFinal)
         })
     }.toString()
 
@@ -215,9 +235,11 @@ object SingboxConfigBuilder {
                         "uplink_http_method",
                         "session_placement", "session_key"
                     )
+                    val includedKeys = mutableListOf<String>()
+                    val omittedKeys = mutableListOf<String>()
                     extraObject?.forEach { (key, value) ->
-                        if (key == "type") return@forEach
-                        if (value is JsonNull) return@forEach
+                        if (key == "type") { omittedKeys += key; return@forEach }
+                        if (value is JsonNull) { omittedKeys += key; return@forEach }
                         val singBoxKey = when (key) {
                             "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
                             "session_id_placement" -> "session_placement"
@@ -236,16 +258,20 @@ object SingboxConfigBuilder {
                                 "${match.groupValues[1]}_${match.groupValues[2]}"
                             }.lowercase()
                         }
-                        if (value is JsonPrimitive && value.isString && value.content.isBlank()) return@forEach
-                        if (value is JsonPrimitive && value.booleanOrNull == false) return@forEach
+                        if (value is JsonPrimitive && value.isString && value.content.isBlank()) { omittedKeys += key; return@forEach }
+                        if (value is JsonPrimitive && value.booleanOrNull == false) { omittedKeys += key; return@forEach }
+                        if (value is JsonPrimitive && value.intOrNull == 0) { omittedKeys += key; return@forEach }
                         if (singBoxKey in allowedKeys) {
                             if (singBoxKey == "path" && value is JsonPrimitive && value.isString) {
                                 put(singBoxKey, JsonPrimitive(normalizePath(value.content)))
                             } else {
                                 put(singBoxKey, value)
                             }
-                        }
+                            includedKeys += singBoxKey
+                        } else omittedKeys += key
                     }
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP included keys=${includedKeys.distinct().sorted()}")
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP omitted keys=${omittedKeys.distinct().sorted()}")
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                     config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
@@ -256,7 +282,12 @@ object SingboxConfigBuilder {
             if (isHy2 || isTuic || config.security.equals("tls", true) || config.security.equals("reality", true)) {
                 put("tls", buildJsonObject {
                     put("enabled", true)
-                    put("server_name", config.sni?.takeIf { it.isNotBlank() } ?: config.address)
+                    val sni = config.sni?.takeIf { it.isNotBlank() }
+                    val host = config.host?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9.-]+$").matches(it) && it.contains(".") }
+                    val serverName = sni ?: host ?: config.address
+                    val source = when { sni != null -> "sni"; host != null -> "host"; else -> "address" }
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
+                    put("server_name", serverName)
                     if (isVless) {
                         put("utls", buildJsonObject {
                             put("enabled", true)

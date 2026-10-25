@@ -127,7 +127,16 @@ private fun VPNProxyNavHost(
         }
 
         composable(Route.Servers.path) {
-            ServersListScreen(onBack = { navController.popBackStack() })
+            ServersListScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateHome = {
+                    navController.navigate(Route.Home.path) {
+                        popUpTo(Route.Home.path) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateSettings = { navController.navigate(Route.Settings.path) { launchSingleTop = true } }
+            )
         }
 
         composable(Route.Settings.path) {

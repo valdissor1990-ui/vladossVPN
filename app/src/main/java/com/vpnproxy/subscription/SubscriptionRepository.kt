@@ -89,9 +89,9 @@ class SubscriptionRepository @Inject constructor(
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(1500, TimeUnit.MILLISECONDS)
-        .readTimeout(1500, TimeUnit.MILLISECONDS)
-        .callTimeout(1500, TimeUnit.MILLISECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -265,15 +265,35 @@ class SubscriptionRepository @Inject constructor(
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
                         .header("x-hwid", hwid)
-                        .header("x-device-os", "android")
+                        .header("x-device-os", "Android")
                         .header("x-ver-os", Build.VERSION.RELEASE ?: "")
-                        .header("x-device-model", Build.MODEL ?: "")
+                        .header(
+                            "x-device-model",
+                            listOf(Build.MANUFACTURER, Build.MODEL)
+                                .filter { !it.isNullOrBlank() }
+                                .distinct()
+                                .joinToString(" ")
+                                .ifBlank { "Android device" }
+                        )
                     if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
                         requestBuilder.header("If-None-Match", cachedEtag)
                     }
                     runInterruptible(Dispatchers.IO) {
                         httpClient.newCall(requestBuilder.build()).execute()
                     }.use { response ->
+                        if (response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
+                            logCollector.error(
+                                TAG,
+                                "Subscription server rejected or ignored x-hwid; check panel HWID contract"
+                            )
+                            throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
+                        }
+                        if (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                            response.header("x-hwid-limit").equals("true", ignoreCase = true)
+                        ) {
+                            logCollector.warn(TAG, "Subscription server reports HWID device limit reached")
+                            throw IOException("HWID device limit reached; remove an old device in the subscription panel")
+                        }
                         if (response.code == 304) {
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
@@ -313,12 +333,13 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-            if (sawTransportFailure && connectionCoordinator.state.value is ConnectionState.Connected) {
-                val message = "Сервер не пропускает трафик"
-                logCollector.warn(TAG, "Connected state but subscription request timed out/failed at transport layer; requesting fallback")
-                connectionCoordinator.send(
-                    ConnectionEvent.CoreError(VpnFailureReason.CoreError(message))
-                )
+            val vpnState = connectionCoordinator.state.value
+            val vpnActive = vpnState is ConnectionState.Connecting ||
+                vpnState is ConnectionState.Verifying ||
+                vpnState is ConnectionState.Connected ||
+                vpnState is ConnectionState.Reconnecting
+            if (vpnActive) {
+                logCollector.warn(TAG, "SubRepo refresh failed while VPN active — ignored; transportFailure=$sawTransportFailure")
             }
             throw IOException("All sources failed", lastFailure)
         }
@@ -338,8 +359,9 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
         val (body, sourceUrl) = fetchWithFallback(sub)
-        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, size=${body.length}")
-        return parser.parse(body, providerTag = sub.name)
+        val parsed = parser.parse(body, providerTag = sub.name)
+        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
+        return parsed
     }
 
     private fun parseUserInfo(info: String, subId: String) {

@@ -41,4 +41,17 @@ class VpnFailureReasonTest {
         org.junit.Assert.assertEquals(true, reason.canFallbackToNextServer())
         org.junit.Assert.assertEquals(false, VpnFailureReason.PermissionDenied.canFallbackToNextServer())
     }
+
+    @Test
+    fun decodeConfigSchemaErrorsAllowFallback() {
+        val reason = VpnFailureReason.fromMessage(
+            "libbox failed to parse config: configuration schema mismatch"
+        )
+        assertFalse(reason.isRetryable())
+        org.junit.Assert.assertEquals(true, reason.canFallbackToNextServer())
+        assertEquals(
+            "Ошибка конфигурации сервера. Попробуйте обновить подписку.",
+            reason.userMessage()
+        )
+    }
 }
