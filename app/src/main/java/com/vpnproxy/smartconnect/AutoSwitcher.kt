@@ -81,21 +81,24 @@ class AutoSwitcher @Inject constructor(
     // A selected subscription is a hard boundary for every automatic switch path.
     // null means the user explicitly selected "All subscriptions".
     @Volatile private var allowedProviderTag: String? = null
+    @Volatile private var providerScopeBlocked: Boolean = false
     @Volatile private var providerScopeGeneration: Long = 0L
     @Volatile private var rankingJob: Job? = null
 
-    fun setProviderScope(providerTag: String?) {
+    fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
         val normalized = providerTag?.takeIf { it.isNotBlank() }
-        if (allowedProviderTag == normalized) return
+        if (allowedProviderTag == normalized && providerScopeBlocked == blocked) return
         allowedProviderTag = normalized
+        providerScopeBlocked = blocked
         providerScopeGeneration += 1
         rankingJob?.cancel()
         _rankedServers.value = _rankedServers.value.filter { isWithinProviderScope(it.config) }
-        logCollector.info(TAG, "Automatic provider scope changed: ${normalized ?: "ALL"}")
+        val scopeLabel = if (blocked) "BLOCKED" else normalized ?: "ALL"
+        logCollector.info(TAG, "Automatic provider scope changed: $scopeLabel")
     }
 
     private fun isWithinProviderScope(config: ParsedConfig): Boolean =
-        allowedProviderTag?.let { it == config.providerTag } ?: true
+        !providerScopeBlocked && (allowedProviderTag?.let { it == config.providerTag } ?: true)
 
     @Volatile private var connectedAtMs: Long = 0L
     @Volatile private var diagnosticFreezeAfterConnected: Boolean = false

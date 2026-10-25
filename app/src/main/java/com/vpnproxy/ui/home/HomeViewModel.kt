@@ -321,12 +321,14 @@ class HomeViewModel @Inject constructor(
 
     private fun updateAutoSwitcherProviderScope() {
         val state = _uiState.value
-        val providerTag = if (!state.isAutomaticMode || state.selectedSubscriptionId == ALL_SUBSCRIPTIONS_ID) {
-            null
-        } else {
-            subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }?.name
-        }
-        autoSwitcher.setProviderScope(providerTag)
+        val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
+        val selectedSubscription = if (scopedSelection) {
+            subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }
+        } else null
+        // A missing selected subscription must fail closed, not become null/"ALL".
+        val blocked = scopedSelection && selectedSubscription == null
+        val providerTag = selectedSubscription?.name
+        autoSwitcher.setProviderScope(providerTag, blocked = blocked)
     }
 
     private fun refreshAutomaticScopeCandidates() {
