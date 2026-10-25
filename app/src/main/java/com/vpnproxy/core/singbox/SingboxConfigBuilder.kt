@@ -221,7 +221,7 @@ object SingboxConfigBuilder {
                 })
                 "httpupgrade" -> put("transport", buildJsonObject {
                     put("type", "httpupgrade")
-                    put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
+                    put("path", normalizePath(config.path))
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                 })
                 "quic" -> put("transport", buildJsonObject { put("type", "quic") })
@@ -274,7 +274,7 @@ object SingboxConfigBuilder {
                     LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP omitted keys=${omittedKeys.distinct().sorted()}")
                     put("type", "xhttp")
                     config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
-                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
                     put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
                 })
             }
