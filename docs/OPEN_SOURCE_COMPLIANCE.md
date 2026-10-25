@@ -3,7 +3,7 @@
 ## Scope and source pins
 
 VLADOSS VPN is declared under GPL-3.0-or-later. The Android app packages
-`libbox.aar` from `Leadaxe/sing-box-lx` release `v1.14.3-lx.21` and has
+`libbox.aar` from `Leadaxe/sing-box-lx` release `v1.14.3-lx.23` and has
 Android Gradle runtime dependencies. The `with_naive_outbound` tag also brings
 in prebuilt Cronet/Chromium static archives through `cronet-go`.
 
