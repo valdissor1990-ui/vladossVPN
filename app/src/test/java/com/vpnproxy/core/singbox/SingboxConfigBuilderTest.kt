@@ -213,4 +213,25 @@ class SingboxConfigBuilderTest {
         assertFalse(transport.containsKey("seqPlacement"))
         assertFalse(transport.containsKey("xmux"))
     }
+    @Test
+    fun tlsServerNameFallsBackToTransportHostWhenSniIsMissing() {
+        val config = config("ws", "secret").copy(sni = null, host = "fitindoor.net")
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+
+        assertEquals(
+            "fitindoor.net",
+            outbound["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun connectionKeyKeepsDifferentHostVariantsDistinctOnSameEndpoint() {
+        val first = config("ws", "secret").copy(sni = null, host = "fitindoor.net")
+        val second = first.copy(host = "cdn.example.org")
+
+        assertFalse(first.connectionKey() == second.connectionKey())
+    }
+
 }
