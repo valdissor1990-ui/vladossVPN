@@ -213,4 +213,17 @@ class SingboxConfigBuilderTest {
         assertFalse(transport.containsKey("seqPlacement"))
         assertFalse(transport.containsKey("xmux"))
     }
+
+    @Test
+    fun vpnDnsUsesProxyOutboundAsDetour() {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.buildVpn(config("tcp", "test-secret"))
+        ).jsonObject
+        val dnsServer = root["dns"]!!.jsonObject["servers"]!!.jsonArray.first().jsonObject
+        assertEquals("proxy", dnsServer["detour"]!!.jsonPrimitive.content)
+        val outboundTags = root["outbounds"]!!.jsonArray.map {
+            it.jsonObject["tag"]!!.jsonPrimitive.content
+        }
+        assertTrue(outboundTags.contains(dnsServer["detour"]!!.jsonPrimitive.content))
+    }
 }
