@@ -16,7 +16,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ScoringEngine @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context? = null
 ) {
 
     data class ScoredServer(
@@ -34,7 +34,7 @@ class ScoringEngine @Inject constructor(
     }
 
     private val historyPreferences by lazy {
-        context.getSharedPreferences("server_scoring_history_v1", Context.MODE_PRIVATE)
+        context?.getSharedPreferences("server_scoring_history_v1", Context.MODE_PRIVATE)
     }
     private val history = ConcurrentHashMap<String, ProbeHistory>()
 
@@ -45,7 +45,7 @@ class ScoringEngine @Inject constructor(
 
     private fun loadHistory(config: ParsedConfig): ProbeHistory {
         val key = historyKey(config)
-        val prefs = historyPreferences
+        val prefs = historyPreferences ?: return ProbeHistory()
         return ProbeHistory(
             successes = prefs.getLong("${key}_successes", 0L),
             attempts = prefs.getLong("${key}_attempts", 0L)
@@ -61,10 +61,10 @@ class ScoringEngine @Inject constructor(
             next.successes to next.attempts
         }
         val storageKey = historyKey(config)
-        historyPreferences.edit()
-            .putLong("${storageKey}_successes", snapshot.first)
-            .putLong("${storageKey}_attempts", snapshot.second)
-            .apply()
+        historyPreferences?.edit()
+            ?.putLong("${storageKey}_successes", snapshot.first)
+            ?.putLong("${storageKey}_attempts", snapshot.second)
+            ?.apply()
     }
 
     private fun successRate(config: ParsedConfig): Float {
