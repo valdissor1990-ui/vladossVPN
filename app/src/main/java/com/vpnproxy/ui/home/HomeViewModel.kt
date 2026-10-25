@@ -58,6 +58,8 @@ class HomeViewModel @Inject constructor(
         private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
+        private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
+        const val ALL_SUBSCRIPTIONS_ID = "all"
     }
 
     data class UiState(
@@ -69,11 +71,17 @@ class HomeViewModel @Inject constructor(
         val sessionStartedAt: Long? = null,
         val isRefreshingSubscription: Boolean = false,
         val isScanningServers: Boolean = false,
-        val isAutomaticMode: Boolean = true
+        val isAutomaticMode: Boolean = true,
+        val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
-    private val _uiState = MutableStateFlow(UiState(isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true)))
+    private val _uiState = MutableStateFlow(UiState(
+        isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true),
+        selectedSubscriptionId = modePreferences.getString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID) ?: ALL_SUBSCRIPTIONS_ID
+    ))
+
+    val subscriptions = subscriptionRepository.subscriptions
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
@@ -285,6 +293,21 @@ class HomeViewModel @Inject constructor(
         connect()
     }
 
+    fun setAutomaticSubscription(subscriptionId: String) {
+        val validId = if (subscriptionId == ALL_SUBSCRIPTIONS_ID || subscriptionRepository.subscriptions.value.any { it.id == subscriptionId }) subscriptionId else ALL_SUBSCRIPTIONS_ID
+        modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, validId).apply()
+        _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
+        logCollector.info(TAG, "Automatic server subscription scope changed: $validId")
+    }
+
+    private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
+        val selectedId = _uiState.value.selectedSubscriptionId
+        if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
+        val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
+            ?: return emptyList()
+        return configs.filter { it.providerTag == subscription.name }
+    }
+
     fun setAutomaticMode(enabled: Boolean) {
         modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
         _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
@@ -356,8 +379,12 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
+                configs = filterConfigsForSelectedSubscription(configs)
                 if (configs.isEmpty()) {
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов. Проверьте интернет и обновите подписку"))
+                    val selectedId = _uiState.value.selectedSubscriptionId
+                    val message = if (selectedId == ALL_SUBSCRIPTIONS_ID) "Нет доступных серверов. Проверьте интернет и обновите подписку" else "В выбранной подписке нет доступных серверов. Выберите другую подписку или «Все подписки»"
+                    connectionCoordinator.send(ConnectionEvent.ShowError(message))
+                    _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
                     return@launch
                 }
 
@@ -480,7 +507,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val ranked = autoSwitcher.rankedServers.value
-                val configs = subscriptionRepository.getAllConfigs()
+                val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
                 if (ranked.isEmpty() && configs.isEmpty()) {
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.ERROR,
