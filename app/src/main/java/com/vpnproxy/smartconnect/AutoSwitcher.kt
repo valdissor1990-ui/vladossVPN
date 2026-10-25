@@ -78,12 +78,14 @@ class AutoSwitcher @Inject constructor(
     // null means the user explicitly selected "All subscriptions".
     @Volatile private var allowedProviderTag: String? = null
     @Volatile private var providerScopeGeneration: Long = 0L
+    @Volatile private var rankingJob: Job? = null
 
     fun setProviderScope(providerTag: String?) {
         val normalized = providerTag?.takeIf { it.isNotBlank() }
         if (allowedProviderTag == normalized) return
         allowedProviderTag = normalized
         providerScopeGeneration += 1
+        rankingJob?.cancel()
         _rankedServers.value = _rankedServers.value.filter { isWithinProviderScope(it.config) }
         logCollector.info(TAG, "Automatic provider scope changed: ${normalized ?: "ALL"}")
     }
@@ -482,7 +484,8 @@ class AutoSwitcher @Inject constructor(
             logCollector.warn(TAG, "No usable servers in selected provider scope; background ranking skipped")
             return
         }
-        scope.launch {
+        rankingJob?.cancel()
+        rankingJob = scope.launch {
             try {
                 val russian = allowed.filter(::isRussian)
                 val foreign = allowed.filterNot(::isRussian)
