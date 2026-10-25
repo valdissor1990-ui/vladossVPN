@@ -17,6 +17,13 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
+    /** Ensure transport paths start with / even when subscriptions omit the leading slash. */
+    private fun normalizePath(path: String?): String {
+        val value = path?.trim().orEmpty()
+        if (value.isEmpty()) return "/"
+        return if (value.startsWith("/")) value else "/$value"
+    }
+
     fun build(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
@@ -196,7 +203,7 @@ object SingboxConfigBuilder {
             if (isVless) when (config.transport.lowercase()) {
                 "ws" -> put("transport", buildJsonObject {
                     put("type", "ws")
-                    put("path", config.path?.takeIf { it.isNotBlank() } ?: "/")
+                    put("path", normalizePath(config.path))
                     config.host?.takeIf { it.isNotBlank() }?.let { host ->
                         put("headers", buildJsonObject { put("Host", host) })
                     }
@@ -207,7 +214,7 @@ object SingboxConfigBuilder {
                 })
                 "http" -> put("transport", buildJsonObject {
                     put("type", "http")
-                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", it) }
+                    config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
                     config.host?.takeIf { it.isNotBlank() }?.let { host ->
                         put("host", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(host)) })
                     }
@@ -255,7 +262,11 @@ object SingboxConfigBuilder {
                         if (value is JsonPrimitive && value.booleanOrNull == false) { omittedKeys += key; return@forEach }
                         if (value is JsonPrimitive && value.intOrNull == 0) { omittedKeys += key; return@forEach }
                         if (singBoxKey in allowedKeys) {
-                            put(singBoxKey, value)
+                            if (singBoxKey == "path" && value is JsonPrimitive && value.isString) {
+                                put(singBoxKey, JsonPrimitive(normalizePath(value.content)))
+                            } else {
+                                put(singBoxKey, value)
+                            }
                             includedKeys += singBoxKey
                         } else omittedKeys += key
                     }
