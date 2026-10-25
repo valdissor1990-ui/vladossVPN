@@ -310,7 +310,11 @@ class HomeViewModel @Inject constructor(
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
-            ?: return emptyList()
+        if (subscription == null) {
+            modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID).apply()
+            _uiState.value = _uiState.value.copy(selectedSubscriptionId = ALL_SUBSCRIPTIONS_ID)
+            return configs
+        }
         return configs.filter { it.providerTag == subscription.name }
     }
 
