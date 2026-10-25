@@ -377,6 +377,13 @@ fun ServerListContent(
             }
         }
 
+        val russianServers = remember(uniqueItems) {
+            uniqueItems.filter { viewModel.isRussianServer(it.config) }
+        }
+        val otherServers = remember(uniqueItems) {
+            uniqueItems.filterNot { viewModel.isRussianServer(it.config) }
+        }
+
         if (filtered.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxWidth().weight(1f),
@@ -388,26 +395,74 @@ fun ServerListContent(
                 )
             }
         } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(
-                    items = uniqueItems,
-                    key = { viewModel.configKey(it.config) }
-                ) { scoredServer ->
-                    val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
-                    val scoreValue = scoreLabel.toDoubleOrNull()
-                    val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
-                    GlassServerCard(
-                        server = scoredServer,
-                        scoreLabel = scoreLabel,
-                        scoreColor = scoreColor,
-                        isOnline = scoredServer.successRate > 0.5f,
-                        onClick = { onServerSelected(scoredServer) },
-                        onDetailsClick = { detailsServer = scoredServer }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "🇷🇺 Россия · ${russianServers.size}",
+                        color = Color(0xFFFFD7A8),
+                        fontSize = 13.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
                     )
+                    LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(
+                            items = russianServers,
+                            key = { "ru-${viewModel.configKey(it.config)}" }
+                        ) { scoredServer ->
+                            val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
+                            val scoreValue = scoreLabel.toDoubleOrNull()
+                            val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
+                            GlassServerCard(
+                                server = scoredServer,
+                                scoreLabel = scoreLabel,
+                                scoreColor = scoreColor,
+                                isOnline = scoredServer.successRate > 0.5f,
+                                onClick = { onServerSelected(scoredServer) },
+                                onDetailsClick = { detailsServer = scoredServer }
+                            )
+                        }
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "🌐 Другие · ${otherServers.size}",
+                        color = Color(0xFFBDEBFF),
+                        fontSize = 13.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+                    )
+                    LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(
+                            items = otherServers,
+                            key = { "other-${viewModel.configKey(it.config)}" }
+                        ) { scoredServer ->
+                            val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
+                            val scoreValue = scoreLabel.toDoubleOrNull()
+                            val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
+                            GlassServerCard(
+                                server = scoredServer,
+                                scoreLabel = scoreLabel,
+                                scoreColor = scoreColor,
+                                isOnline = scoredServer.successRate > 0.5f,
+                                onClick = { onServerSelected(scoredServer) },
+                                onDetailsClick = { detailsServer = scoredServer }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -540,80 +595,87 @@ private fun GlassServerCard(
         "tuic" -> "TUIC"
         else -> config.transport.uppercase().ifBlank { "VLESS" }
     }
-    Row(
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(
                 Brush.linearGradient(
                     listOf(Color(0xFFB7D7FF).copy(alpha = 0.24f), Color(0xFF8EDCFF).copy(alpha = 0.13f))
                 )
             )
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(22.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 8.dp, vertical = 10.dp)
     ) {
-        if (flag.isNotBlank()) {
-            Text(flag, fontSize = 30.sp)
-            Spacer(Modifier.width(12.dp))
-        } else {
-            Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFB9D5FF).copy(alpha = 0.25f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("VPN", fontSize = 9.sp, color = Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (flag.isNotBlank()) {
+                Text(flag, fontSize = 18.sp)
+                Spacer(Modifier.width(4.dp))
             }
-            Spacer(Modifier.width(12.dp))
-        }
-        Column(Modifier.weight(1f)) {
             Text(
-                title,
+                text = title,
                 color = Color.White,
-                fontSize = 17.sp,
+                fontSize = 13.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = "${config.address}:${config.port}",
+            color = Color(0xFFE2EEFF),
+            fontSize = 10.sp,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            fontFamily = FontFamily.Monospace
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(6.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (isOnline) Color(0xFF39E98A) else Color(0xFFFF7777))
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (isOnline) "Доступен" else "Не проверен",
+                fontSize = 9.sp,
+                color = Color(0xFFDDE7FF).copy(alpha = 0.9f),
+                modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                "${config.address}:${config.port}",
-                color = Color(0xFFE2EEFF),
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                fontFamily = FontFamily.Monospace
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(if (isOnline) Color(0xFF39E98A) else Color(0xFFFF7777)))
-                Spacer(Modifier.width(5.dp))
-                Text(if (isOnline) "Доступен" else "Не проверен / офлайн", fontSize = 10.sp, color = Color(0xFFDDE7FF).copy(alpha = 0.85f))
-            }
         }
-        Spacer(Modifier.width(8.dp))
-        Column(horizontalAlignment = Alignment.End) {
+        Spacer(Modifier.height(5.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.clip(RoundedCornerShape(10.dp))
+                Modifier
+                    .clip(RoundedCornerShape(7.dp))
                     .background(Color.White.copy(alpha = 0.13f))
-                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 9.dp, vertical = 5.dp)
+                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(7.dp))
+                    .padding(horizontal = 5.dp, vertical = 3.dp)
             ) {
-                Text(transport, color = Color.White, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text(transport, color = Color.White, fontSize = 9.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             }
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.weight(1f))
             Text(
                 if (scoreLabel == "—") "— ms" else "${scoreLabel} ms",
                 color = scoreColor,
-                fontSize = 15.sp,
+                fontSize = 11.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
-            TextButton(
-                onClick = onDetailsClick,
-                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
-            ) {
-                Text("Детали", fontSize = 11.sp, color = Color(0xFFE6F3FF))
-            }
+        }
+        TextButton(
+            onClick = onDetailsClick,
+            modifier = Modifier.align(Alignment.End),
+            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)
+        ) {
+            Text("Детали", fontSize = 10.sp, color = Color(0xFFE6F3FF))
         }
     }
 }
