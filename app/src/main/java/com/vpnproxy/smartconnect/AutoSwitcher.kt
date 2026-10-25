@@ -477,6 +477,7 @@ class AutoSwitcher @Inject constructor(
     fun rankInBackground(configs: List<ParsedConfig>) {
         if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
         val scopeGeneration = providerScopeGeneration
+        rankingJob?.cancel()
         val allowed = filterUsableServers(configs).filter(::isWithinProviderScope)
         val rankingTraceId = connectionCoordinator.activeTraceId
         if (allowed.isEmpty()) {
@@ -484,7 +485,6 @@ class AutoSwitcher @Inject constructor(
             logCollector.warn(TAG, "No usable servers in selected provider scope; background ranking skipped")
             return
         }
-        rankingJob?.cancel()
         rankingJob = scope.launch {
             try {
                 val russian = allowed.filter(::isRussian)
