@@ -50,7 +50,7 @@ jobs:
           cat > app/src/main/assets/licenses/SOURCE_COMMIT.txt <<EOF
           VLADOSS VPN source commit: $GITHUB_SHA
           Source: https://github.com/valdissor1990-ui/vladossVPN/tree/$GITHUB_SHA
-          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.21
+          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.23
           Bundled cronet-go wrapper: https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
           Bundled libcronet.a source: https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
           EOF
