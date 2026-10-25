@@ -18,8 +18,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,11 +57,11 @@ class ServerScanner @Inject constructor(
 
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
     @Volatile private var backgroundJob: Job? = null
-    @Volatile private var activeScanJob: Job? = null
+    private val scanGeneration = AtomicLong(0L)
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
-            activeScanJob = currentCoroutineContext().job
+            val generation = scanGeneration.get()
             // Keep identical endpoints attributable to their provider. A scan cached for
             // provider A must never be reused as the scan result for provider B.
             val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
@@ -89,7 +88,7 @@ class ServerScanner @Inject constructor(
                     // Probe every RU entry first; only then scan the remaining subscription entries.
                     val russianResults = russianConfigs.map { config ->
                         async(Dispatchers.IO) {
-                            semaphore.withPermit { probe(config) }
+                            semaphore.withPermit { probe(config, generation) }
                         }
                     }.awaitAll()
                     val otherResults = otherConfigs.map { config ->
@@ -104,6 +103,10 @@ class ServerScanner @Inject constructor(
                         { it.latencyMs }
                     )
                 )
+                if (scanGeneration.get() != generation) {
+                    logCollector.info(TAG, "Discarded cancelled scan results")
+                    return@withLock _scannedServers.value
+                }
                 scannedConfigKeys = requestedKeys
                 _scannedServers.value = results
                 val tcpResponsive = results.filter { it.successRate > 0.5f }
@@ -115,16 +118,14 @@ class ServerScanner @Inject constructor(
                 results
             } finally {
                 _isScanning.value = false
-                activeScanJob = null
             }
         }
 
-    /** Cancels the current scan without touching the VPN connection. */
+    /** Cancels publication of the active scan without cancelling its parent lifecycle job or VPN. */
     fun cancelScan() {
-        val job = activeScanJob
-        if (job != null && job.isActive) {
-            logCollector.info(TAG, "Server scan cancelled by user")
-            job.cancel(CancellationException("Server scan cancelled by user"))
+        if (_isScanning.value) {
+            scanGeneration.incrementAndGet()
+            logCollector.info(TAG, "Server scan cancellation requested; in-flight TCP probes will drain")
         }
     }
 
@@ -184,7 +185,8 @@ class ServerScanner @Inject constructor(
     /** Shared canonical key used by the scanner and server-list UI. */
     fun configKey(config: ParsedConfig): String = config.connectionKey()
 
-    private suspend fun probe(config: ParsedConfig): ScoredServer {
+    private suspend fun probe(config: ParsedConfig, generation: Long): ScoredServer {
+        if (scanGeneration.get() != generation) return unavailable(config)
         val target = PingTarget(
             id = pingTargetId(config),
             displayName = config.name,
@@ -196,6 +198,7 @@ class ServerScanner @Inject constructor(
         )
         return try {
             val result = pingExecutor.ping(target, SERVER_TIMEOUT_MS)
+            if (scanGeneration.get() != generation) return unavailable(config)
             val latency = result.rttMs?.takeIf { result.success } ?: Long.MAX_VALUE
             ScoredServer(
                 config = config,
@@ -210,9 +213,12 @@ class ServerScanner @Inject constructor(
             throw c
         } catch (e: Exception) {
             logCollector.debug(TAG, "TCP probe failed for ${config.name}: ${e.message}")
-            ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+            unavailable(config)
         }
     }
+
+    private fun unavailable(config: ParsedConfig): ScoredServer =
+        ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
 
     private fun pingTargetId(config: ParsedConfig): String =
         MessageDigest.getInstance("SHA-256")
