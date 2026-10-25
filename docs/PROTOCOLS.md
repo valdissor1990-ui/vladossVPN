@@ -3,13 +3,13 @@
 ## Поддерживаемые протоколы
 
 - **VLESS + Reality:** UUID, SNI, fingerprint, public key (`pbk`), short ID (`sid`) и flow.
-- **VLESS transport:** TCP, WebSocket, gRPC, HTTP, HTTPUpgrade, QUIC и XHTTP (XHTTP предоставляется форком sing-box-lx 1.14.3-lx.21).
+- **VLESS transport:** TCP, WebSocket, gRPC, HTTP, HTTPUpgrade, QUIC и XHTTP (XHTTP предоставляется форком sing-box-lx 1.14.3-lx.23).
 - **Hysteria2:** пароль, TLS/SNI, ALPN и obfs Salamander.
 - **TUIC:** UUID, пароль, TLS/SNI, ALPN, `congestion_control` и `udp_relay_mode=native`.
 
 ## XHTTP через sing-box-lx
 
-Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` версии `1.14.3-lx.21`, собранный с `with_xhttp`. Builder создаёт `transport.type=xhttp` и передаёт `host`, `path`, `mode`; поля JSON из URI-параметра `extra` разворачиваются в поддерживаемые XHTTP options. TLS/Reality остаётся на уровне outbound `tls`. Релиз AAR фиксируется SHA-256 в `scripts/download_libbox.sh`.
+Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` версии `1.14.3-lx.23`, собранный с `with_xhttp`. Builder создаёт `transport.type=xhttp` и передаёт `host`, `path`, `mode`; поля JSON из URI-параметра `extra` разворачиваются в поддерживаемые XHTTP options. TLS/Reality остаётся на уровне outbound `tls`. Релиз AAR фиксируется SHA-256 в `scripts/download_libbox.sh`.
 
 ## VLESS + Reality: поля URI
 
