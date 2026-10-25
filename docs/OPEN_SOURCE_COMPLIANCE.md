@@ -3,7 +3,7 @@
 ## Scope and source pins
 
 VLADOSS VPN is declared under GPL-3.0-or-later. The Android app packages
-`libbox.aar` from `Leadaxe/sing-box-lx` release `v1.14.3-lx.21` and has
+`libbox.aar` from `Leadaxe/sing-box-lx` release `v1.14.3-lx.23` and has
 Android Gradle runtime dependencies. The `with_naive_outbound` tag also brings
 in prebuilt Cronet/Chromium static archives through `cronet-go`.
 
@@ -36,16 +36,7 @@ in prebuilt Cronet/Chromium static archives through `cronet-go`.
 
 ## Latest automated verification
 
-The successful CI run for the implementation commit is available at
-https://github.com/valdissor1990-ui/vladossVPN/actions/runs/40075992534.
-
-- 156 resolved Gradle release dependency entries in the HTML report.
-- 125 native Go package/license rows merged across Android ABIs.
-- Zero unknown native license types and zero unresolved native source URLs.
-- Four `libcronet.a` ABI entries in a separate native-binary inventory.
-- 83 Cronet/Chromium license and notice files collected from the pinned
-  NaiveProxy/Chromium source revision.
-- Unit tests passed, and the release APK/AAB asset-presence checks passed.
+Regenerate after each core pin change (CI run on the release commit).
 
 These counts are specific to the pinned dependency graph and must be
 regenerated if the core, build tags, or dependencies change.
