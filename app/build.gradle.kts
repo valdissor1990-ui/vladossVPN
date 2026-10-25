@@ -26,8 +26,11 @@ android {
         targetSdk = 35
         versionCode = 765
         versionName = "1.0.765"
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables.useSupportLibrary = true
+        vectorDrawables {
+            useSupportLibrary = true
+        }
     }
 
     signingConfigs {
@@ -42,7 +45,7 @@ android {
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -53,7 +56,7 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
-        debug {
+        getByName("debug") {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
