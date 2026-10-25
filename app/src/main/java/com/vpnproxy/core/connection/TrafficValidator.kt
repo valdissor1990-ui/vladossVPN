@@ -14,14 +14,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Validates actual traffic through the active Sing-box outbound.
+ * Validates real outbound traffic through the active Sing-box mixed inbound.
  *
- * The app package is excluded from Android's VPN route to prevent routing loops, so a plain
- * HttpURLConnection would bypass the tunnel and test the underlying network instead. Connect
- * explicitly to Sing-box's local mixed inbound; it routes the request through the selected proxy.
- *
- * Uses HTTP CONNECT via the local mixed inbound so HTTPS SNI is sent correctly
- * (Android HttpURLConnection + SOCKS often breaks TLS handshake/SNI).
+ * The app package is excluded from Android's VPN route to prevent routing loops, so the probe
+ * must explicitly use the local HTTP proxy. A single public probe endpoint is not sufficient:
+ * a CDN or captive/network filter can reset that host while another HTTPS destination works.
  */
 @Singleton
 class TrafficValidator @Inject constructor(
@@ -29,80 +26,92 @@ class TrafficValidator @Inject constructor(
 ) {
     companion object {
         private const val TAG = "TrafficValidator"
-        private const val PROBE_URL = "https://cp.cloudflare.com/generate_204"
-        private const val CONNECT_TIMEOUT_MS = 8_000
-        private const val READ_TIMEOUT_MS = 8_000
+        private val PROBE_URLS = listOf(
+            "https://cp.cloudflare.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204"
+        )
+        private const val CONNECT_TIMEOUT_MS = 4_000
+        private const val READ_TIMEOUT_MS = 4_000
         private const val PORT_WAIT_TIMEOUT_MS = 3_000L
-        private const val PORT_POLL_MS = 100
+        private const val PORT_POLL_MS = 100L
         private const val PORT_CONNECT_TIMEOUT_MS = 150
     }
 
     suspend fun checkTraffic(serverName: String? = null): Boolean = withContext(Dispatchers.IO) {
-        val portReady = waitForPort(
-            host = "127.0.0.1",
-            port = SingboxConfigBuilder.PROXY_PORT,
-            timeoutMs = PORT_WAIT_TIMEOUT_MS
-        )
-        if (!portReady) {
+        val proxyHost = "127.0.0.1"
+        val proxyPort = SingboxConfigBuilder.PROXY_PORT
+        if (!waitForPort(proxyHost, proxyPort, PORT_WAIT_TIMEOUT_MS)) {
             logCollector.warn(
                 TAG,
-                "Port ${SingboxConfigBuilder.PROXY_PORT} not ready after ${PORT_WAIT_TIMEOUT_MS}ms",
-                mapOf("server" to (serverName ?: "unknown"))
+                "Local mixed inbound not ready after ${PORT_WAIT_TIMEOUT_MS}ms",
+                mapOf("server" to (serverName ?: "unknown"), "port" to proxyPort)
             )
             return@withContext false
         }
 
-        val startedAtNs = System.nanoTime()
-        var connection: HttpURLConnection? = null
-        try {
-            // HTTP CONNECT — SNI works with HttpURLConnection; mixed inbound supports it.
-            val localProxy = Proxy(
-                Proxy.Type.HTTP,
-                InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)
-            )
-            connection = (URL(PROBE_URL).openConnection(localProxy) as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
-                instanceFollowRedirects = false
-                useCaches = false
-                setRequestProperty("User-Agent", "Mozilla/5.0")
+        val localProxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(proxyHost, proxyPort))
+        val failures = mutableListOf<String>()
+        for (probeUrl in PROBE_URLS) {
+            val startedAtNs = System.nanoTime()
+            var connection: HttpURLConnection? = null
+            try {
+                connection = (URL(probeUrl).openConnection(localProxy) as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = CONNECT_TIMEOUT_MS
+                    readTimeout = READ_TIMEOUT_MS
+                    instanceFollowRedirects = false
+                    useCaches = false
+                    setRequestProperty("User-Agent", "VPNProxy-TrafficValidator/1.0")
+                    setRequestProperty("Cache-Control", "no-cache")
+                }
+                val status = connection.responseCode
+                val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
+                val success = status == HttpURLConnection.HTTP_OK ||
+                    status == HttpURLConnection.HTTP_NO_CONTENT
+                logCollector.info(
+                    TAG,
+                    "Traffic probe completed",
+                    mapOf(
+                        "server" to (serverName ?: "unknown"),
+                        "target" to URL(probeUrl).host,
+                        "proxy" to "http://$proxyHost:$proxyPort",
+                        "status" to status,
+                        "elapsedMs" to elapsedMs,
+                        "success" to success
+                    )
+                )
+                if (success) return@withContext true
+                failures += "${URL(probeUrl).host}:HTTP_$status"
+            } catch (e: Exception) {
+                val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
+                val reason = "${URL(probeUrl).host}:${e.javaClass.simpleName}"
+                failures += reason
+                logCollector.warn(
+                    TAG,
+                    "Traffic probe failed",
+                    mapOf(
+                        "server" to (serverName ?: "unknown"),
+                        "target" to URL(probeUrl).host,
+                        "proxy" to "http://$proxyHost:$proxyPort",
+                        "elapsedMs" to elapsedMs,
+                        "exception" to e.javaClass.simpleName,
+                        "message" to (e.message ?: "")
+                    )
+                )
+            } finally {
+                connection?.disconnect()
             }
-            val status = connection.responseCode
-            val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
-            val success = status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_NO_CONTENT
-            logCollector.info(
-                TAG,
-                "Traffic probe completed",
-                mapOf(
-                    "server" to (serverName ?: "unknown"),
-                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
-                    "status" to status,
-                    "elapsedMs" to elapsedMs,
-                    "success" to success
-                )
-            )
-            success
-        } catch (e: Exception) {
-            val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
-            logCollector.warn(
-                TAG,
-                "Traffic probe failed",
-                mapOf(
-                    "server" to (serverName ?: "unknown"),
-                    "proxy" to "http://127.0.0.1:${SingboxConfigBuilder.PROXY_PORT}",
-                    "elapsedMs" to elapsedMs,
-                    "exception" to e.javaClass.simpleName,
-                    "message" to (e.message ?: "")
-                )
-            )
-            false
-        } finally {
-            connection?.disconnect()
         }
+
+        logCollector.warn(
+            TAG,
+            "All traffic probe targets failed",
+            mapOf("server" to (serverName ?: "unknown"), "failures" to failures.joinToString(","))
+        )
+        false
     }
 
-    /** Poll until local mixed inbound accepts TCP, or [timeoutMs] elapses. */
+    /** Poll until the local mixed inbound accepts TCP, or [timeoutMs] elapses. */
     private suspend fun waitForPort(host: String, port: Int, timeoutMs: Long): Boolean {
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
@@ -112,7 +121,7 @@ class TrafficValidator @Inject constructor(
                     return true
                 }
             } catch (_: Exception) {
-                delay(PORT_POLL_MS.toLong())
+                delay(PORT_POLL_MS)
             }
         }
         return false
