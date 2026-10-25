@@ -256,7 +256,7 @@ object SingboxConfigBuilder {
             if (isHy2 || isTuic || config.security.equals("tls", true) || config.security.equals("reality", true)) {
                 put("tls", buildJsonObject {
                     put("enabled", true)
-                    put("server_name", config.sni?.takeIf { it.isNotBlank() } ?: config.address)
+                    put("server_name", config.sni?.takeIf { it.isNotBlank() } ?: config.host?.takeIf { it.isNotBlank() } ?: config.address)
                     if (isVless) {
                         put("utls", buildJsonObject {
                             put("enabled", true)
