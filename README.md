@@ -5,7 +5,7 @@ Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3**
 ## Возможности
 
 - **Протоколы:** VLESS + Reality (включая Vision flow и поддерживаемые upstream транспорты), Hysteria2 и TUIC
-- **XHTTP:** используется sing-box-lx 1.14.3-lx.21; транспорт XHTTP работает совместно с TLS/Reality
+- **XHTTP:** используется sing-box-lx 1.14.3-lx.23; транспорт XHTTP работает совместно с TLS/Reality
 - **Единый процесс:** libbox запускается внутри процесса приложения; отдельного процесса `:singbox` нет
 - **TUN:** создаётся через `VpnService.Builder` из `PlatformInterface.openTun()`
 - **Split Tunneling:** режимы INCLUDE_SELECTED и EXCLUDE_SELECTED с исключением самого VPN-приложения
@@ -24,7 +24,7 @@ chmod +x scripts/download_libbox.sh
 ./gradlew assembleDirectRelease
 ```
 
-Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.3-lx.21`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
+Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.3-lx.23`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
 
 ## Архитектура
 
