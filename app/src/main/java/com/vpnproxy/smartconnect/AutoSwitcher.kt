@@ -1,5 +1,7 @@
 package com.vpnproxy.smartconnect
 
+import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -7,6 +9,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,7 +33,8 @@ class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
     private val logCollector: LogCollector,
-    private val connectionCoordinator: ConnectionCoordinator
+    private val connectionCoordinator: ConnectionCoordinator,
+    @ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
@@ -73,6 +77,28 @@ class AutoSwitcher @Inject constructor(
     val switchEvents: StateFlow<String?> = _switchEvents.asStateFlow()
 
     private val switching = AtomicBoolean(false)
+
+    // A selected subscription is a hard boundary for every automatic switch path.
+    // null means the user explicitly selected "All subscriptions".
+    @Volatile private var allowedProviderTag: String? = null
+    @Volatile private var providerScopeBlocked: Boolean = false
+    @Volatile private var providerScopeGeneration: Long = 0L
+    @Volatile private var rankingJob: Job? = null
+
+    fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
+        val normalized = providerTag?.takeIf { it.isNotBlank() }
+        if (allowedProviderTag == normalized && providerScopeBlocked == blocked) return
+        allowedProviderTag = normalized
+        providerScopeBlocked = blocked
+        providerScopeGeneration += 1
+        rankingJob?.cancel()
+        _rankedServers.value = _rankedServers.value.filter { isWithinProviderScope(it.config) }
+        val scopeLabel = if (blocked) "BLOCKED" else normalized ?: "ALL"
+        logCollector.info(TAG, "Automatic provider scope changed: $scopeLabel")
+    }
+
+    private fun isWithinProviderScope(config: ParsedConfig): Boolean =
+        !providerScopeBlocked && (allowedProviderTag?.let { it == config.providerTag } ?: true)
 
     @Volatile private var connectedAtMs: Long = 0L
     @Volatile private var diagnosticFreezeAfterConnected: Boolean = false
@@ -159,7 +185,14 @@ class AutoSwitcher @Inject constructor(
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
-                delay(AutoSwitcherConfig.healthCheckIntervalMs)
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val batterySaver = powerManager?.isPowerSaveMode == true
+                val intervalMs = if (batterySaver) {
+                    AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
+                } else {
+                    AutoSwitcherConfig.healthCheckIntervalMs
+                }
+                delay(intervalMs)
                 if (isInPostConnectWarmup()) {
                     logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
                     continue
@@ -366,7 +399,8 @@ class AutoSwitcher @Inject constructor(
             // Never auto-switch to a placeholder from selectImmediate(): only use profiles
             // with a successful, finite latency measurement from the latest ranking.
             val ranked = _rankedServers.value.filter {
-                !isBlacklisted(it.config) &&
+                isWithinProviderScope(it.config) &&
+                    !isBlacklisted(it.config) &&
                     it.config.isValid() &&
                     it.latencyMs > 0L &&
                     it.latencyMs != Long.MAX_VALUE
@@ -456,13 +490,16 @@ class AutoSwitcher @Inject constructor(
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
         if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
-        val allowed = filterUsableServers(configs)
+        val scopeGeneration = providerScopeGeneration
+        rankingJob?.cancel()
+        val allowed = filterUsableServers(configs).filter(::isWithinProviderScope)
         val rankingTraceId = connectionCoordinator.activeTraceId
         if (allowed.isEmpty()) {
-            logCollector.warn(TAG, "All candidate servers are blacklisted; background ranking skipped")
+            if (scopeGeneration == providerScopeGeneration) _rankedServers.value = emptyList()
+            logCollector.warn(TAG, "No usable servers in selected provider scope; background ranking skipped")
             return
         }
-        scope.launch {
+        rankingJob = scope.launch {
             try {
                 val russian = allowed.filter(::isRussian)
                 val foreign = allowed.filterNot(::isRussian)
@@ -470,6 +507,10 @@ class AutoSwitcher @Inject constructor(
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 // Region is a probe-order hint only; it must not override measured quality.
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                if (scopeGeneration != providerScopeGeneration) {
+                    logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
+                    return@launch
+                }
                 if (connectionCoordinator.activeTraceId != rankingTraceId) {
                     logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
                     return@launch
@@ -568,9 +609,9 @@ class AutoSwitcher @Inject constructor(
 
     suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
         if (suppressIfFrozen("selectBest")) return _currentServer.value
-        val allowed = filterUsableServers(configs)
+        val allowed = filterUsableServers(configs).filter(::isWithinProviderScope)
         if (allowed.isEmpty()) {
-            logCollector.warn(TAG, "selectBest: all candidates blacklisted")
+            logCollector.warn(TAG, "selectBest: no usable candidates in selected provider scope")
             return null
         }
         val russian = allowed.filter(::isRussian)
@@ -591,6 +632,10 @@ class AutoSwitcher @Inject constructor(
 
     fun forceSelect(server: ScoredServer): Boolean {
         if (suppressIfFrozen("forceSelect", server.config.name)) return false
+        if (!isWithinProviderScope(server.config)) {
+            logCollector.warn(TAG, "forceSelect rejected profile outside selected provider scope: ${server.config.name}")
+            return false
+        }
         if (isBlacklisted(server.config)) {
             logCollector.warn(TAG, "forceSelect rejected blacklisted profile: ${server.config.name}")
             return false

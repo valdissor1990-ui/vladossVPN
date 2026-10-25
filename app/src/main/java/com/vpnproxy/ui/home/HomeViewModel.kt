@@ -104,6 +104,7 @@ class HomeViewModel @Inject constructor(
         connectionCoordinator.registerSelectionCancel {
             cancelSelectionJob("actor RequestDisconnect")
         }
+        updateAutoSwitcherProviderScope()
 
         viewModelScope.launch {
             connectionCoordinator.state.collect { state ->
@@ -297,11 +298,10 @@ class HomeViewModel @Inject constructor(
         val validId = if (subscriptionId == ALL_SUBSCRIPTIONS_ID || subscriptionRepository.subscriptions.value.any { it.id == subscriptionId }) subscriptionId else ALL_SUBSCRIPTIONS_ID
         modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, validId).apply()
         _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
+        updateAutoSwitcherProviderScope()
         logCollector.info(TAG, "Automatic server subscription scope changed: $validId")
-        if (_uiState.value.isAutomaticMode && connectionCoordinator.state.value is ConnectionState.Connected) {
-            viewModelScope.launch(Dispatchers.IO) {
-                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
-            }
+        if (connectionCoordinator.state.value is ConnectionState.Connected) {
+            refreshAutomaticScopeCandidates()
         }
     }
 
@@ -311,21 +311,64 @@ class HomeViewModel @Inject constructor(
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
         if (subscription == null) {
-            modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID).apply()
-            _uiState.value = _uiState.value.copy(selectedSubscriptionId = ALL_SUBSCRIPTIONS_ID)
-            return configs
+            // Never broaden a missing provider selection to all providers: that can silently
+            // connect through a different subscription after the selected one was removed.
+            logCollector.warn(TAG, "Selected subscription is missing; automatic selection is blocked: $selectedId")
+            return emptyList()
         }
         return configs.filter { it.providerTag == subscription.name }
+    }
+
+    private fun updateAutoSwitcherProviderScope() {
+        val state = _uiState.value
+        val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
+        val selectedSubscription = if (scopedSelection) {
+            subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }
+        } else null
+        // A missing selected subscription must fail closed, not become null/"ALL".
+        val blocked = scopedSelection && selectedSubscription == null
+        val providerTag = selectedSubscription?.name
+        autoSwitcher.setProviderScope(providerTag, blocked = blocked)
+    }
+
+    private fun refreshAutomaticScopeCandidates() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                if (configs.isEmpty()) {
+                    // Clear old fallback candidates immediately so a removed/empty provider
+                    // cannot silently fall back to another provider.
+                    connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+                    autoSwitcher.rankInBackground(emptyList())
+                    return@launch
+                }
+                if (!serverScanner.isScanCurrent(configs)) {
+                    serverScanner.scanAll(configs, force = true)
+                }
+                val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
+                val candidates = serverScanner.availableServers()
+                    .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
+                    .filterNot { autoSwitcher.isBlacklisted(it.config) }
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
+                autoSwitcher.rankInBackground(configs)
+                logCollector.info(TAG, "Fallback candidates refreshed for selected provider scope: ${candidates.size}")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Failed to refresh fallback candidates for selected provider scope", e)
+                // Fail closed: stale candidates from the previously selected provider are unsafe.
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+            }
+        }
     }
 
     fun setAutomaticMode(enabled: Boolean) {
         modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
         _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
+        updateAutoSwitcherProviderScope()
         logCollector.info(TAG, "Server selection mode changed: " + (if (enabled) "automatic" else "manual"))
         if (connectionCoordinator.state.value is ConnectionState.Connected) {
-            viewModelScope.launch(Dispatchers.IO) {
-                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
-            }
+            refreshAutomaticScopeCandidates()
         }
     }
 
@@ -410,7 +453,13 @@ class HomeViewModel @Inject constructor(
                     logCollector.info(TAG, "Discarding stale server-selection attempt $traceId after scanning")
                     return@launch
                 }
+                // The scanner is shared, but candidates must match the exact provider scope
+                // used for this connection attempt; never reuse another provider's scan results.
+                val allowedProviderProfiles = configs
+                    .map { it.providerTag to it.connectionKey() }
+                    .toSet()
                 val available = serverScanner.availableServers()
+                    .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProviderProfiles }
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
                 val russian = available.filter { serverScanner.isRussianServer(it.config) }
                     .sortedBy { it.latencyMs }

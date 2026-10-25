@@ -59,11 +59,11 @@ class ServerScanner @Inject constructor(
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
-            // Prefer an RU-labelled copy when the same connection profile appears in
-            // multiple providers, so deduplication cannot erase RU-first priority.
+            // Keep identical endpoints attributable to their provider. A scan cached for
+            // provider A must never be reused as the scan result for provider B.
             val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
-                .distinctBy(::serverKey)
-            val requestedKeys = unique.map(::serverKey).toSet()
+                .distinctBy(::scanKey)
+            val requestedKeys = unique.map(::scanKey).toSet()
             if (!force && requestedKeys.isNotEmpty() &&
                 requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size
             ) {
@@ -139,9 +139,10 @@ class ServerScanner @Inject constructor(
     }
 
     fun isScanCurrent(configs: List<ParsedConfig>): Boolean {
-        val keys = configs.distinctBy(::serverKey).map(::serverKey).toSet()
+        val unique = configs.distinctBy(::scanKey)
+        val keys = unique.map(::scanKey).toSet()
         return keys.isNotEmpty() && keys == scannedConfigKeys &&
-            _scannedServers.value.size == keys.size
+            _scannedServers.value.size == unique.size
     }
 
     /**
@@ -204,6 +205,9 @@ class ServerScanner @Inject constructor(
             .digest(serverKey(config).toByteArray(Charsets.UTF_8))
             .take(12)
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun scanKey(config: ParsedConfig): String =
+        "${config.providerTag}\u001F${config.connectionKey()}"
 
     private fun serverKey(config: ParsedConfig): String = config.connectionKey()
 }
