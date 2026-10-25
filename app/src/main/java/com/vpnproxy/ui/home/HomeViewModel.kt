@@ -318,6 +318,11 @@ class HomeViewModel @Inject constructor(
         modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
         _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
         logCollector.info(TAG, "Server selection mode changed: " + (if (enabled) "automatic" else "manual"))
+        if (connectionCoordinator.state.value is ConnectionState.Connected) {
+            viewModelScope.launch(Dispatchers.IO) {
+                autoSwitcher.rankInBackground(filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs()))
+            }
+        }
     }
 
     private fun connect() {
