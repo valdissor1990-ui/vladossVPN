@@ -234,4 +234,20 @@ class SingboxConfigBuilderTest {
         assertFalse(first.connectionKey() == second.connectionKey())
     }
 
+
+    @Test
+    fun transportPathsAreNormalizedWhenLeadingSlashIsMissing() {
+        val ws = config("ws", "secret").copy(path = "ws")
+        val wsTransport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(ws)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+        assertEquals("/ws", wsTransport["path"]!!.jsonPrimitive.content)
+
+        val xhttp = config("xhttp", "secret").copy(path = "xhttp")
+        val xhttpTransport = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(xhttp)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
+        assertEquals("/xhttp", xhttpTransport["path"]!!.jsonPrimitive.content)
+    }
+
 }
