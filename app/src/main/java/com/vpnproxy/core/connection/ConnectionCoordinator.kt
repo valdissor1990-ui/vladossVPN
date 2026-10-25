@@ -44,6 +44,8 @@ sealed class ConnectionEvent {
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
+    /** Internal timer completion for retrying the same server after a local bind collision. */
+    data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
     data class TrafficValidationResult(val serverName: String, val success: Boolean) : ConnectionEvent()
@@ -208,6 +210,7 @@ class ConnectionCoordinator @Inject constructor(
                     logI("Manual connect requested — fatal lock cleared")
                 }
                 activeTraceId = event.traceId
+                TraceId.newId()
                 retryCount = 0
                 logI("ConnectRequested — enter Connecting (selection may still run)")
                 when (current) {
@@ -345,7 +348,36 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.CoreError -> {
                 logE("CoreError: ${event.reason} (retry=$retryCount; fallbackAttempts=$fallbackAttempts; remainingCandidates=${fallbackCandidates.size})")
-                if (!tryFallback(event.reason, current)) handleFailure(event.reason, current)
+                if (event.reason is VpnFailureReason.BindError) {
+                    logW("BindError — waiting 5s before retry, same server")
+                    scope.launch {
+                        delay(5_000L)
+                        send(ConnectionEvent.BindRetryReady)
+                    }
+                } else if (!tryFallback(event.reason, current)) {
+                    handleFailure(event.reason, current)
+                }
+            }
+
+            is ConnectionEvent.BindRetryReady -> {
+                val stateNow = _state.value
+                if (hasServerSelected && !isFatalErrorLocked &&
+                    (stateNow is ConnectionState.Connecting ||
+                        stateNow is ConnectionState.Reconnecting ||
+                        stateNow is ConnectionState.Connected ||
+                        stateNow is ConnectionState.Verifying)
+                ) {
+                    retryCount = 0
+                    // Force a state edge so the service restarts the same selected server.
+                    val next = if (stateNow is ConnectionState.Connecting) {
+                        ConnectionState.Reconnecting
+                    } else {
+                        ConnectionState.Connecting
+                    }
+                    setState(next, reason = "BindErrorRetrySameServer")
+                } else {
+                    logW("BindRetryReady ignored — state=$stateNow hasServerSelected=$hasServerSelected")
+                }
             }
 
             is ConnectionEvent.Timeout -> {
@@ -388,8 +420,8 @@ class ConnectionCoordinator @Inject constructor(
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
-                if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION) {
-                    logW("DEBUG: SKIP_TRAFFIC_VALIDATION=true — пропуск проверки трафика")
+                if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION && com.vpnproxy.util.DebugFlags.diagnosticEnabled()) {
+                    logW("Debug diagnostic mode: skipping connection-blocking traffic validation")
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true))
                     return
                 }
@@ -411,13 +443,11 @@ class ConnectionCoordinator @Inject constructor(
                     logI("Traffic validation passed for ${event.serverName}")
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
-                    // One failed probe is enough: discard this endpoint (+ fingerprint variants)
-                    // immediately. Do NOT accumulate trafficFailures across different servers —
-                    // that mis-attributed failures and skipped the wrong profile.
+                    trafficFailures++
                     val failedConfig = activeScoredServer?.config
-                    logW("Server does not pass traffic: ${event.serverName} (remainingCandidates=${fallbackCandidates.size})")
+                    logW("Server does not pass traffic: ${event.serverName} (consecutiveFailures=$trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES; remainingCandidates=${fallbackCandidates.size})")
 
-                    if (failedConfig != null) {
+                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES && failedConfig != null) {
                         val before = fallbackCandidates.size
                         fallbackCandidates = fallbackCandidates.filterNot { candidate ->
                             val config = candidate.config
@@ -427,9 +457,9 @@ class ConnectionCoordinator @Inject constructor(
                                 config.security.equals(failedConfig.security, ignoreCase = true)
                         }
                         val skipped = before - fallbackCandidates.size
-                        logW("Skipped $skipped equivalent endpoint variant(s) for ${failedConfig.address}:${failedConfig.port} after traffic probe failure")
+                        logW("Traffic validation failed $trafficFailures times on endpoint ${failedConfig.address}:${failedConfig.port}; skipped $skipped equivalent endpoint variant(s)")
+                        trafficFailures = 0
                     }
-                    trafficFailures = 0
 
                     val next = fallbackCandidates.firstOrNull()
                     if (next == null) {
@@ -450,30 +480,25 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServiceStopped -> {
                 when (current) {
-                    is ConnectionState.Disconnecting -> {
-                        retryCount = 0
+                    is ConnectionState.Disconnecting,
+                    is ConnectionState.Disconnected ->
                         setState(ConnectionState.Disconnected, reason = "ServiceStopped")
-                    }
-                    is ConnectionState.Disconnected -> logD("ServiceStopped while already Disconnected")
-                    is ConnectionState.Error -> logD("ServiceStopped while Error — keep Error")
-                    is ConnectionState.Connecting,
+                    is ConnectionState.Error -> logD("ServiceStopped while Error — keep Error banner")
                     is ConnectionState.Reconnecting,
-                    is ConnectionState.Verifying,
-                    is ConnectionState.Connected -> {
-                        logW("Unexpected ServiceStopped in $current")
-                        if (!isFatalErrorLocked) {
-                            setState(ConnectionState.Disconnected, reason = "ServiceStopped:unexpected")
-                        }
-                    }
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Verifying -> logD("ServiceStopped during $current — awaiting restart")
+                    is ConnectionState.Connected ->
+                        handleFailure(VpnFailureReason.CoreError("Unexpected service stop"), current)
                 }
             }
         }
     }
 
     private fun isRussianServer(server: ScoringEngine.ScoredServer): Boolean {
-        val labels = "${server.config.name} ${server.config.providerTag}"
-        return labels.contains("🇷🇺") ||
-            Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE).containsMatchIn(labels)
+        val config = server.config
+        val text = "${config.name} ${config.address} ${config.sni.orEmpty()}".uppercase()
+        return text.contains("🇷🇺") || Regex("(^|[^A-Z0-9])RU([^A-Z0-9]|$)").containsMatchIn(text) ||
+            config.name.endsWith(".ru", ignoreCase = true) || config.sni.orEmpty().endsWith(".ru", ignoreCase = true)
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {

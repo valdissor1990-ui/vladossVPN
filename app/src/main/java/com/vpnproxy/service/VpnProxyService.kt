@@ -25,6 +25,9 @@ import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.SingBoxCore
 import com.vpnproxy.core.singbox.SingBoxPlatform
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.DiagnosticOptions
+import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -39,6 +42,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -86,6 +90,7 @@ class VpnProxyService : VpnService() {
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
     private var watchdogJob: Job? = null
+    private var passiveProbeJob: Job? = null
     private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
 
@@ -112,7 +117,7 @@ class VpnProxyService : VpnService() {
 
         try {
             autoSwitcher.attachVpnService(this)
-            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager))
+            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager), logCollector)
             lifecycleController = VpnLifecycleController(core, logCollector)
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
@@ -167,7 +172,11 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Connected -> {
                         if (_isRunning.value) transitionServiceState(ServiceState.Active)
                         cancelIdleStop()
+                        val diagnosticEnabled = com.vpnproxy.util.DebugFlags.diagnosticEnabled()
+                        val diagnosticOptions = if (diagnosticEnabled) DiagnosticSettings.load(this@VpnProxyService) else DiagnosticOptions(tunStack = "system", strictRoute = true)
+                        autoSwitcher.setDiagnosticFreeze(diagnosticEnabled && diagnosticOptions.freezeAutoSwitcherAfterConnected)
                         autoSwitcher.startMonitoring()
+                        if (diagnosticOptions.passiveProbeEnabled && com.vpnproxy.util.DebugFlags.diagnosticEnabled()) startPassiveProbe()
                         if (!_isRunning.value && _serviceState.value != ServiceState.Starting) {
                             restartVpnForDesiredState(state)
                         } else {
@@ -176,10 +185,14 @@ class VpnProxyService : VpnService() {
                     }
                     is ConnectionState.Disconnecting,
                     is ConnectionState.Disconnected -> {
+                        stopPassiveProbe()
+                        autoSwitcher.clearDiagnosticFreeze()
                         stopVpnKeepAlive(state.toString())
                         scheduleIdleStop()
                     }
                     is ConnectionState.Error -> {
+                        stopPassiveProbe()
+                        autoSwitcher.clearDiagnosticFreeze()
                         stopVpnKeepAlive("Error: ${state.message}")
                         _lastError.value = state.message
                         updateNotification(state.message)
@@ -224,6 +237,20 @@ class VpnProxyService : VpnService() {
             else -> Log.d(TAG, "Unhandled action ${intent?.action}")
         }
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Android calls this when the user removes the app task from Recents.
+        // Enter the existing serialized teardown path; do not kill the process directly.
+        Log.i(
+            TAG,
+            "onTaskRemoved: task swiped from Recents; " +
+                "serviceState=${_serviceState.value}, isRunning=${_isRunning.value}"
+        )
+        logCollector.info(TAG, "Recent task removed — requesting full VPN shutdown")
+
+        forceStopService("recent task swiped from Recents")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
@@ -305,7 +332,7 @@ class VpnProxyService : VpnService() {
                         stopVpnInternal("soft restart for $state", softRestart = true)
                     },
                     startSession = { startVpnSession() },
-                    restartDelayMs = 300L
+                    restartDelayMs = 3_000L
                 )
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
@@ -366,13 +393,57 @@ class VpnProxyService : VpnService() {
             logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
             val controller = lifecycleController ?: error("VPN lifecycle controller was not initialized")
             try {
-                val configJson = SingboxConfigBuilder.buildVpn(parsed)
+                val diagnosticEnabled = com.vpnproxy.util.DebugFlags.diagnosticEnabled()
+                val diagnosticOptions = if (diagnosticEnabled) DiagnosticSettings.load(this@VpnProxyService) else DiagnosticOptions(tunStack = "system", strictRoute = true)
+                logCollector.info(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface}")
+                logCollector.info(TAG, "DIAG TUN_STACK=${diagnosticOptions.tunStack}")
+                logCollector.info(TAG, "DIAG DNS_MODE=${diagnosticOptions.dnsMode}")
+                logCollector.info(TAG, "DIAG protect_enabled=true")
+                logCollector.info(TAG, "DIAG disallow_self=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG-SETTINGS DNS_MODE=${diagnosticOptions.dnsMode} TUN_STACK=${diagnosticOptions.tunStack} STRICT_ROUTE=${diagnosticOptions.strictRoute}")
+                logCollector.info(TAG, "DIAG-SETTINGS ROUTE_FINAL=${diagnosticOptions.routeFinal} USE_DISALLOW_SELF_PACKAGE=${diagnosticOptions.useDisallowSelfPackage}")
+                logCollector.info(TAG, "DIAG-SETTINGS AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface} PASSIVE_PROBE_ENABLED=${diagnosticOptions.passiveProbeEnabled}")
+                logCollector.info(TAG, "DIAG-SETTINGS FREEZE_AUTOSWITCHER=${diagnosticOptions.freezeAutoSwitcherAfterConnected}")
+                logCollector.info(TAG, "DIAG-SETTINGS applied_at_this_connect=true")
+                logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
+                logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
+                logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
+                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)
+                runCatching {
+                    val root = org.json.JSONObject(configJson)
+                    val route = root.optJSONObject("route")
+                    val dnsServer = root.optJSONObject("dns")?.optJSONArray("servers")?.optJSONObject(0)
+                    val inbounds = root.optJSONArray("inbounds")
+                    var tunInbound: org.json.JSONObject? = null
+                    if (inbounds != null) {
+                        for (index in 0 until inbounds.length()) {
+                            val inbound = inbounds.optJSONObject(index) ?: continue
+                            if (inbound.optString("type") == "tun") {
+                                tunInbound = inbound
+                                break
+                            }
+                        }
+                    }
+                    logCollector.info(TAG, "DIAG-EFFECTIVE route.auto_detect_interface=${route?.optBoolean("auto_detect_interface", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].type=${dnsServer?.optString("type")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].detour=${dnsServer?.optString("detour")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE dns.servers[0].server=${dnsServer?.optString("server")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].stack=${tunInbound?.optString("stack")?.takeIf { it.isNotBlank() } ?: "none"}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].strict_route=${tunInbound?.optBoolean("strict_route", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].auto_route=${tunInbound?.optBoolean("auto_route", false) ?: false}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE inbounds[tun].mtu=${tunInbound?.optInt("mtu", -1) ?: -1}")
+                    logCollector.info(TAG, "DIAG-EFFECTIVE route.final=${route?.optString("final")?.takeIf { it.isNotBlank() } ?: "none"}")
+                }.onFailure { t ->
+                    logCollector.error(TAG, "DIAG-EFFECTIVE failed to parse final configJson: ${t.javaClass.simpleName}: ${t.message}")
+                }
                 Log.i(TAG, "Starting Sing-box core (config length=${configJson.length})")
                 runCatching {
                     val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
                     logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
                 }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
                 controller.startCore(configJson)
+                logCollector.info(TAG, "Native libbox logs captured through writeDebugMessage -> LogCollector; file log.output disabled")
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)
                 throw e
@@ -421,10 +492,24 @@ class VpnProxyService : VpnService() {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
-        val errorMessage = (t.message.orEmpty() + " " + when (reason) {
+        val causalMessages = generateSequence(t as Throwable?) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+        val errorMessage = (causalMessages + " " + when (reason) {
             is VpnFailureReason.CoreError -> reason.message
             else -> reason.toString()
         }).lowercase()
+        val isBindError = errorMessage.contains("address already in use") ||
+            errorMessage.contains("bind:") ||
+            errorMessage.contains("eaddrinuse")
+
+        if (isBindError) {
+            // A local listener collision is a lifecycle failure, not evidence against the remote server.
+            logCollector.error(TAG, "Bind error detected — NOT banning server, increasing restart delay")
+            connectionCoordinator.send(ConnectionEvent.CoreError(VpnFailureReason.BindError))
+            return
+        }
+
         val isConfigError = errorMessage.contains("unknown field") ||
             errorMessage.contains("decode config") ||
             errorMessage.contains("invalid config") ||
@@ -448,6 +533,36 @@ class VpnProxyService : VpnService() {
             autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
         }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
+    }
+
+    private fun startPassiveProbe() {
+        if (passiveProbeJob?.isActive == true) return
+        val serverName = autoSwitcher.currentServer.value?.config?.name ?: connectionCoordinator.currentSelectedServer()?.config?.name ?: "unknown"
+        passiveProbeJob = scope.launch {
+            var outboundSuccessLogged = false
+            logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
+            while (isActive && connectionCoordinator.state.value is ConnectionState.Connected) {
+                val probe = runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
+                probe.onSuccess { result ->
+                    if (result.success && !outboundSuccessLogged) {
+                        val config = autoSwitcher.currentServer.value?.config
+                        val endpoint = config?.let { "${it.address}:${it.port}" } ?: serverName
+                        val protectionPath = if (DiagnosticSettings.load(this@VpnProxyService).autoDetectInterface) "via protect" else "with AUTO_DETECT_INTERFACE=false"
+                        logCollector.info("LIBBOX", "Outbound established: $endpoint $protectionPath")
+                        outboundSuccessLogged = true
+                    }
+                }.onFailure { t ->
+                    logCollector.warn(TAG, "PassiveProbe runner failed: ${t.javaClass.name}: ${t.message}")
+                }
+                delay(5_000L)
+            }
+            logCollector.info(TAG, "PassiveProbe lifecycle stopped server=$serverName")
+        }
+    }
+
+    private fun stopPassiveProbe() {
+        passiveProbeJob?.cancel()
+        passiveProbeJob = null
     }
 
     private fun stopVpnKeepAlive(reason: String) {
@@ -476,7 +591,9 @@ class VpnProxyService : VpnService() {
         softRestart: Boolean = false
     ) {
         try {
+            stopPassiveProbe()
             autoSwitcher.stopMonitoring()
+            autoSwitcher.clearDiagnosticFreeze()
             trafficCollector.stop()
             lifecycleController?.stopCore()
 

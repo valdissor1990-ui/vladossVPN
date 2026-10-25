@@ -11,6 +11,8 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.core.connection.TraceId
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
@@ -55,7 +57,6 @@ class HomeViewModel @Inject constructor(
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
-        private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
     }
 
     data class UiState(
@@ -66,12 +67,10 @@ class HomeViewModel @Inject constructor(
         val isBusy: Boolean = false,
         val sessionStartedAt: Long? = null,
         val isRefreshingSubscription: Boolean = false,
-        val isScanningServers: Boolean = false,
-        val isAutomaticMode: Boolean = true
+        val isScanningServers: Boolean = false
     )
 
-    private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
-    private val _uiState = MutableStateFlow(UiState(isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true)))
+    private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
@@ -118,6 +117,8 @@ class HomeViewModel @Inject constructor(
                         armConnectingWatchdog()
                     }
                     is ConnectionState.Connected -> {
+                        val diagnosticOptions = DiagnosticSettings.load(context)
+                        autoSwitcher.setDiagnosticFreeze(DebugFlags.diagnosticEnabled() && diagnosticOptions.freezeAutoSwitcherAfterConnected)
                         cancelConnectingWatchdog()
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(
@@ -281,12 +282,6 @@ class HomeViewModel @Inject constructor(
         connect()
     }
 
-    fun setAutomaticMode(enabled: Boolean) {
-        modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
-        _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
-        logCollector.info(TAG, "Server selection mode changed: " + (if (enabled) "automatic" else "manual"))
-    }
-
     private fun connect() {
         Log.d(TAG, "1. Connect button clicked")
         try {
@@ -377,28 +372,8 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                val automaticMode = _uiState.value.isAutomaticMode
-                val chosen = if (automaticMode) {
-                    candidates.first()
-                } else {
-                    val manuallyChosen = manuallySelectedServer?.takeIf { selected ->
-                        candidates.any { sameConfig(it.config, selected.config) }
-                    }
-                    val saved = lastServerStore.load()
-                    val previouslySaved = saved?.let { last ->
-                        candidates.firstOrNull {
-                            it.config.address == last.address &&
-                                it.config.port == last.port &&
-                                (last.uuid.isBlank() || it.config.uuid == last.uuid)
-                        }
-                    }
-                    manuallyChosen ?: previouslySaved ?: run {
-                        connectionCoordinator.send(ConnectionEvent.ShowError("Ручной режим: выберите сервер в списке"))
-                        _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
-                        return@launch
-                    }
-                }
-                val best = if (automaticMode) autoSwitcher.selectScanned(chosen, candidates) else chosen
+                val chosen = candidates.first()
+                val best = autoSwitcher.selectScanned(chosen, candidates)
                 if (activeTraceId != traceId) {
                     logCollector.info(TAG, "Discarding stale server-selection attempt $traceId before publishing candidates")
                     return@launch

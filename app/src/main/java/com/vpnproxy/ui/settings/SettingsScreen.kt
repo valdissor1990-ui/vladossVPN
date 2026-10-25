@@ -34,6 +34,7 @@ fun SettingsScreen(
 
     var showIntervalDialog by remember { mutableStateOf(false) }
     var showSplitTunnelScreen by remember { mutableStateOf(false) }
+    var showOpenSourceLicenses by remember { mutableStateOf(false) }
     val intervals = listOf(1, 3, 6, 12, 24)
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -52,6 +53,11 @@ fun SettingsScreen(
 
     if (showSplitTunnelScreen) {
         SplitTunnelScreen(onBack = { showSplitTunnelScreen = false })
+        return
+    }
+
+    if (showOpenSourceLicenses) {
+        OpenSourceLicensesScreen(onBack = { showOpenSourceLicenses = false })
         return
     }
 
@@ -147,6 +153,16 @@ fun SettingsScreen(
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Text("Flavor", modifier = Modifier.weight(1f))
                 Text(if (BuildConfig.APPLICATION_ID.endsWith(".play")) "play" else "direct", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showOpenSourceLicenses = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Открытые лицензии", style = MaterialTheme.typography.bodyLarge)
+                    Text("Лицензия VPN-ядра и уведомления", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                TextButton(onClick = { showOpenSourceLicenses = true }) { Text("Открыть") }
             }
 
             Spacer(Modifier.height(32.dp))

@@ -68,6 +68,18 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      - name: Record exact source revision in license assets
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/licenses
+          cat > app/src/main/assets/licenses/SOURCE_COMMIT.txt <<EOF
+          VLADOSS VPN source commit: $GITHUB_SHA
+          Source: https://github.com/valdissor1990-ui/vladossVPN/tree/$GITHUB_SHA
+          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.21
+          Bundled cronet-go wrapper: https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
+          Bundled libcronet.a source: https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
+          EOF
+
       - name: Download full libbox 1.14.3
         run: |
           chmod +x scripts/download_libbox.sh
@@ -76,6 +88,36 @@ jobs:
           jar tf /tmp/libbox-classes.jar | grep -q "^io/nekohasekai/libbox/PlatformInterface.class$"
           jar tf /tmp/libbox-classes.jar | grep -q "^go/Seq.class$"
           echo "Verified full libbox 1.14.3 with Go bridge classes"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.8'
+
+      - name: Audit bundled libbox Go dependencies
+        run: bash scripts/audit_libbox_licenses.sh
+
+      - name: Verify native license audit output
+        run: |
+          set -euo pipefail
+          test -s app/src/main/assets/licenses/libbox-go-licenses.csv
+          test -s app/src/main/assets/licenses/cronet-native-licenses.csv
+          test -s app/src/main/assets/licenses/cronet-native-NOTICE.txt
+          test -s app/src/main/assets/licenses/libbox/cronet-naiveproxy/LICENSE
+          test -s app/src/main/assets/licenses/libbox/cronet-naiveproxy/src/LICENSE
+          test -d app/src/main/assets/licenses/libbox
+          test "$(find app/src/main/assets/licenses/libbox -type f | wc -l)" -gt 0
+
+      - name: Generate dependency license report
+        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
+
+      - name: Upload dependency license report
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-license-report
+          path: |
+            app/build/reports/dependency-license/**
+            app/build/reports/license-audit/**
+          if-no-files-found: warn
 
       - name: Decode keystore
         env:
@@ -128,6 +170,45 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew bundlePlayRelease --stacktrace
+
+      - name: Verify bundled open-source license assets
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
+          AAB=app/build/outputs/bundle/playRelease/app-play-release.aab
+          test -f "$APK"
+          test -f "$AAB"
+          unzip -l "$APK" | grep -q 'assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/SOURCE_COMMIT.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-licenses.csv'
+          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-NOTICE.txt'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/LICENSE'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
+          unzip -l "$APK" | grep -q 'assets/licenses/libbox/'
+          unzip -l "$APK" | grep -q 'assets/index.html'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/SOURCE_COMMIT.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox-go-licenses.csv'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-licenses.csv'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-NOTICE.txt'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/LICENSE'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
+          unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/'
+          unzip -l "$AAB" | grep -q 'base/assets/index.html'
+          echo "GPL-3.0 text and sing-box-lx notices are present in APK and AAB"
+
+      - name: Package license and third-party notices
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-notices
+          cp LICENSE THIRD_PARTY_NOTICES.md docs/OPEN_SOURCE_COMPLIANCE.md build/release-notices/
+          cp -R app/src/main/assets/licenses build/release-notices/assets-licenses
+          cp -R app/build/reports/dependency-license build/release-notices/gradle-report
+          cp -R app/build/reports/license-audit build/release-notices/native-report
+          (cd build/release-notices && zip -qr "$GITHUB_WORKSPACE/license-notices.zip" .)
 
       - name: Extract version info
         id: ver
@@ -224,6 +305,12 @@ jobs:
           files: |
             app/build/outputs/apk/direct/release/app-direct-*-release.apk
             app/build/outputs/bundle/playRelease/*.aab
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+            license-notices.zip
+            app/src/main/assets/licenses/GPL-3.0-or-later.txt
+            app/src/main/assets/licenses/sing-box-lx-NOTICE.txt
+            docs/OPEN_SOURCE_COMPLIANCE.md
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

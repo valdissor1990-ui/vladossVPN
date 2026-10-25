@@ -8,6 +8,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.github.jk1.dependency-license-report")
 }
 
 val keystorePropsFile = rootProject.file("keystore.properties")
@@ -39,6 +40,7 @@ android {
         targetSdk = 35
         versionCode = autoVersionCode
         versionName = autoVersionName
+        buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
 
@@ -79,7 +81,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("boolean", "LOG_DEBUG", "false")
+        buildConfigField("boolean", "LOG_DEBUG", "false")
             signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
                 signingConfigs.getByName("release")
             else signingConfigs.getByName("debug")
@@ -131,6 +133,31 @@ android {
             useLegacyPackaging = false
         }
     }
+}
+
+licenseReport {
+    configurations = arrayOf("directReleaseRuntimeClasspath", "playReleaseRuntimeClasspath")
+}
+
+val generatedLicenseAssets = layout.buildDirectory.dir("generated/licenseAssets")
+
+android.sourceSets.getByName("main").assets.srcDir(generatedLicenseAssets)
+
+val syncDependencyLicenseAssets = tasks.register<Sync>("syncDependencyLicenseAssets") {
+    dependsOn("generateLicenseReport")
+    val reportDir = layout.buildDirectory.dir("reports/dependency-license")
+    from(reportDir) {
+        include("index.html")
+    }
+    from(reportDir) {
+        include("**/META-INF/LICENSE*", "**/META-INF/NOTICE*", "**/NOTICE", "**/COPYING*")
+        into("licenses/gradle")
+    }
+    into(generatedLicenseAssets)
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncDependencyLicenseAssets)
 }
 
 dependencies {

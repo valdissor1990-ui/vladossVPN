@@ -2,11 +2,22 @@ package com.vpnproxy.ui.servers
 
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -184,6 +196,8 @@ class ServersListViewModel @Inject constructor(
 @Composable
 fun ServerListContent(
     onServerSelected: (ScoredServer) -> Unit = {},
+    onNavigateHome: () -> Unit = {},
+    onNavigateSettings: () -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
@@ -203,19 +217,25 @@ fun ServerListContent(
     }
 
     val filterOptions = remember(servers) {
-        listOf("Все") +
+        listOf("Все", "VLESS", "HY2", "TUIC") +
             servers.map { it.config.providerTag.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
                 .sorted()
-                .filterNot { it == "Все" }
+                .filterNot { it in setOf("Все", "VLESS", "HY2", "TUIC") }
     }
 
     val filtered = remember(servers, query, selectedFilter) {
         servers.filter { server ->
             val config = server.config
-            val matchesFilter = selectedFilter == "Все" ||
-                config.providerTag.equals(selectedFilter, ignoreCase = true)
+            val transport = config.transport.lowercase()
+            val matchesFilter = when (selectedFilter) {
+                "Все" -> true
+                "HY2" -> transport in setOf("hysteria2", "hy2")
+                "TUIC" -> transport == "tuic"
+                "VLESS" -> transport !in setOf("hysteria2", "hy2", "tuic")
+                else -> config.providerTag.equals(selectedFilter, ignoreCase = true)
+            }
             val matchesQuery = query.isBlank() ||
                 config.name.contains(query, ignoreCase = true) ||
                 config.address.contains(query, ignoreCase = true) ||
@@ -230,43 +250,91 @@ fun ServerListContent(
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 24.dp)
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF10183E), Color(0xFF20245B),
+                        Color(0xFF0E647B), Color(0xFF111638)
+                    )
+                )
+            )
     ) {
-        Text(
-            text = "Профилей: ${servers.size}; TCP-порт ответил у ${scanResults.count { it.successRate > 0.5f }} (${scanResults.count { it.successRate > 0.5f && viewModel.isRussianServer(it.config) }} RU). Работа VPN не подтверждена.",
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-        Text(
-            text = "Серверы (${servers.size})",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Серверы (${servers.size})",
+                    fontSize = 30.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold,
+                    color = Color(0xFFD7C4FF)
+                )
+                Text(
+                    if (scanningServers) "Проверка доступности…" else "Выберите сервер для подключения",
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5E6FF).copy(alpha = 0.8f)
+                )
+            }
+            if (scanningServers || deepProbeRunning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.height(24.dp),
+                    color = Color(0xFF9DEBFF),
+                    strokeWidth = 2.dp
+                )
+            }
+        }
 
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            placeholder = { Text("Поиск по имени/хосту/провайдеру") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            singleLine = true
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            placeholder = { Text("Поиск сервера…", color = Color(0xFFDDE7FF).copy(alpha = 0.7f)) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Поиск", tint = Color(0xFFE4EEFF)) },
+            singleLine = true,
+            shape = RoundedCornerShape(24.dp),
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedBorderColor = Color(0xFFB9CFFF).copy(alpha = 0.85f),
+                unfocusedBorderColor = Color(0xFFB9CFFF).copy(alpha = 0.35f),
+                cursorColor = Color.White,
+                focusedContainerColor = Color(0xFFB7D9FF).copy(alpha = 0.13f),
+                unfocusedContainerColor = Color(0xFFB7D9FF).copy(alpha = 0.10f)
+            )
         )
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             filterOptions.forEach { filter ->
+                val selected = selectedFilter == filter
                 FilterChip(
-                    selected = selectedFilter == filter,
+                    selected = selected,
                     onClick = { selectedFilter = filter },
-                    label = { Text(filter) }
+                    label = { Text(filter.uppercase()) },
+                    shape = RoundedCornerShape(22.dp),
+                    colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFF9DABF5).copy(alpha = 0.85f),
+                        selectedLabelColor = Color(0xFF18204D),
+                        containerColor = Color(0xFF9CB9EE).copy(alpha = 0.13f),
+                        labelColor = Color(0xFFE5EDFF)
+                    ),
+                    border = androidx.compose.material3.FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selected,
+                        borderColor = Color.White.copy(alpha = 0.18f),
+                        selectedBorderColor = Color(0xFFD7C7FF)
+                    )
                 )
             }
         }
@@ -274,45 +342,36 @@ fun ServerListContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(
-                onClick = { viewModel.rescanServers() },
-                enabled = !scanningServers && servers.isNotEmpty()
-            ) {
-                Text("Пересканировать")
+            TextButton(onClick = { viewModel.rescanServers() }, enabled = !scanningServers) {
+                Text("↻ Сканировать", color = Color(0xFFD7F7FF))
             }
-            Button(
-                onClick = { viewModel.runDeepProbe() },
-                enabled = !deepProbeRunning && servers.isNotEmpty()
-            ) {
-                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ")
-            }
-            if (scanningServers || deepProbeRunning) {
-                CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
+            TextButton(onClick = { viewModel.runDeepProbe() }, enabled = !deepProbeRunning) {
+                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ", color = Color(0xFFD7F7FF))
             }
         }
+
         deepProbeError?.let { error ->
             Text(
                 text = error,
-                color = MaterialTheme.colorScheme.error,
+                color = Color(0xFFFFB6C1),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
         if (deepProbeResults.isNotEmpty()) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Text("Результаты глубокого анализа", style = MaterialTheme.typography.titleSmall)
+                Text("Результаты глубокого анализа", color = Color.White, style = MaterialTheme.typography.titleSmall)
                 deepProbeResults.forEach { result ->
                     Text(
                         text = "${result.config.name}: score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
-                            "(lat ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, " +
-                            "speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
-                            "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, " +
-                            "loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
+                            "(lat ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
+                            "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
                         fontSize = 11.sp,
+                        color = Color(0xFFD5E6FF),
                         modifier = Modifier.padding(vertical = 2.dp)
                     )
                 }
@@ -321,51 +380,56 @@ fun ServerListContent(
 
         if (filtered.isEmpty()) {
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(160.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (servers.isEmpty()) {
-                        "Список пуст. Обновите подписки."
-                    } else {
-                        "Ничего не найдено"
-                    },
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    text = if (servers.isEmpty()) "Список пуст. Обновите подписки." else "Ничего не найдено",
+                    color = Color(0xFFDDE7FF).copy(alpha = 0.8f)
                 )
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.heightIn(max = 520.dp)
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
             ) {
                 items(
                     items = uniqueItems,
-                    key = {
-                        viewModel.configKey(it.config)
-                    }
+                    key = { viewModel.configKey(it.config) }
                 ) { scoredServer ->
-                    val scoreLabel = breakdown
-                        ?.takeIf { it.isValid }
-                        ?.compositeScore
-                        ?.roundToInt()
-                        ?.toString() ?: "—"
+                    val scoreLabel = breakdown?.takeIf { it.isValid }?.compositeScore?.roundToInt()?.toString() ?: "—"
                     val scoreValue = scoreLabel.toDoubleOrNull()
-                    val scoreColor = scoreValue?.let { compositeScoreColor(it) }
-                        ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-
-                    ServerGridCard(
+                    val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
+                    GlassServerCard(
                         server = scoredServer,
+                        scoreLabel = scoreLabel,
+                        scoreColor = scoreColor,
+                        isOnline = scoredServer.successRate > 0.5f,
                         onClick = { onServerSelected(scoredServer) },
-                        scoreOverride = scoreLabel,
-                        scoreColorOverride = scoreColor,
                         onDetailsClick = { detailsServer = scoredServer }
                     )
                 }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF101A49).copy(alpha = 0.86f))
+                .border(1.dp, Color.White.copy(alpha = 0.18f))
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = { viewModel.rescanServers() }) {
+                Text("▤  Серверы", color = Color.White)
+            }
+            TextButton(onClick = onNavigateHome) {
+                Text("⏻  Подключение", color = Color(0xFFD5E6FF))
+            }
+            TextButton(onClick = onNavigateSettings) {
+                Text("⚙  Настройки", color = Color(0xFFD5E6FF))
             }
         }
     }
@@ -455,6 +519,106 @@ fun ServerListContent(
     }
 }
 
+private fun extractFlagForGlassCard(name: String): String {
+    val match = Regex("[\\uD83C][\\uDDE6-\\uDDFF]{2}").find(name)
+    return match?.value.orEmpty()
+}
+
+@Composable
+private fun GlassServerCard(
+    server: ScoredServer,
+    scoreLabel: String,
+    scoreColor: Color,
+    isOnline: Boolean,
+    onClick: () -> Unit,
+    onDetailsClick: () -> Unit
+) {
+    val config = server.config
+    val flag = extractFlagForGlassCard(config.name)
+    val title = config.name.replace(flag, "").trim().ifBlank { config.name }
+    val transport = when (config.transport.lowercase()) {
+        "hysteria2", "hy2" -> "HY2"
+        "tuic" -> "TUIC"
+        else -> config.transport.uppercase().ifBlank { "VLESS" }
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFFB7D7FF).copy(alpha = 0.24f), Color(0xFF8EDCFF).copy(alpha = 0.13f))
+                )
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(22.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (flag.isNotBlank()) {
+            Text(flag, fontSize = 30.sp)
+            Spacer(Modifier.width(12.dp))
+        } else {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFB9D5FF).copy(alpha = 0.25f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("VPN", fontSize = 9.sp, color = Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color.White,
+                fontSize = 17.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "${config.address}:${config.port}",
+                color = Color(0xFFE2EEFF),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                fontFamily = FontFamily.Monospace
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(if (isOnline) Color(0xFF39E98A) else Color(0xFFFF7777)))
+                Spacer(Modifier.width(5.dp))
+                Text(if (isOnline) "Доступен" else "Не проверен / офлайн", fontSize = 10.sp, color = Color(0xFFDDE7FF).copy(alpha = 0.85f))
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            Box(
+                Modifier.clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.13f))
+                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Text(transport, color = Color.White, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(7.dp))
+            Text(
+                if (scoreLabel == "—") "— ms" else "${scoreLabel} ms",
+                color = scoreColor,
+                fontSize = 15.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+            TextButton(
+                onClick = onDetailsClick,
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+            ) {
+                Text("Детали", fontSize = 11.sp, color = Color(0xFFE6F3FF))
+            }
+        }
+    }
+}
+
 private fun compositeScoreColor(score: Double): Color = when {
     score < 100.0 -> Color(0xFF43A047)
     score <= 300.0 -> Color(0xFFF9A825)
@@ -471,6 +635,8 @@ private fun rttColor(rtt: Long): Color = when {
 @Composable
 fun ServersListScreen(
     onBack: () -> Unit,
+    onNavigateHome: () -> Unit = onBack,
+    onNavigateSettings: () -> Unit = {},
     viewModel: ServersListViewModel = hiltViewModel()
 ) {
     Scaffold(
@@ -493,7 +659,7 @@ fun ServersListScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            ServerListContent(viewModel = viewModel)
+            ServerListContent(viewModel = viewModel, onNavigateHome = onNavigateHome, onNavigateSettings = onNavigateSettings)
         }
     }
 }

@@ -1,0 +1,18 @@
+CRONET / CHROMIUM NATIVE-LIBRARY NOTICE
+
+The pinned sing-box-lx Android build enables the with_naive_outbound build tag.
+Its cronet-go dependency supplies prebuilt libcronet.a archives for Android
+ABIs. These archives are separate from the GPL-3.0-or-later Go wrapper license.
+
+Pinned sources:
+- cronet-go wrapper: https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
+- Android libcronet.a package: https://github.com/SagerNet/cronet-go/tree/c10c03c318db6d47bec8705c8290bad34bc32b64
+- NaiveProxy / Chromium source used for those archives:
+  https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
+
+The NaiveProxy/Chromium source carries a BSD-style three-clause license, and
+the Chromium-derived static library contains third-party components with
+their own licenses and notices. The exact source revision's LICENSE, src/LICENSE,
+and third-party LICENSE/NOTICE/COPYING/CREDITS/AUTHORS/PATENTS/README.chromium
+files are bundled under assets/licenses/libbox/cronet-naiveproxy. Review those
+files together; the BSD-3-Clause text alone does not replace third-party notices.

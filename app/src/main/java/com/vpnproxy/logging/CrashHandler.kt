@@ -61,7 +61,8 @@ object CrashHandler {
             append("\n\n")
         }
 
-        val full = header + stack
+        // Crash messages and stack traces can contain subscription URLs or credentials.
+        val full = SensitiveMasker.mask(header + stack)
 
         try {
             val dir = File(context.filesDir, DIR).apply { mkdirs() }
@@ -72,7 +73,7 @@ object CrashHandler {
         }
 
         try {
-            LogCollectorHolder.get()?.fatal(TAG, header + stack.take(2000))
+            LogCollectorHolder.get()?.fatal(TAG, full.take(2000))
         } catch (_: Throwable) {
         }
 

@@ -24,7 +24,7 @@ chmod +x scripts/download_libbox.sh
 ./gradlew assembleDirectRelease
 ```
 
-Полный `libbox.aar` скачивается скриптом из официального релиза 1.14.3; Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
+Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.3-lx.21`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
 
 ## Архитектура
 
@@ -40,6 +40,8 @@ chmod +x scripts/download_libbox.sh
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Протоколы](docs/PROTOCOLS.md)
 - [Диагностика](docs/TROUBLESHOOTING.md)
+- [Сторонние лицензии и уведомления](THIRD_PARTY_NOTICES.md)
+- [Аудит open-source лицензий и критерии завершения](docs/OPEN_SOURCE_COMPLIANCE.md)
 
 ## Disclaimer
 
@@ -47,4 +49,6 @@ chmod +x scripts/download_libbox.sh
 
 ## Лицензия
 
-GPL-3.0.
+Проект заявлен под GPL-3.0-or-later; полный текст находится в [LICENSE](LICENSE). Уведомления для включённого sing-box-lx/libbox находятся в [app/src/main/assets/licenses](app/src/main/assets/licenses).
+
+Для формирования отчёта по Gradle-зависимостям запустите `./gradlew generateLicenseReport`. Отчёт автоматизированного сканирования не заменяет проверку лицензий, встроенных в локальный `libbox.aar`.

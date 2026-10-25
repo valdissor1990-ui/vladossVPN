@@ -10,6 +10,8 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.core.scanner.ServerScanner
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionState
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -31,6 +33,7 @@ class SubscriptionUpdateWorker(
         fun subscriptionRepository(): SubscriptionRepository
         fun logCollector(): LogCollector
         fun serverScanner(): ServerScanner
+        fun connectionCoordinator(): ConnectionCoordinator
     }
 
     companion object {
@@ -66,6 +69,12 @@ class SubscriptionUpdateWorker(
                 applicationContext,
                 Deps::class.java
             )
+            val coordinator = deps.connectionCoordinator()
+            val state = coordinator.state.value
+            if (state is ConnectionState.Connecting || state is ConnectionState.Verifying || state is ConnectionState.Connected || state is ConnectionState.Reconnecting) {
+                deps.logCollector().info("SubUpdateWorker", "Auto-refresh skipped while VPN active: state=$state")
+                return Result.success()
+            }
             val repository = deps.subscriptionRepository()
             val count = repository.refreshAll()
             val providerConfigCount = repository.getAllConfigs().size
