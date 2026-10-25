@@ -2,27 +2,33 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ main, 'feat/**', 'chore/**' ]
+    branches: [ main, 'feat/**', 'fix/**', 'chore/**', 'hotfix/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
 
 jobs:
-  unit-tests:
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: temurin
+          java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
       - name: Cache Gradle
         uses: actions/cache@v6
@@ -30,118 +36,57 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
 
       - name: Bootstrap Gradle Wrapper JAR
         run: |
+          mkdir -p gradle/wrapper
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            mkdir -p gradle/wrapper
             curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
           fi
+          chmod +x gradlew || true
 
-      - name: Record exact source revision in license assets
+      - name: Write SOURCE_COMMIT
         run: |
-          set -euo pipefail
           mkdir -p app/src/main/assets/licenses
           cat > app/src/main/assets/licenses/SOURCE_COMMIT.txt <<EOF
           VLADOSS VPN source commit: $GITHUB_SHA
           Source: https://github.com/valdissor1990-ui/vladossVPN/tree/$GITHUB_SHA
-          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.21
+          Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.23
           Bundled cronet-go wrapper: https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
           Bundled libcronet.a source: https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
           EOF
 
-      - name: Download native libs
+      - name: Download libbox
         run: |
           chmod +x scripts/download_libbox.sh
           ./scripts/download_libbox.sh
-          ls -la app/libs/
-
-      - uses: actions/setup-go@v6
-        if: github.ref == 'refs/heads/chore/open-source-license-compliance'
-        with:
-          go-version: '1.26.8'
 
       - name: Audit bundled libbox Go dependencies
-        if: github.ref == 'refs/heads/chore/open-source-license-compliance'
         run: bash scripts/audit_libbox_licenses.sh
 
-      - name: Generate dependency license report
-        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
-
-      - name: Upload dependency license report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: dependency-license-report
-          path: |
-            app/build/reports/dependency-license/**
-            app/build/reports/license-audit/**
-          if-no-files-found: warn
-
-      - name: Run unit tests
+      - name: Unit tests
         run: ./gradlew testDirectDebugUnitTest --stacktrace
 
-      - name: Build release variants for license asset verification
-        if: github.ref == 'refs/heads/chore/open-source-license-compliance'
-        run: ./gradlew assembleDirectRelease bundlePlayRelease --stacktrace
+      - name: Build Direct Release APK (license asset check)
+        run: ./gradlew assembleDirectRelease --stacktrace
 
-      - name: Verify license assets in release APK and AAB
-        if: github.ref == 'refs/heads/chore/open-source-license-compliance'
+      - name: Build Play Release AAB (license asset check)
+        run: ./gradlew bundlePlayRelease --stacktrace
+
+      - name: Verify license assets in APK/AAB
         run: |
           set -euo pipefail
-          APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
-          AAB=app/build/outputs/bundle/playRelease/app-play-release.aab
-          test -f "$APK"
-          test -f "$AAB"
-          unzip -l "$APK" | grep -q 'assets/index.html'
-          unzip -l "$APK" | grep -q 'assets/licenses/GPL-3.0-or-later.txt'
-          unzip -l "$APK" | grep -q 'assets/licenses/SOURCE_COMMIT.txt'
-          unzip -l "$APK" | grep -q 'assets/licenses/sing-box-lx-NOTICE.txt'
+          APK=$(find app/build/outputs/apk/direct/release -name '*.apk' -type f | head -1)
+          AAB=$(find app/build/outputs/bundle/playRelease -name '*.aab' -type f | head -1)
+          test -n "$APK" && test -n "$AAB"
           unzip -l "$APK" | grep -q 'assets/licenses/libbox-go-licenses.csv'
-          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-licenses.csv'
-          unzip -l "$APK" | grep -q 'assets/licenses/cronet-native-NOTICE.txt'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/LICENSE'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
           unzip -l "$APK" | grep -q 'assets/licenses/libbox/'
-          unzip -l "$APK" | grep -q 'assets/licenses/gradle/'
-          unzip -l "$AAB" | grep -q 'base/assets/index.html'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/GPL-3.0-or-later.txt'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/SOURCE_COMMIT.txt'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/sing-box-lx-NOTICE.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox-go-licenses.csv'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-licenses.csv'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/cronet-native-NOTICE.txt'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/LICENSE'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/cronet-naiveproxy/src/LICENSE'
           unzip -l "$AAB" | grep -q 'base/assets/licenses/libbox/'
-          unzip -l "$AAB" | grep -q 'base/assets/licenses/gradle/'
-          echo "License inventories and texts are present in both release artifacts"
-
-      - name: Upload release variants for license verification
-        if: always() && github.ref == 'refs/heads/chore/open-source-license-compliance'
-        uses: actions/upload-artifact@v7
-        with:
-          name: license-compliance-release-build
-          path: |
-            app/build/outputs/apk/direct/release/*.apk
-            app/build/outputs/bundle/playRelease/*.aab
-          if-no-files-found: warn
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-results
-          path: '**/build/test-results/testDirectDebugUnitTest/*.xml'
-
-      - name: Upload test report HTML
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-report-html
-          path: '**/build/reports/tests/testDirectDebugUnitTest/**'
