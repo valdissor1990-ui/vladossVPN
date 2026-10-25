@@ -7,31 +7,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
-    id("org.jetbrains.kotlin.plugin.serialization")
-    id("com.github.jk1.dependency-license-report")
+    id("com.github.jk1.dependency-license-report") version "2.9"
 }
 
-val keystorePropsFile = rootProject.file("keystore.properties")
-val keystoreProps = Properties().apply {
-    if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile))
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
-
-fun secret(key: String, fallback: String? = null): String? =
-    System.getenv(key) ?: keystoreProps.getProperty(key) ?: fallback
-
-val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
-val versionProps = Properties().apply {
-    val f = rootProject.file("version.properties")
-    if (f.exists()) load(FileInputStream(f))
-}
-val baseMajor = versionProps.getProperty("major", "1").toInt()
-val baseMinor = versionProps.getProperty("minor", "0").toInt()
-val requestedVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull()
-val autoVersionCode = requestedVersionCode ?: if (runNumber > 0) 10000 + runNumber
-                      else (System.currentTimeMillis() / 60_000L).toInt()
-val requestedVersionName = System.getenv("APP_VERSION_NAME")?.trim()
-    ?.takeIf { it.matches(Regex("\\d+\\.\\d+\\.\\d+")) }
-val autoVersionName = requestedVersionName ?: "$baseMajor.$baseMinor.$runNumber"
 
 android {
     namespace = "com.vpnproxy"
@@ -39,59 +22,56 @@ android {
 
     defaultConfig {
         applicationId = "com.vpnproxy"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 35
-        versionCode = autoVersionCode
-        versionName = autoVersionName
-        buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
+        versionCode = 765
+        versionName = "1.0.765"
 
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
-
-        buildConfigField(
-            "String", "GITHUB_OWNER",
-            "\"${System.getenv("GITHUB_REPOSITORY_OWNER") ?: "valdissor1990-ui"}\""
-        )
-        buildConfigField(
-            "String", "GITHUB_REPO",
-            "\"${System.getenv("GITHUB_REPOSITORY")?.substringAfter("/") ?: "vladossVPN"}\""
-        )
-    }
-
-    flavorDimensions += "distribution"
-    productFlavors {
-        create("direct") { dimension = "distribution"; applicationIdSuffix = ".direct" }
-        create("play")   { dimension = "distribution"; applicationIdSuffix = ".play" }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
     }
 
     signingConfigs {
         create("release") {
-            val ksPath = secret("KEYSTORE_PATH")
-            val ksFile = ksPath?.let { file(it) }
-            if (ksFile != null && ksFile.exists()) {
-                storeFile = ksFile
-                storePassword = secret("KEYSTORE_PASSWORD")
-                keyAlias = secret("KEY_ALIAS")
-                keyPassword = secret("KEY_PASSWORD")
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
             }
         }
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-        buildConfigField("boolean", "LOG_DEBUG", "false")
-            signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
-                signingConfigs.getByName("release")
-            else signingConfigs.getByName("debug")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
-        debug {
+        getByName("debug") {
             isMinifyEnabled = false
-            buildConfigField("boolean", "LOG_DEBUG", "true")
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("direct") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("play") {
+            dimension = "distribution"
+            applicationIdSuffix = ".play"
         }
     }
 
@@ -99,72 +79,22 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true; buildConfig = true }
-
-    // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
-            isUniversalApk = true   // плюс универсальный APK для GitHub Releases
-        }
+    kotlinOptions {
+        jvmTarget = "17"
     }
-
-    // ★ Упаковка: pickFirsts решает конфликты нативных .so
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging {
         resources {
-            excludes += setOf(
-                "META-INF/*.kotlin_module",
-                "META-INF/DEPENDENCIES",
-                "META-INF/LICENSE",
-                "META-INF/LICENSE.txt",
-                "META-INF/LICENSE.md",
-                "META-INF/NOTICE",
-                "META-INF/NOTICE.txt",
-                "META-INF/NOTICE.md",
-                "META-INF/AL2.0",
-                "META-INF/LGPL2.1",
-                "META-INF/INDEX.LIST",
-                "META-INF/*.SF",
-                "META-INF/*.RSA",
-                "META-INF/*.DSA"
-            )
-        }
-        jniLibs {
-            useLegacyPackaging = false
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
-}
-
-licenseReport {
-    configurations = arrayOf("directReleaseRuntimeClasspath", "playReleaseRuntimeClasspath")
-}
-
-val generatedLicenseAssets = layout.buildDirectory.dir("generated/licenseAssets")
-
-android.sourceSets.getByName("main").assets.srcDir(generatedLicenseAssets)
-
-val syncDependencyLicenseAssets = tasks.register<Sync>("syncDependencyLicenseAssets") {
-    dependsOn("generateLicenseReport")
-    val reportDir = layout.buildDirectory.dir("reports/dependency-license")
-    from(reportDir) {
-        include("index.html")
-    }
-    from(reportDir) {
-        include("**/META-INF/LICENSE*", "**/META-INF/NOTICE*", "**/NOTICE", "**/COPYING*")
-        into("licenses/gradle")
-    }
-    into(generatedLicenseAssets)
-}
-
-tasks.named("preBuild") {
-    dependsOn(syncDependencyLicenseAssets)
 }
 
 dependencies {
-    // Full sing-box-lx 1.14.3-lx.21 AAR with XHTTP and Go bridge classes.
+    // Full sing-box-lx 1.14.3-lx.23 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
@@ -173,29 +103,32 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.navigation:navigation-compose:2.8.5")
-    implementation("androidx.activity:activity-compose:1.10.0")
+
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+
     implementation("com.google.dagger:hilt-android:2.53.1")
     ksp("com.google.dagger:hilt-compiler:2.53.1")
-    implementation("androidx.hilt:hilt-work:1.2.0")
-    ksp("androidx.hilt:hilt-compiler:1.2.0")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
-    implementation("androidx.datastore:datastore-preferences:1.1.2")
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("com.jakewharton.timber:timber:5.0.1")
+
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.yaml:snakeyaml:2.3")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")
+
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     testImplementation("junit:junit:4.13.2")
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("io.mockk:mockk:1.13.13")
+    testImplementation("com.google.truth:truth:1.4.4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

@@ -1,7 +1,7 @@
 Third-party notice — sing-box-lx / libbox
 
 VLADOSS VPN currently packages the Android library `libbox.aar` from
-`Leadaxe/sing-box-lx`, release `v1.14.3-lx.21`. The project identifies
+`Leadaxe/sing-box-lx`, release `v1.14.3-lx.23`. The project identifies
 sing-box-lx as a fork based on SagerNet/sing-box and states that it inherits
 the GNU General Public License version 3.0 (GPL-3.0).
 
@@ -17,9 +17,9 @@ Additional upstream notice that must be preserved for the covered upstream code:
 application without prior consent."
 
 The exact bundled binary is pinned in `scripts/download_libbox.sh`:
-- Release: `1.14.3-lx.21`
-- Download: https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.3-lx.21/libbox-1.14.3-lx.21.aar
-- SHA-256: `5a6c782b834d53aa8031e32a953eb9517e78b742bbc10d3474154fc05aa00e0e`
+- Release: `1.14.3-lx.23`
+- Download: https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.3-lx.23/libbox-1.14.3-lx.23.aar
+- SHA-256: `d7be8b1297f68ad8bad47e5eb766f59501100b1e9377de403d9c53cd364ecef1`
 
 This notice is not a complete third-party inventory. The Android Gradle
 runtime dependency graph, transitive dependencies, and native libraries inside
