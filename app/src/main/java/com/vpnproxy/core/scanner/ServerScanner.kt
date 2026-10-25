@@ -18,6 +18,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -56,9 +58,11 @@ class ServerScanner @Inject constructor(
 
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
     @Volatile private var backgroundJob: Job? = null
+    @Volatile private var activeScanJob: Job? = null
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
+            activeScanJob = currentCoroutineContext().job
             // Keep identical endpoints attributable to their provider. A scan cached for
             // provider A must never be reused as the scan result for provider B.
             val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
@@ -111,8 +115,18 @@ class ServerScanner @Inject constructor(
                 results
             } finally {
                 _isScanning.value = false
+                activeScanJob = null
             }
         }
+
+    /** Cancels the current scan without touching the VPN connection. */
+    fun cancelScan() {
+        val job = activeScanJob
+        if (job != null && job.isActive) {
+            logCollector.info(TAG, "Server scan cancelled by user")
+            job.cancel(CancellationException("Server scan cancelled by user"))
+        }
+    }
 
     suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
         // Refreshing subscription data invalidates reachability results, not failure history.
