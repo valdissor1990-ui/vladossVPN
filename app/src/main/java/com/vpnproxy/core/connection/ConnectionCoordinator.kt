@@ -210,7 +210,6 @@ class ConnectionCoordinator @Inject constructor(
                     logI("Manual connect requested — fatal lock cleared")
                 }
                 activeTraceId = event.traceId
-                TraceId.newId()
                 retryCount = 0
                 logI("ConnectRequested — enter Connecting (selection may still run)")
                 when (current) {
@@ -478,25 +477,30 @@ class ConnectionCoordinator @Inject constructor(
 
             is ConnectionEvent.ServiceStopped -> {
                 when (current) {
-                    is ConnectionState.Disconnecting,
-                    is ConnectionState.Disconnected ->
+                    is ConnectionState.Disconnecting -> {
+                        retryCount = 0
                         setState(ConnectionState.Disconnected, reason = "ServiceStopped")
-                    is ConnectionState.Error -> logD("ServiceStopped while Error — keep Error banner")
-                    is ConnectionState.Reconnecting,
+                    }
+                    is ConnectionState.Disconnected -> logD("ServiceStopped while already Disconnected")
+                    is ConnectionState.Error -> logD("ServiceStopped while Error — keep Error")
                     is ConnectionState.Connecting,
-                    is ConnectionState.Verifying -> logD("ServiceStopped during $current — awaiting restart")
-                    is ConnectionState.Connected ->
-                        handleFailure(VpnFailureReason.CoreError("Unexpected service stop"), current)
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying,
+                    is ConnectionState.Connected -> {
+                        logW("Unexpected ServiceStopped in $current")
+                        if (!isFatalErrorLocked) {
+                            setState(ConnectionState.Disconnected, reason = "ServiceStopped:unexpected")
+                        }
+                    }
                 }
             }
         }
     }
 
     private fun isRussianServer(server: ScoringEngine.ScoredServer): Boolean {
-        val config = server.config
-        val text = "${config.name} ${config.address} ${config.sni.orEmpty()}".uppercase()
-        return text.contains("🇷🇺") || Regex("(^|[^A-Z0-9])RU([^A-Z0-9]|$)").containsMatchIn(text) ||
-            config.name.endsWith(".ru", ignoreCase = true) || config.sni.orEmpty().endsWith(".ru", ignoreCase = true)
+        val labels = "${server.config.name} ${server.config.providerTag}"
+        return labels.contains("🇷🇺") ||
+            Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE).containsMatchIn(labels)
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
