@@ -1,8 +1,11 @@
 package com.vpnproxy.smartconnect
 
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.vpnproxy.smartconnect.HealthChecker.LatencyResult
 import com.vpnproxy.smartconnect.HealthChecker.SpeedResult
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -12,7 +15,9 @@ import javax.inject.Singleton
  * probe success rate. Profile identity uses the complete connection key, not just endpoint.
  */
 @Singleton
-class ScoringEngine @Inject constructor() {
+class ScoringEngine @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
 
     data class ScoredServer(
         val config: ParsedConfig,
@@ -28,21 +33,42 @@ class ScoringEngine @Inject constructor() {
         fun rate(): Float = if (attempts == 0L) 0f else successes.toFloat() / attempts.toFloat()
     }
 
+    private val historyPreferences by lazy {
+        context.getSharedPreferences("server_scoring_history_v1", Context.MODE_PRIVATE)
+    }
     private val history = ConcurrentHashMap<String, ProbeHistory>()
 
+    private fun historyKey(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun loadHistory(config: ParsedConfig): ProbeHistory {
+        val key = historyKey(config)
+        val prefs = historyPreferences
+        return ProbeHistory(
+            successes = prefs.getLong("${key}_successes", 0L),
+            attempts = prefs.getLong("${key}_attempts", 0L)
+        )
+    }
+
     private fun recordProbe(config: ParsedConfig, success: Boolean) {
-        history.compute(config.connectionKey()) { _, previous ->
-            val next = previous ?: ProbeHistory()
-            synchronized(next) {
-                next.attempts++
-                if (success) next.successes++
-            }
-            next
+        val key = config.connectionKey()
+        val next = history.computeIfAbsent(key) { loadHistory(config) }
+        val snapshot = synchronized(next) {
+            next.attempts++
+            if (success) next.successes++
+            next.successes to next.attempts
         }
+        val storageKey = historyKey(config)
+        historyPreferences.edit()
+            .putLong("${storageKey}_successes", snapshot.first)
+            .putLong("${storageKey}_attempts", snapshot.second)
+            .apply()
     }
 
     private fun successRate(config: ParsedConfig): Float {
-        val item = history[config.connectionKey()] ?: return 0f
+        val item = history.computeIfAbsent(config.connectionKey()) { loadHistory(config) }
         return synchronized(item) { item.rate() }
     }
 
