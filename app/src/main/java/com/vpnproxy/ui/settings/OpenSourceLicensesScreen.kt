@@ -237,6 +237,16 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
             )
+
+            Text("Авторские права и распространение", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "GPL-3.0-or-later разрешает копирование, изменение и распространение охватываемой лицензией программы при соблюдении её условий. " +
+                    "Поэтому общий запрет на копирование или распространение самого GPL-проекта нельзя вводить в противоречии с этой лицензией. " +
+                    "GPL сама по себе не предоставляет права на использование названия VLADOSSVPN, логотипа или фирменного оформления для создания впечатления официального происхождения или одобрения. " +
+                    "Подробности и ограничения описаны в репозитории: docs/COPYRIGHT_AND_DISTRIBUTION.md.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
             Text("Исходный код и версия", style = MaterialTheme.typography.titleMedium)
             Text(sourceRevisionText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
 
