@@ -420,11 +420,11 @@ class ConnectionCoordinator @Inject constructor(
                     if (failedConfig != null) {
                         val before = fallbackCandidates.size
                         fallbackCandidates = fallbackCandidates.filterNot { candidate ->
-                            val config = candidate.config
-                            config.address.equals(failedConfig.address, ignoreCase = true) &&
-                                config.port == failedConfig.port &&
-                                config.transport.equals(failedConfig.transport, ignoreCase = true) &&
-                                config.security.equals(failedConfig.security, ignoreCase = true)
+                            // Profiles on the same IP:port may still differ in UUID, SNI, host,
+                            // transport path, Reality keys, flow, or credentials. Skip only the
+                            // exact same connection profile so a failed variant cannot hide a
+                            // working profile published on the same endpoint.
+                            candidate.config.connectionKey() == failedConfig.connectionKey()
                         }
                         val skipped = before - fallbackCandidates.size
                         logW("Skipped $skipped equivalent endpoint variant(s) for ${failedConfig.address}:${failedConfig.port} after traffic probe failure")
