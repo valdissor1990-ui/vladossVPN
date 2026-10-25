@@ -273,6 +273,13 @@ class HomeViewModel @Inject constructor(
         vpnPermissionRequester = requester
     }
 
+    fun cancelServerScan() {
+        if (_uiState.value.isScanningServers) {
+            serverScanner.cancelScan()
+            logCollector.info(TAG, "Server scan cancellation requested from home button")
+        }
+    }
+
     fun toggleConnection() {
         when (_uiState.value.connectionState) {
             ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> disconnect()
