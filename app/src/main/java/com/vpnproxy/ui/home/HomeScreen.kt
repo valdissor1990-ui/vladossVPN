@@ -80,7 +80,7 @@ fun HomeScreen(
                     }
                     if (showDebug) {
                         IconButton(onClick = onNavigateToDebug) {
-                            Icon(Icons.Default.BugReport, "Debug")
+                            Icon(Icons.Default.BugReport, "Журнал логов")
                         }
                     }
                     IconButton(onClick = onNavigateToSettings) {
@@ -187,7 +187,37 @@ fun HomeScreen(
                     }
                 }
 
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(18.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (uiState.isAutomaticMode) "Автоматический режим" else "Ручной выбор сервера",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = OnDark
+                            )
+                            Text(
+                                text = if (uiState.isAutomaticMode) "Приложение выберет сервер само" else "Выберите сервер в списке ниже",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnDarkSecondary
+                            )
+                        }
+                        Switch(
+                            checked = uiState.isAutomaticMode,
+                            onCheckedChange = viewModel::setAutomaticMode,
+                            enabled = !uiState.isBusy
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
 
                 ConnectionStatsCard(
                     state = uiState.connectionState,
