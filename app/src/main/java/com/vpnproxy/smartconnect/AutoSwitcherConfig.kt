@@ -5,7 +5,9 @@ package com.vpnproxy.smartconnect
  * this object centralizes configuration without changing server-selection heuristics.
  */
 object AutoSwitcherConfig {
+    /** Normal monitoring cadence; reduced-frequency checks are used in Android Battery Saver. */
     const val healthCheckIntervalMs = 150_000L
+    const val batterySaverHealthCheckIntervalMs = 300_000L
     const val suspectRttMs = 500L
     const val suspectJitterMs = 150L
     const val directFastRttMs = 100L
