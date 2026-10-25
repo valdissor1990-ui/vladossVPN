@@ -124,9 +124,21 @@ jobs:
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "KEYSTORE_BASE64 secret is empty — release build may be unsigned"
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+              if [ -z "${!name:-}" ]; then
+                echo "::error::$name secret is required for a production release"
+                exit 1
+              fi
+            done
+          fi
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "Release signing secrets unavailable (non-release build); Gradle may use debug signing."
             exit 0
           fi
           CLEAN=$(printf '%s' "$KEYSTORE_BASE64" | tr -d '\n\r \t')
