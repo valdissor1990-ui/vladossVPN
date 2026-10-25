@@ -447,19 +447,17 @@ class ConnectionCoordinator @Inject constructor(
                     val failedConfig = activeScoredServer?.config
                     logW("Server does not pass traffic: ${event.serverName} (consecutiveFailures=$trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES; remainingCandidates=${fallbackCandidates.size})")
 
-                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES && failedConfig != null) {
+                    // A failed profile must not blacklist other profiles that share an IP:port.
+                    // SNI, host, UUID, transport path, Reality keys, flow, and credentials may differ.
+                    if (failedConfig != null) {
                         val before = fallbackCandidates.size
                         fallbackCandidates = fallbackCandidates.filterNot { candidate ->
-                            val config = candidate.config
-                            config.address.equals(failedConfig.address, ignoreCase = true) &&
-                                config.port == failedConfig.port &&
-                                config.transport.equals(failedConfig.transport, ignoreCase = true) &&
-                                config.security.equals(failedConfig.security, ignoreCase = true)
+                            candidate.config.connectionKey() == failedConfig.connectionKey()
                         }
                         val skipped = before - fallbackCandidates.size
-                        logW("Traffic validation failed $trafficFailures times on endpoint ${failedConfig.address}:${failedConfig.port}; skipped $skipped equivalent endpoint variant(s)")
-                        trafficFailures = 0
+                        logW("Traffic validation failed for ${failedConfig.address}:${failedConfig.port}; skipped $skipped exact duplicate profile(s)")
                     }
+                    trafficFailures = 0
 
                     val next = fallbackCandidates.firstOrNull()
                     if (next == null) {
