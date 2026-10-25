@@ -16,7 +16,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ScoringEngine @Inject constructor(
-    @ApplicationContext private val context: Context? = null
+    @ApplicationContext private val context: Context?
 ) {
 
     data class ScoredServer(
