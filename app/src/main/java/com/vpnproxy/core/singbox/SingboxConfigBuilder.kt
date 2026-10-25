@@ -55,7 +55,7 @@ object SingboxConfigBuilder {
                     put("type", "udp")
                     put("tag", "direct-dns")
                     put("server", "8.8.8.8")
-                    put("detour", "direct")
+                    put("detour", "proxy")
                 })
             })
             put("final", "direct-dns")
