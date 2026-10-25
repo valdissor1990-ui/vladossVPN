@@ -159,14 +159,29 @@ class AutoSwitcher @Inject constructor(
     private fun currentNetworkBucket(): String {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return "other"
-        val network = manager.activeNetwork ?: return "offline"
-        val capabilities = manager.getNetworkCapabilities(network) ?: return "other"
-        return when {
+        val active = manager.activeNetwork
+        val activeCapabilities = active?.let(manager::getNetworkCapabilities)
+        fun bucket(capabilities: NetworkCapabilities?): String? = when {
+            capabilities == null -> null
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "other"
-            else -> "other"
+            else -> null
         }
+        bucket(activeCapabilities)?.let { return it }
+
+        // With VpnService active, activeNetwork is normally TRANSPORT_VPN. Inspect
+        // validated non-VPN networks to identify the underlying Wi-Fi/mobile transport.
+        val underlying = manager.allNetworks
+            .asSequence()
+            .filter { it != active }
+            .mapNotNull { network -> manager.getNetworkCapabilities(network) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+            .mapNotNull(::bucket)
+            .firstOrNull { it == "wifi" || it == "cellular" }
+        return underlying ?: if (active == null) "offline" else "other"
     }
 
     private fun blacklistKey(config: ParsedConfig): String =
