@@ -6,6 +6,7 @@ package com.vpnproxy.ui.home
 enum class ConnectionUiState {
     DISCONNECTED,
     CONNECTING,
+    VERIFYING,
     CONNECTED,
     UNSTABLE,
     ERROR;
@@ -13,6 +14,7 @@ enum class ConnectionUiState {
     fun label(): String = when (this) {
         DISCONNECTED -> "Отключено"
         CONNECTING -> "Подключение…"
+        VERIFYING -> "Проверка связи…"
         CONNECTED -> "Подключено"
         UNSTABLE -> "Нестабильно"
         ERROR -> "Ошибка"

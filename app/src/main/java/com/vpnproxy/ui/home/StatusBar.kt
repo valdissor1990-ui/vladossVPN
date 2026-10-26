@@ -48,7 +48,7 @@ fun StatusBar(
     val targetColor = when (state) {
         ConnectionUiState.CONNECTED -> StatusConnected
         ConnectionUiState.UNSTABLE -> StatusWarning
-        ConnectionUiState.CONNECTING -> StatusConnecting
+        ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> StatusConnecting
         ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> StatusDisconnected
     }
 
