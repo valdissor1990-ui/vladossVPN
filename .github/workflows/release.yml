@@ -315,7 +315,7 @@ jobs:
 
       - name: Create GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: v${{ steps.ver.outputs.name }}
           name: VPNProxy v${{ steps.ver.outputs.name }}
