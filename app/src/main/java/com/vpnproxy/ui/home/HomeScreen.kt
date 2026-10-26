@@ -138,7 +138,8 @@ fun HomeScreen(
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = "Не удалось подключиться. Проверьте сеть или смените сервер.",
+                                    text = uiState.lastErrorMessage?.takeIf { it.isNotBlank() }
+                                        ?: "Не удалось подключиться. Проверьте сеть или смените сервер.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFFFFCDD2),
                                     modifier = Modifier.weight(1f)
@@ -285,8 +286,8 @@ fun HomeScreen(
 
                 Card(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showServers = true },
+                    .fillMaxWidth()
+                    .clickable { showServers = true },
                     colors = CardDefaults.cardColors(
                         containerColor = CosmosSurface.copy(alpha = 0.9f)
                     )
