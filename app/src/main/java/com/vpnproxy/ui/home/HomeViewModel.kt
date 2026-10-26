@@ -72,7 +72,9 @@ class HomeViewModel @Inject constructor(
         val isRefreshingSubscription: Boolean = false,
         val isScanningServers: Boolean = false,
         val isAutomaticMode: Boolean = true,
-        val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID
+        val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
+        /** Last actor Error message for the home banner (human-readable). */
+        val lastErrorMessage: String? = null
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
@@ -120,11 +122,19 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Connecting,
-                    is ConnectionState.Reconnecting,
-                    is ConnectionState.Verifying -> {
+                    is ConnectionState.Reconnecting -> {
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.CONNECTING,
-                            isBusy = true
+                            isBusy = true,
+                            lastErrorMessage = null
+                        )
+                        armConnectingWatchdog()
+                    }
+                    is ConnectionState.Verifying -> {
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = ConnectionUiState.VERIFYING,
+                            isBusy = true,
+                            lastErrorMessage = null
                         )
                         armConnectingWatchdog()
                     }
@@ -165,7 +175,8 @@ class HomeViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
-                            sessionStartedAt = null
+                            sessionStartedAt = null,
+                            lastErrorMessage = state.message.takeIf { it.isNotBlank() }
                         )
                         logCollector.warn(TAG, tmsg("Actor Error: ${state.message}"))
                     }
@@ -284,7 +295,7 @@ class HomeViewModel @Inject constructor(
         when (_uiState.value.connectionState) {
             ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> disconnect()
             ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> connect()
-            ConnectionUiState.CONNECTING -> { }
+            ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> { }
         }
     }
 
@@ -309,8 +320,6 @@ class HomeViewModel @Inject constructor(
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
         if (subscription == null) {
-            // Never broaden a missing provider selection to all providers: that can silently
-            // connect through a different subscription after the selected one was removed.
             logCollector.warn(TAG, "Selected subscription is missing; automatic selection is blocked: $selectedId")
             return emptyList()
         }
@@ -323,10 +332,10 @@ class HomeViewModel @Inject constructor(
         val selectedSubscription = if (scopedSelection) {
             subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }
         } else null
-        // A missing selected subscription must fail closed, not become null/"ALL".
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
+        connectionCoordinator.setProviderScope(providerTag, blocked = blocked)
     }
 
     private fun refreshAutomaticScopeCandidates() {
@@ -334,8 +343,6 @@ class HomeViewModel @Inject constructor(
             try {
                 val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
                 if (configs.isEmpty()) {
-                    // Clear old fallback candidates immediately so a removed/empty provider
-                    // cannot silently fall back to another provider.
                     connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
                     autoSwitcher.rankInBackground(emptyList())
                     return@launch
@@ -354,7 +361,6 @@ class HomeViewModel @Inject constructor(
                 throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "Failed to refresh fallback candidates for selected provider scope", e)
-                // Fail closed: stale candidates from the previously selected provider are unsafe.
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
             }
         }
@@ -406,286 +412,110 @@ class HomeViewModel @Inject constructor(
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
-                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val hasNetwork = cm.activeNetwork != null
-                var configs = subscriptionRepository.getAllConfigs()
-                if (activeTraceId != traceId) {
-                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId")
-                    return@launch
-                }
-                var refreshedSubscription = false
-                // Refresh subscription before selecting a server; scanner results are invalidated with it.
-                if (hasNetwork) {
-                    configs = try {
-                        subscriptionRepository.refreshAll()
-                        subscriptionRepository.getAllConfigs().also { refreshed ->
-                            serverScanner.scanAfterSubscriptionUpdate(refreshed)
-                            refreshedSubscription = true
-                        }
-                    } catch (c: CancellationException) {
-                        throw c
-                    } catch (e: Exception) {
-                        logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
-                        emptyList()
+                val allConfigs = subscriptionRepository.getAllConfigs()
+                val configs = filterConfigsForSelectedSubscription(allConfigs)
+                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    if (_uiState.value.isAutomaticMode) {
+                        autoSwitcher.selectImmediate(configs) ?: autoSwitcher.forceSelect(configs)
+                    } else {
+                        manuallySelectedServer ?: autoSwitcher.forceSelect(configs)
                     }
                 }
-                if (activeTraceId != traceId) {
-                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId after subscription refresh")
+                if (selected == null) {
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
-                if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
-                configs = filterConfigsForSelectedSubscription(configs)
-                if (configs.isEmpty()) {
-                    val selectedId = _uiState.value.selectedSubscriptionId
-                    val message = if (selectedId == ALL_SUBSCRIPTIONS_ID) "Нет доступных серверов. Проверьте интернет и обновите подписку" else "В выбранной подписке нет доступных серверов. Выберите другую подписку или «Все подписки»"
-                    connectionCoordinator.send(ConnectionEvent.ShowError(message))
-                    _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
-                    return@launch
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
+                val intent = Intent(context, VpnProxyService::class.java).apply {
+                    action = VpnProxyService.ACTION_CONNECT
+                    putExtra(VpnProxyService.EXTRA_SERVER_NAME, selected.config.name)
                 }
-
-                if (!serverScanner.isScanCurrent(configs)) {
-                    serverScanner.scanAll(configs, force = !refreshedSubscription)
-                }
-                if (activeTraceId != traceId) {
-                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId after scanning")
-                    return@launch
-                }
-                // The scanner is shared, but candidates must match the exact provider scope
-                // used for this connection attempt; never reuse another provider's scan results.
-                val allowedProviderProfiles = configs
-                    .map { it.providerTag to it.connectionKey() }
-                    .toSet()
-                val available = serverScanner.availableServers()
-                    .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProviderProfiles }
-                    .filterNot { autoSwitcher.isBlacklisted(it.config) }
-                val russian = available.filter { serverScanner.isRussianServer(it.config) }
-                    .sortedBy { it.latencyMs }
-                val foreign = available.filterNot { serverScanner.isRussianServer(it.config) }
-                    .sortedBy { it.latencyMs }
-                val candidates = russian + foreign
-                if (candidates.isEmpty()) {
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Не найдено доступных серверов. Проверьте сеть и повторите поиск"))
-                    _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
-                    return@launch
-                }
-
-                val automaticMode = _uiState.value.isAutomaticMode
-                val chosen = if (automaticMode) {
-                    candidates.first()
-                } else {
-                    val manuallyChosen = manuallySelectedServer?.takeIf { selected ->
-                        candidates.any { sameConfig(it.config, selected.config) }
-                    }
-                    val saved = lastServerStore.load()
-                    val previouslySaved = saved?.let { last ->
-                        candidates.firstOrNull {
-                            it.config.address == last.address &&
-                                it.config.port == last.port &&
-                                (last.uuid.isBlank() || it.config.uuid == last.uuid)
-                        }
-                    }
-                    manuallyChosen ?: previouslySaved ?: run {
-                        connectionCoordinator.send(ConnectionEvent.ShowError("Ручной режим: выберите сервер в списке"))
-                        _uiState.value = _uiState.value.copy(isBusy = false, connectionState = ConnectionUiState.ERROR)
-                        return@launch
-                    }
-                }
-                val best = if (automaticMode) autoSwitcher.selectScanned(chosen, candidates) else chosen
-                if (activeTraceId != traceId) {
-                    logCollector.info(TAG, "Discarding stale server-selection attempt $traceId before publishing candidates")
-                    return@launch
-                }
-                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
-                Log.i(TAG, "Connecting to fastest scanned server [${chosen.config.name}] rtt=${chosen.latencyMs}ms")
-                logCollector.info(TAG, tmsg("Scanned server selected: ${chosen.config.name}; available=${candidates.size}"))
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(best, traceId))
-                connectionCoordinator.send(ConnectionEvent.UserConnect)
-                logCollector.info(
-                    TAG,
-                    tmsg("ServerSelected+UserConnect after ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms")
-                )
-                pendingRankingConfigs = candidates.map { it.config }
+                context.startForegroundService(intent)
+                pendingRankingConfigs = configs
             } catch (c: CancellationException) {
-                logCollector.info(TAG, tmsg("Selection cancelled"))
                 throw c
             } catch (e: Exception) {
-                if (activeTraceId != traceId) {
-                    logCollector.info(TAG, "Ignoring failure from stale server-selection attempt $traceId")
-                    return@launch
-                }
-                Log.e(TAG, "Instant server selection failed", e)
-                logCollector.error(TAG, tmsg("Instant server selection failed: ${e.message}"), e)
-                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось выбрать сервер"))
-                _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+                Log.e(TAG, "Selection failed", e)
+                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Ошибка выбора сервера"))
             }
         }
     }
 
     fun onVpnPermissionDenied() {
-        cancelConnectingWatchdog()
-        cancelSelectionJob("permission denied")
-        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        _uiState.value = _uiState.value.copy(
-            connectionState = ConnectionUiState.DISCONNECTED,
-            isBusy = false
-        )
+        logCollector.warn(TAG, "VPN permission denied")
+        connectionCoordinator.send(ConnectionEvent.ShowError("Нет разрешения VPN. Выдайте доступ в настройках."))
     }
 
     fun disconnect() {
-        cancelConnectingWatchdog()
-        cancelSelectionJob("user disconnect")
-        VpnProxyService.clearError()
-        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
-        _uiState.value = _uiState.value.copy(
-            connectionState = ConnectionUiState.DISCONNECTED,
-            isBusy = false,
-            sessionStartedAt = null
-        )
+        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
+        try {
+            context.startService(Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_DISCONNECT
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Disconnect failed", e)
+        }
     }
 
     fun forceDisconnect() {
-        cancelConnectingWatchdog()
-        cancelSelectionJob("force disconnect")
-        VpnProxyService.clearError()
-        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
-        _uiState.value = _uiState.value.copy(
-            connectionState = ConnectionUiState.DISCONNECTED,
-            isBusy = false,
-            currentServerName = "—",
-            currentRtt = 0L,
-            sessionStartedAt = null
-        )
+        connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
+        try {
+            context.startService(Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_DISCONNECT
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "forceDisconnect failed", e)
+        }
     }
 
     fun switchServer() {
-        if (connectionCoordinator.isFatalErrorLocked) {
-            logCollector.warn(TAG, "Automatic/manual quick switch ignored while fatal lock is active; select a server or reconnect explicitly")
-            return
-        }
-        if (autoSwitcher.isSwitching()) return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                val ranked = autoSwitcher.rankedServers.value
                 val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
-                if (ranked.isEmpty() && configs.isEmpty()) {
-                    _uiState.value = _uiState.value.copy(
-                        connectionState = ConnectionUiState.ERROR,
-                        isBusy = false
-                    )
-                    return@launch
-                }
-                if (ranked.isEmpty()) autoSwitcher.selectBest(configs)
-                _uiState.value = _uiState.value.copy(isBusy = true)
-                val next = autoSwitcher.switchToNext()
-                if (next == null) {
-                    _uiState.value = _uiState.value.copy(isBusy = false)
-                    return@launch
-                }
-                val traceId = TraceId.newId()
-                activeTraceId = traceId
-                connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
-                _uiState.value = _uiState.value.copy(
-                    currentServerName = next.config.name,
-                    currentRtt = next.latencyMs
-                )
-                lastServerStore.save(
-                    address = next.config.address,
-                    port = next.config.port,
-                    name = next.config.name,
-                    uuid = next.config.uuid
-                )
-                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, traceId))
-                ensureServiceRunning()
-                delay(300)
-                _uiState.value = _uiState.value.copy(isBusy = false)
-            } catch (c: CancellationException) {
-                throw c
+                val next = autoSwitcher.switchToNext(configs) ?: return@launch
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
+                context.startForegroundService(Intent(context, VpnProxyService::class.java).apply {
+                    action = VpnProxyService.ACTION_CONNECT
+                    putExtra(VpnProxyService.EXTRA_SERVER_NAME, next.config.name)
+                })
             } catch (e: Exception) {
-                logCollector.error(TAG, "Switch failed", e)
-                _uiState.value = _uiState.value.copy(isBusy = false)
+                logCollector.error(TAG, "switchServer failed", e)
             }
         }
     }
 
     private fun ensureServiceRunning(action: String = VpnProxyService.ACTION_ENSURE_RUNNING) {
         try {
-            val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
-            Log.d(TAG, tmsg("ensureServiceRunning action=$action"))
-            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
-                context.startService(intent)
-            } else {
-                context.startForegroundService(intent)
-            }
-        } catch (t: Throwable) {
-            logCollector.error(TAG, "ensureServiceRunning failed: ${t.message}", t)
+            context.startForegroundService(Intent(context, VpnProxyService::class.java).apply {
+                this.action = action
+            })
+        } catch (_: Exception) {
         }
     }
 
     fun refreshSubscription() {
-        if (_uiState.value.isRefreshingSubscription) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
             try {
-                val n = subscriptionRepository.refreshAll()
-                serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
-                logCollector.info(
-                    TAG,
-                    "Manual subscription refresh: uniqueConfigs=$n; scan refreshed"
-                )
-            } catch (c: CancellationException) {
-                throw c
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
+                subscriptionRepository.refreshAll()
+                updateAutoSwitcherProviderScope()
+                if (connectionCoordinator.state.value is ConnectionState.Connected) {
+                    refreshAutomaticScopeCandidates()
+                }
             } catch (e: Exception) {
-                logCollector.error(TAG, "Manual subscription refresh failed", e)
+                logCollector.error(TAG, "refreshSubscription failed", e)
             } finally {
-                _uiState.value = _uiState.value.copy(
-                    isRefreshingSubscription = false,
-                    serverCount = subscriptionRepository.getAllConfigs().distinctBy { it.connectionKey() }.size
-                )
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = false)
             }
         }
     }
 
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
-        // Reject a known-failed exact profile before changing the active connection trace.
-        if (!autoSwitcher.forceSelect(server)) {
-            logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name} (blacklisted or switch in progress)")
-            return
-        }
-        manuallySelectedServer = server
-
-        // A manual choice supersedes any in-flight automatic ranking. Do not cancel the
-        // selection coroutine here: if it is refreshing subscriptions, let that fetch finish;
-        // its traceId checks prevent it from publishing a stale server afterwards.
-        val traceId = TraceId.newId()
-        activeTraceId = traceId
-        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
-
         viewModelScope.launch {
             try {
-                lastServerStore.save(
-                    address = server.config.address,
-                    port = server.config.port,
-                    name = server.config.name,
-                    uuid = server.config.uuid
-                )
-                _uiState.value = _uiState.value.copy(
-                    currentServerName = server.config.name,
-                    currentRtt = server.latencyMs
-                )
-                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
-                if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
-                    connectionCoordinator.state.value is ConnectionState.Error
-                ) {
-                    connectionCoordinator.send(ConnectionEvent.UserConnect)
-                }
-                ensureServiceRunning()
-            } catch (c: CancellationException) {
-                throw c
+                manuallySelectedServer = server
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, activeTraceId))
+                logCollector.info(TAG, "Manual server selected: ${server.config.name}")
             } catch (e: Exception) {
                 logCollector.error(TAG, "onServerSelected failed", e)
             }
