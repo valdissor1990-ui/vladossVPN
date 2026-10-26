@@ -44,7 +44,7 @@ fun GlowPowerButton(
 
     val targetColor = when (state) {
         ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> ConnectedGreen
-        ConnectionUiState.CONNECTING -> GlowBlue
+        ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> GlowBlue
         ConnectionUiState.ERROR -> DisconnectRed
         ConnectionUiState.DISCONNECTED -> OnDarkSecondary
     }
@@ -59,32 +59,39 @@ fun GlowPowerButton(
         ),
         label = "pulse"
     )
-    val isPulsing = state == ConnectionUiState.CONNECTING
-    val glowFactor = if (isPulsing) pulse else 1f
+    val isPulsing = state == ConnectionUiState.CONNECTING || state == ConnectionUiState.VERIFYING
 
-    val buttonSize = 240.dp
+    val rotation by infinite.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isPulsing) 1400 else 4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "spin"
+    )
 
     Box(
+        contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(buttonSize)
+            .size(220.dp)
             .scale(pressedScale)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 enabled = enabled,
                 onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
+            )
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = 4.dp.toPx()
-            val glowStroke = 8.dp.toPx()
-            val arcSize = Size(size.width - stroke, size.height - stroke)
-            val topLeft = Offset(stroke / 2, stroke / 2)
-
+        Canvas(Modifier.fillMaxSize()) {
+            val stroke = 6.dp.toPx()
+            val glowStroke = 18.dp.toPx()
+            val inset = glowStroke / 2
+            val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
+            val topLeft = Offset(inset, inset)
             val broken = state == ConnectionUiState.DISCONNECTED || state == ConnectionUiState.ERROR
-            val startAngle = if (broken) 30f else 0f
-            val sweep = if (broken) 300f else 360f
+            val startAngle = if (isPulsing) rotation else -90f
+            val sweep = if (broken) 270f else 360f
+            val glowFactor = if (isPulsing) pulse else 1f
 
             listOf(
                 glowStroke * 3 to 0.08f,
@@ -129,7 +136,7 @@ fun GlowPowerButton(
                     ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE ->
                         Icon(Icons.Default.Shield, null,
                             tint = ConnectedGreen, modifier = Modifier.size(72.dp))
-                    ConnectionUiState.CONNECTING ->
+                    ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING ->
                         Icon(Icons.Default.Shield, null,
                             tint = GlowBlue.copy(alpha = pulse),
                             modifier = Modifier.size(72.dp))
