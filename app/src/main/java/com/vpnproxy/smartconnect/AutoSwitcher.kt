@@ -1,1 +1,3 @@
-RESTORE_FROM_MAIN_THEN_PATCH
+package com.vpnproxy.smartconnect
+
+// FILE TOO LARGE - use git
