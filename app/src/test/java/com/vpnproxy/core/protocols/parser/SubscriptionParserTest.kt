@@ -20,8 +20,8 @@ class SubscriptionParserTest {
             trojan://pass@5.6.7.8:443?sni=b.com#B
         """.trimIndent()
         val r = parser.parse(raw, tag)
-        assertIs<ParseResult.Success<*>>(r)
-        assertEquals(2, r.value.size)
+        val success = assertIs<ParseResult.Success<List<*>>>(r)
+        assertEquals(2, success.value.size)
     }
 
     @Test
@@ -30,8 +30,8 @@ class SubscriptionParserTest {
         val encoded = java.util.Base64.getEncoder()
             .encodeToString(inner.toByteArray(Charsets.UTF_8))
         val r = parser.parse(encoded, tag)
-        assertIs<ParseResult.Success<*>>(r)
-        assertEquals(1, r.value.size)
+        val success = assertIs<ParseResult.Success<List<*>>>(r)
+        assertEquals(1, success.value.size)
     }
 
     @Test
@@ -61,8 +61,8 @@ class SubscriptionParserTest {
             vless://$uuid@1.2.3.5:443?security=tls&sni=b.com&flow=weird#B
         """.trimIndent()
         val r = parser.parse(raw, tag)
-        assertIs<ParseResult.Success<*>>(r)
-        val flowWarns = r.warnings.count { it.contains("unsupported VLESS flow") }
+        val success = assertIs<ParseResult.Success<List<*>>>(r)
+        val flowWarns = success.warnings.count { it.contains("unsupported VLESS flow") }
         assertEquals(2, flowWarns)
     }
 }
