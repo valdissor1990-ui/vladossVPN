@@ -12,8 +12,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.772"
-  APP_VERSION_CODE: "10772"
+  APP_VERSION_NAME: "1.0.773"
+  APP_VERSION_CODE: "10773"
 
 jobs:
   build-and-release:
@@ -232,25 +232,20 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
           if [ -z "$AAPT" ]; then
             echo "❌ aapt2 not found in \$ANDROID_HOME/build-tools"
             exit 1
           fi
-
           APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
-
           if [ ! -f "$APK" ]; then
             APK=$(find app/build/outputs/apk/direct/release -name 'app-direct-*-release.apk' | head -1)
           fi
-
           if [ -z "$APK" ] || [ ! -f "$APK" ]; then
             echo "❌ No release APK found. Directory listing:"
             ls -la app/build/outputs/apk/direct/release/ || true
             exit 1
           fi
-
           echo "Using APK: $APK"
           VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
           VC=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\1/")
