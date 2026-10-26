@@ -37,7 +37,7 @@ sealed class ConnectionEvent {
     data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
-    data class TrafficValidationResult(val serverName: String, val success: Boolean) : ConnectionEvent()
+    data class TrafficValidationResult(val serverName: String, val success: Boolean, val failureSummary: String? = null) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
@@ -55,6 +55,24 @@ class ConnectionCoordinator @Inject constructor(
         private const val MAX_TRAFFIC_VALIDATION_FAILURES = 3
         private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
         const val CONNECTING_TIMEOUT_MS = 60_000L
+
+        fun trafficFatalMessage(summary: String?): String {
+            val s = summary?.lowercase().orEmpty()
+            return when {
+                s.isBlank() || s == "unknown" -> FATAL_TRAFFIC_MESSAGE
+                "proxy_port_not_ready" in s ->
+                    "Локальный прокси VPN не поднялся. Перезапустите приложение и попробуйте снова."
+                "dns_error" in s ->
+                    "Не удалось проверить трафик: ошибка DNS через VPN. Проверьте подписку или сеть."
+                "timeout" in s ->
+                    "Не удалось проверить трафик: сервер не отвечает вовремя. Попробуйте другой сервер."
+                "refused" in s ->
+                    "Не удалось проверить трафик: соединение отклонено. Сервер или сеть блокируют доступ."
+                "unreachable" in s ->
+                    "Не удалось проверить трафик: сеть недоступна. Проверьте интернет и Wi‑Fi/мобильные данные."
+                else -> FATAL_TRAFFIC_MESSAGE
+            }
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -342,8 +360,23 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 scope.launch {
-                    val passed = trafficValidator.checkTraffic(event.serverName)
-                    send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
+                    val report = trafficValidator.probeTraffic(event.serverName)
+                    val summary = if (!report.success) {
+                        if (!report.portReady) {
+                            "proxy_port_not_ready"
+                        } else {
+                            report.targets.joinToString(",") { t ->
+                                "${t.host}:${t.outcome.name}${t.statusCode?.let { "/$it" } ?: ""}"
+                            }.ifBlank { "no_targets" }
+                        }
+                    } else null
+                    send(
+                        ConnectionEvent.TrafficValidationResult(
+                            serverName = event.serverName,
+                            success = report.success,
+                            failureSummary = summary
+                        )
+                    )
                 }
             }
             is ConnectionEvent.TrafficValidationResult -> {
@@ -356,14 +389,15 @@ class ConnectionCoordinator @Inject constructor(
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     trafficFailures++
-                    logW("Traffic validation failed ($trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES) for ${event.serverName}")
-                    val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName}")
+                    val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
+                    logW("Traffic validation failed ($trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES) for ${event.serverName}; detail=$detail")
+                    val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
                     if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES) {
                         if (!tryFallback(reason, current)) {
                             retryCount = 0
                             isFatalErrorLocked = true
                             cancelSelectionJob()
-                            setState(ConnectionState.Error(FATAL_TRAFFIC_MESSAGE), reason = "trafficFatal")
+                            setState(ConnectionState.Error(trafficFatalMessage(event.failureSummary)), reason = "trafficFatal")
                         }
                     } else if (!tryFallback(reason, current)) {
                         handleFailure(reason, current)
