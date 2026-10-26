@@ -314,7 +314,7 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
+    private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>) {
         if (!_uiState.value.isAutomaticMode) return configs
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
@@ -400,7 +400,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // SECOND_HALF_FROM_MAIN — will be fixed if truncated
     fun onVpnPermissionGranted() {
         val permissionGrantedAt = android.os.SystemClock.elapsedRealtime()
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
@@ -455,7 +454,7 @@ class HomeViewModel @Inject constructor(
                 if (activeTraceId != traceId) return@launch
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 pendingRankingConfigs = configs
-                ensureServiceRunning(VpnProxyService.ACTION_CONNECT)
+                ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
                 throw c
@@ -472,25 +471,29 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
-        connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-        try {
-            context.startService(Intent(context, VpnProxyService::class.java).apply {
-                action = VpnProxyService.ACTION_DISCONNECT
-            })
-        } catch (e: Exception) {
-            Log.e(TAG, "Disconnect failed", e)
-        }
+        cancelConnectingWatchdog()
+        cancelSelectionJob("user disconnect")
+        VpnProxyService.clearError()
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
+            sessionStartedAt = null
+        )
     }
 
     fun forceDisconnect() {
+        cancelConnectingWatchdog()
+        cancelSelectionJob("forceDisconnect")
+        VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
-        try {
-            context.startService(Intent(context, VpnProxyService::class.java).apply {
-                action = VpnProxyService.ACTION_DISCONNECT
-            })
-        } catch (e: Exception) {
-            Log.e(TAG, "forceDisconnect failed", e)
-        }
+        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
+            sessionStartedAt = null
+        )
     }
 
     fun switchServer() {
@@ -499,7 +502,7 @@ class HomeViewModel @Inject constructor(
                 val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
                 val next = autoSwitcher.switchToNext(configs) ?: return@launch
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
-                ensureServiceRunning(VpnProxyService.ACTION_CONNECT)
+                ensureServiceRunning()
             } catch (e: Exception) {
                 logCollector.error(TAG, "switchServer failed", e)
             }
@@ -508,9 +511,8 @@ class HomeViewModel @Inject constructor(
 
     private fun ensureServiceRunning(action: String = VpnProxyService.ACTION_ENSURE_RUNNING) {
         try {
-            context.startForegroundService(Intent(context, VpnProxyService::class.java).apply {
-                this.action = action
-            })
+            val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
+            context.startForegroundService(intent)
         } catch (_: Exception) {
         }
     }
