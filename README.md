@@ -2,6 +2,15 @@
 
 Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3** с VLESS/Reality (TCP, WS, gRPC, HTTPUpgrade, XHTTP через sing-box-lx), Hysteria2, TUIC и автоматическим выбором сервера.
 
+## Брендинг
+
+Оригинальный знак **vladossvpn** — объёмная геометрическая V в холодном cyan/blue градиенте. Исходники SVG хранятся в `docs/branding/`:
+
+- [Иконка приложения (SVG)](docs/branding/vladossvpn-icon.svg)
+- [Горизонтальный знак без текста (SVG)](docs/branding/vladossvpn-mark-horizontal.svg)
+
+Оба файла — масштабируемые векторные исходники без сторонних изображений и шрифтов.
+
 ## Возможности
 
 - **Протоколы:** VLESS + Reality (включая Vision flow и поддерживаемые upstream транспорты), Hysteria2 и TUIC
