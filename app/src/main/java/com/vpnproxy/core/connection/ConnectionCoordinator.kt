@@ -37,7 +37,7 @@ sealed class ConnectionEvent {
     data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
-    data class TrafficValidationResult(val serverName: String, val success: Boolean) : ConnectionEvent()
+    data class TrafficValidationResult(val serverName: String, val success: Boolean, val failureSummary: String? = null) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
@@ -342,8 +342,23 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 scope.launch {
-                    val passed = trafficValidator.checkTraffic(event.serverName)
-                    send(ConnectionEvent.TrafficValidationResult(event.serverName, passed))
+                    val report = trafficValidator.probeTraffic(event.serverName)
+                    val summary = if (!report.success) {
+                        if (!report.portReady) {
+                            "proxy_port_not_ready"
+                        } else {
+                            report.targets.joinToString(",") { t ->
+                                "${t.host}:${t.outcome.name}${t.statusCode?.let { "/$it" } ?: ""}"
+                            }.ifBlank { "no_targets" }
+                        }
+                    } else null
+                    send(
+                        ConnectionEvent.TrafficValidationResult(
+                            serverName = event.serverName,
+                            success = report.success,
+                            failureSummary = summary
+                        )
+                    )
                 }
             }
             is ConnectionEvent.TrafficValidationResult -> {
@@ -356,8 +371,9 @@ class ConnectionCoordinator @Inject constructor(
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     trafficFailures++
-                    logW("Traffic validation failed ($trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES) for ${event.serverName}")
-                    val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName}")
+                    val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
+                    logW("Traffic validation failed ($trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES) for ${event.serverName}; detail=$detail")
+                    val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
                     if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES) {
                         if (!tryFallback(reason, current)) {
                             retryCount = 0
