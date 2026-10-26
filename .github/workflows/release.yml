@@ -12,8 +12,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.771"
-  APP_VERSION_CODE: "10771"
+  APP_VERSION_NAME: "1.0.772"
+  APP_VERSION_CODE: "10772"
 
 jobs:
   build-and-release:
@@ -239,10 +239,8 @@ jobs:
             exit 1
           fi
 
-          # Gradle flavor+splits naming: app-<flavor>-<abi>-<buildType>.apk
           APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
 
-          # Fallback: any APK if universal missing (defensive)
           if [ ! -f "$APK" ]; then
             APK=$(find app/build/outputs/apk/direct/release -name 'app-direct-*-release.apk' | head -1)
           fi
