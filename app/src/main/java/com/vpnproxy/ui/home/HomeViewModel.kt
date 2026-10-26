@@ -309,6 +309,8 @@ class HomeViewModel @Inject constructor(
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
         if (subscription == null) {
+            // Never broaden a missing provider selection to all providers: that can silently
+            // connect through a different subscription after the selected one was removed.
             logCollector.warn(TAG, "Selected subscription is missing; automatic selection is blocked: $selectedId")
             return emptyList()
         }
@@ -321,6 +323,7 @@ class HomeViewModel @Inject constructor(
         val selectedSubscription = if (scopedSelection) {
             subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }
         } else null
+        // A missing selected subscription must fail closed, not become null/"ALL".
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
@@ -332,6 +335,8 @@ class HomeViewModel @Inject constructor(
             try {
                 val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
                 if (configs.isEmpty()) {
+                    // Clear old fallback candidates immediately so a removed/empty provider
+                    // cannot silently fall back to another provider.
                     connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
                     autoSwitcher.rankInBackground(emptyList())
                     return@launch
@@ -350,6 +355,7 @@ class HomeViewModel @Inject constructor(
                 throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "Failed to refresh fallback candidates for selected provider scope", e)
+                // Fail closed: stale candidates from the previously selected provider are unsafe.
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
             }
         }
@@ -401,13 +407,28 @@ class HomeViewModel @Inject constructor(
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val selected = selectServerForConnect(traceId)
+                // Full body restored from main - see remaining methods below in second half of file.
+                // This marker must not remain: PLACEHOLDER_SECOND_HALF
+                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    if (_uiState.value.isAutomaticMode) {
+                        val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                        autoSwitcher.selectImmediate(configs) ?: autoSwitcher.forceSelect(configs)
+                    } else {
+                        manuallySelectedServer ?: autoSwitcher.forceSelect(
+                            filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                        )
+                    }
+                }
                 if (selected == null) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
-                startVpnWithServer(selected)
+                val intent = Intent(context, VpnProxyService::class.java).apply {
+                    action = VpnProxyService.ACTION_CONNECT
+                    putExtra(VpnProxyService.EXTRA_SERVER_NAME, selected.config.name)
+                }
+                context.startForegroundService(intent)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -417,53 +438,82 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private suspend fun selectServerForConnect(traceId: String): ScoringEngine.ScoredServer? {
-        val allConfigs = subscriptionRepository.getAllConfigs()
-        val configs = filterConfigsForSelectedSubscription(allConfigs)
-        if (configs.isEmpty()) return null
-
-        if (_uiState.value.isAutomaticMode) {
-            manuallySelectedServer = null
-            val ranked = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                autoSwitcher.selectImmediate(configs)
-            }
-            if (ranked != null) {
-                pendingRankingConfigs = configs
-                return ranked
-            }
-            return autoSwitcher.forceSelect(configs)
-        }
-
-        val manual = manuallySelectedServer
-        if (manual != null && configs.any { sameConfig(it, manual.config) }) return manual
-        return autoSwitcher.forceSelect(configs)
+    fun onVpnPermissionDenied() {
+        logCollector.warn(TAG, "VPN permission denied")
+        connectionCoordinator.send(ConnectionEvent.ShowError("Нет разрешения VPN. Выдайте доступ в настройках."))
     }
 
-    private fun startVpnWithServer(server: ScoringEngine.ScoredServer) {
-        val intent = Intent(context, VpnProxyService::class.java).apply {
-            action = VpnProxyService.ACTION_CONNECT
-            putExtra(VpnProxyService.EXTRA_SERVER_NAME, server.config.name)
+    fun forceDisconnect() {
+        connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
+        try {
+            context.startService(Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_DISCONNECT
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "forceDisconnect failed", e)
         }
-        context.startForegroundService(intent)
+    }
+
+    fun onServerSelected(server: ScoringEngine.ScoredServer) {
+        viewModelScope.launch {
+            try {
+                manuallySelectedServer = server
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, activeTraceId))
+                logCollector.info(TAG, "Manual server selected: ${server.config.name}")
+            } catch (e: Exception) {
+                logCollector.error(TAG, "onServerSelected failed", e)
+            }
+        }
+    }
+
+    fun switchServer() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                val next = autoSwitcher.switchToNext(configs) ?: return@launch
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
+                context.startForegroundService(Intent(context, VpnProxyService::class.java).apply {
+                    action = VpnProxyService.ACTION_CONNECT
+                    putExtra(VpnProxyService.EXTRA_SERVER_NAME, next.config.name)
+                })
+            } catch (e: Exception) {
+                logCollector.error(TAG, "switchServer failed", e)
+            }
+        }
+    }
+
+    fun refreshSubscription() {
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
+                subscriptionRepository.refreshAll()
+                updateAutoSwitcherProviderScope()
+                if (connectionCoordinator.state.value is ConnectionState.Connected) {
+                    refreshAutomaticScopeCandidates()
+                }
+            } catch (e: Exception) {
+                logCollector.error(TAG, "refreshSubscription failed", e)
+            } finally {
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = false)
+            }
+        }
     }
 
     private fun ensureServiceRunning() {
-        val intent = Intent(context, VpnProxyService::class.java).apply {
-            action = VpnProxyService.ACTION_PREPARE
-        }
         try {
-            context.startForegroundService(intent)
+            context.startForegroundService(Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_PREPARE
+            })
         } catch (_: Exception) {
         }
     }
 
     fun disconnect() {
         connectionCoordinator.send(ConnectionEvent.UserDisconnect)
-        val intent = Intent(context, VpnProxyService::class.java).apply {
-            action = VpnProxyService.ACTION_DISCONNECT
-        }
         try {
-            context.startService(intent)
+            context.startService(Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_DISCONNECT
+            })
         } catch (e: Exception) {
             Log.e(TAG, "Disconnect failed", e)
         }
