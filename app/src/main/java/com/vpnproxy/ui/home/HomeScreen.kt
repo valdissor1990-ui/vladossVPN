@@ -122,7 +122,7 @@ fun HomeScreen(
             ) {
                 Spacer(Modifier.height(16.dp))
 
-                // Error banner + Retry
+                // Error banner + Retry — shows actor message when available
                 if (uiState.connectionState == ConnectionUiState.ERROR) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -139,7 +139,8 @@ fun HomeScreen(
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = "Не удалось подключиться. Проверьте сеть или смените сервер.",
+                                    text = uiState.lastErrorMessage?.takeIf { it.isNotBlank() }
+                                        ?: "Не удалось подключиться. Проверьте сеть или смените сервер.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFFFFCDD2),
                                     modifier = Modifier.weight(1f)
@@ -189,8 +190,13 @@ fun HomeScreen(
                                 enabled = !uiState.isBusy,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                val selectedName = subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
-                                    ?: "Все подписки"
+                                val selectedName = when {
+                                    !uiState.isAutomaticMode -> "Ручной выбор"
+                                    uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID -> "Все подписки"
+                                    else -> subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
+                                        ?.let { "Только: $it" }
+                                        ?: "Подписка недоступна"
+                                }
                                 Text(selectedName, color = OnDark, modifier = Modifier.weight(1f))
                                 Icon(Icons.Default.ExpandMore, contentDescription = null, tint = OnDark)
                             }
