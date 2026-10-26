@@ -383,9 +383,14 @@ class HomeViewModel @Inject constructor(
                 }
                 val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
                     if (_uiState.value.isAutomaticMode) {
-                        autoSwitcher.selectImmediate(configs) ?: autoSwitcher.forceSelect(configs)
+                        val currentConfig = autoSwitcher.currentServer.value?.config
+                            ?.takeIf { current -> configs.any { it.connectionKey() == current.connectionKey() } }
+                            ?: configs.first()
+                        autoSwitcher.selectImmediate(currentConfig, configs)
                     } else {
-                        manuallySelectedServer ?: autoSwitcher.forceSelect(configs)
+                        manuallySelectedServer?.takeIf { selectedServer ->
+                            configs.any { it.connectionKey() == selectedServer.config.connectionKey() }
+                        } ?: autoSwitcher.selectImmediate(configs.first(), configs)
                     }
                 }
                 if (selected == null) {
