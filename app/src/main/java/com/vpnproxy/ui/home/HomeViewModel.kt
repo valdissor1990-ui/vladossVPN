@@ -94,6 +94,7 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     private var selectionJob: Job? = null
+    @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
@@ -182,12 +183,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun isRussianServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
-        serverScanner.isRussianServer(config)
-
-    private fun sameConfig(a: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig, b: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): Boolean =
-        a.connectionKey() == b.connectionKey()
-
     private fun tmsg(message: String): String =
         TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | ")
 
@@ -266,7 +261,6 @@ class HomeViewModel @Inject constructor(
         modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, validId).apply()
         _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
         updateAutoSwitcherProviderScope()
-        logCollector.info(TAG, "Automatic server subscription scope changed: $validId")
         if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
     }
 
@@ -275,19 +269,14 @@ class HomeViewModel @Inject constructor(
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
-        if (subscription == null) {
-            logCollector.warn(TAG, "Selected subscription is missing; automatic selection is blocked: $selectedId")
-            return emptyList()
-        }
+        if (subscription == null) return emptyList()
         return configs.filter { it.providerTag == subscription.name }
     }
 
     private fun updateAutoSwitcherProviderScope() {
         val state = _uiState.value
         val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
-        val selectedSubscription = if (scopedSelection) {
-            subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId }
-        } else null
+        val selectedSubscription = if (scopedSelection) subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId } else null
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
@@ -310,11 +299,10 @@ class HomeViewModel @Inject constructor(
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
                 autoSwitcher.rankInBackground(configs)
-                logCollector.info(TAG, "Fallback candidates refreshed for selected provider scope: ${candidates.size}")
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                logCollector.error(TAG, "Failed to refresh fallback candidates for selected provider scope", e)
+                logCollector.error(TAG, "Failed to refresh fallback candidates", e)
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
             }
         }
@@ -324,22 +312,25 @@ class HomeViewModel @Inject constructor(
         modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
         _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
         updateAutoSwitcherProviderScope()
-        logCollector.info(TAG, "Server selection mode changed: " + (if (enabled) "automatic" else "manual"))
         if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
     }
 
     private fun connect() {
-        Log.d(TAG, "1. Connect button clicked")
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastConnectClickMs < 900L) {
+            Log.d(TAG, "Connect debounced")
+            return
+        }
+        lastConnectClickMs = now
+        cancelSelectionJob("new connect")
         try {
             activeTraceId = TraceId.newId()
-            Log.i(TAG, TraceId.format(TAG, "User clicked Connect", activeTraceId))
             connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
             VpnProxyService.clearError()
-            _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
+            _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
             armConnectingWatchdog()
             vpnPermissionRequester?.invoke()
         } catch (e: Exception) {
-            Log.e(TAG, "Connect failed critically", e)
             connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
             _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
         }
@@ -347,7 +338,6 @@ class HomeViewModel @Inject constructor(
 
     fun onVpnPermissionGranted() {
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
-        Log.i(TAG, TraceId.format(TAG, "VPN permission granted", traceId))
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         armConnectingWatchdog()
         ensureServiceRunning()
@@ -382,15 +372,26 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    val allowedKeys = configs.map { it.connectionKey() }.toSet()
+                    val scanned = serverScanner.availableServers()
+                        .filter { it.config.connectionKey() in allowedKeys }
+                        .filterNot { autoSwitcher.isBlacklisted(it.config) }
                     if (_uiState.value.isAutomaticMode) {
-                        val currentConfig = autoSwitcher.currentServer.value?.config
-                            ?.takeIf { current -> configs.any { it.connectionKey() == current.connectionKey() } }
-                            ?: configs.first()
-                        autoSwitcher.selectImmediate(currentConfig, configs)
+                        val bestScanned = scanned.minByOrNull { it.latencyMs }
+                        if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
+                        else {
+                            val currentConfig = autoSwitcher.currentServer.value?.config
+                                ?.takeIf { current -> configs.any { it.connectionKey() == current.connectionKey() } }
+                                ?: configs.first()
+                            autoSwitcher.selectImmediate(currentConfig, configs)
+                        }
                     } else {
-                        manuallySelectedServer?.takeIf { selectedServer ->
-                            configs.any { it.connectionKey() == selectedServer.config.connectionKey() }
-                        } ?: autoSwitcher.selectImmediate(configs.first(), configs)
+                        manuallySelectedServer?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
+                            ?: run {
+                                val bestScanned = scanned.minByOrNull { it.latencyMs }
+                                if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
+                                else autoSwitcher.selectImmediate(configs.first(), configs)
+                            }
                     }
                 }
                 if (selected == null) {
@@ -405,14 +406,12 @@ class HomeViewModel @Inject constructor(
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                Log.e(TAG, "Selection failed", e)
                 connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Ошибка выбора сервера"))
             }
         }
     }
 
     fun onVpnPermissionDenied() {
-        logCollector.warn(TAG, "VPN permission denied")
         connectionCoordinator.send(ConnectionEvent.ShowError("Нет разрешения VPN. Выдайте доступ в настройках."))
     }
 
@@ -450,8 +449,7 @@ class HomeViewModel @Inject constructor(
         try {
             val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
             context.startForegroundService(intent)
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     fun refreshSubscription() {
