@@ -1,14 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Центральный щит с ключом (VPN-символика), вписан в safe zone -->
-    <group android:scaleX="0.5" android:scaleY="0.5"
-           android:translateX="27" android:translateY="27">
+    <group
+        android:translateX="6"
+        android:translateY="6"
+        android:scaleX="0.1875"
+        android:scaleY="0.1875">
+        <path
+            android:fillColor="#087DFF"
+            android:fillAlpha="0.35"
+            android:pathData="M126,137 L211,137 L263,304 L326,137 L408,137 L306,371 Q294,397 271,397 Q248,397 236,371 Z" />
+        <path
+            android:pathData="M126,124 L208,124 L257,288 L320,124 L396,124 L294,370 Q283,395 260,395 Q238,395 226,370 Z"
+            android:strokeWidth="4"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="126"
+                    android:startY="124"
+                    android:endX="360"
+                    android:endY="395">
+                    <item android:offset="0" android:color="#38E7FF" />
+                    <item android:offset="0.38" android:color="#087DFF" />
+                    <item android:offset="1" android:color="#253BFF" />
+                </gradient>
+            </aapt:attr>
+        </path>
         <path
             android:fillColor="#FFFFFF"
-            android:pathData="M54,10L18,26v22c0,20.79 14.4,40.22 36,45 21.6,-4.78 36,-24.21 36,-45V26L54,10zM54,52h26c-1.98,15.44 -12.29,29.2 -26,33.53V52H28V28.9l26,-11.56V52z" />
+            android:fillAlpha="0.12"
+            android:pathData="M128,128 L208,128 L257,288 L226,370 Z" />
+        <path
+            android:fillColor="#001B80"
+            android:fillAlpha="0.24"
+            android:pathData="M320,128 L392,128 L294,370 L271,394 L257,288 Z" />
     </group>
 </vector>
