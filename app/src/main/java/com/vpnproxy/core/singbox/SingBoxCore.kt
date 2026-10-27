@@ -152,7 +152,7 @@ class SingBoxCore(
 
     /** Queues a serialized stop without blocking the caller/native callback. */
     fun stopAsync(): Deferred<Result<Unit>> {
-        val generation = lifecycleGeneration.incrementAndGet()
+        val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
         return lifecycleScope.async {
             lifecycleMutex.withLock {
@@ -163,7 +163,7 @@ class SingBoxCore(
 
     /** Compatibility API for existing synchronous call sites. */
     fun startBlocking(configJson: String): Result<Unit> {
-        val generation = lifecycleGeneration.incrementAndGet()
+        val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
         return runBlocking {
             lifecycleMutex.withLock { runCatching { startSuspended(configJson, generation) } }
@@ -172,7 +172,7 @@ class SingBoxCore(
 
     /** Compatibility API for existing synchronous call sites. */
     fun stopBlocking(): Result<Unit> {
-        val generation = lifecycleGeneration.incrementAndGet()
+        val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
         return runBlocking {
             lifecycleMutex.withLock { runCatching { stopSuspended() } }
@@ -192,7 +192,7 @@ class SingBoxCore(
     private suspend fun startSuspended(configJson: String, generation: Long) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
         if (!lifecycleGeneration.isCurrent(generation)) {
-            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.get()}")
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.current()}")
             return
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
@@ -209,8 +209,8 @@ class SingBoxCore(
             logCollector?.error(TAG, message)
             throw IllegalStateException(message)
         }
-        if (generation != lifecycleGeneration.get()) {
-            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.get()}")
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.current()}")
             return
         }
         logCollector?.info(TAG, "Core lifecycle: port ${SingboxConfigBuilder.PROXY_PORT} free=true")
@@ -224,8 +224,8 @@ class SingBoxCore(
             logCollector?.info(TAG, "Core lifecycle: cooldown applied 0ms")
         }
 
-        if (generation != lifecycleGeneration.get()) {
-            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after cooldown; current=${lifecycleGeneration.get()}")
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after cooldown; current=${lifecycleGeneration.current()}")
             return
         }
         logCollector?.info(TAG, "Core lifecycle: start phase begin generation=$generation")
@@ -233,8 +233,8 @@ class SingBoxCore(
         try {
             setup(context)
             logCollector?.info(TAG, "libbox logger attached")
-            if (generation != lifecycleGeneration.get()) {
-                logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation immediately before native start; current=${lifecycleGeneration.get()}")
+            if (!lifecycleGeneration.isCurrent(generation)) {
+                logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation immediately before native start; current=${lifecycleGeneration.current()}")
                 return
             }
             val portFreeBeforeStart = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, 2_000L)
