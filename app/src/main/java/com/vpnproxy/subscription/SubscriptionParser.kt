@@ -11,10 +11,10 @@ import javax.inject.Singleton
 
 /**
  * Парсер подписок. Поддерживает:
- * 1. base64-encoded список vless:// / hysteria2:// / tuic:// ссылок
+ * 1. base64-encoded список vless/ss/vmess/trojan/socks/hysteria2/tuic ссылок
  * 2. JSON-массив legacy / Sing-box конфигов
  * 3. Clash YAML
- * 4. Обычный текст с vless:// / hysteria2:// / tuic:// построчно
+ * 4. Обычный текст с vless/ss/vmess/trojan/socks/hysteria2/tuic построчно
  */
 @Singleton
 class SubscriptionParser @Inject constructor(
@@ -47,12 +47,6 @@ class SubscriptionParser @Inject constructor(
         val congestionControl: String = "bbr",
         val extra: String? = null
     ) {
-        /**
-         * Stable identity for a connection profile. Endpoint + UUID alone is too coarse:
-         * subscriptions can publish the same endpoint with different transports/security.
-         * Name and providerTag are intentionally excluded so identical profiles from
-         * different providers are counted once globally but remain attributable per provider.
-         */
         fun connectionKey(): String = listOf(
             address.lowercase(java.util.Locale.ROOT),
             port.toString(),
@@ -78,9 +72,13 @@ class SubscriptionParser @Inject constructor(
         ).joinToString("\u001F")
 
         fun isValid(): Boolean {
-            if (uuid.isBlank() || address.isBlank()) return false
+            if (address.isBlank()) return false
             if (port !in 1..65535) return false
-            if (transport in setOf("hysteria2", "hy2", "tuic")) return true
+            if (transport in setOf("hysteria2", "hy2", "tuic", "shadowsocks", "socks")) {
+                if (transport == "shadowsocks" && password.isNullOrBlank() && uuid.isBlank()) return false
+                return true
+            }
+            if (uuid.isBlank()) return false
             if (security == "reality" && publicKey.isNullOrBlank()) return false
             return true
         }
@@ -97,7 +95,11 @@ class SubscriptionParser @Inject constructor(
         if (trimmed.isBlank()) return emptyList()
 
         val decoded = tryBase64Decode(trimmed)
-        if (decoded != null && (decoded.contains("vless://") || decoded.contains("hysteria2://") || decoded.contains("hy2://") || decoded.contains("tuic://"))) {
+        if (decoded != null && (
+            decoded.contains("vless://") || decoded.contains("hysteria2://") || decoded.contains("hy2://") ||
+            decoded.contains("tuic://") || decoded.contains("ss://") || decoded.contains("vmess://") ||
+            decoded.contains("trojan://") || decoded.contains("socks://") || decoded.contains("socks5://")
+        )) {
             return parseVlessLines(decoded, providerTag)
         }
 
@@ -111,7 +113,11 @@ class SubscriptionParser @Inject constructor(
             if (yamlResult.isNotEmpty()) return yamlResult
         }
 
-        if (trimmed.contains("vless://") || trimmed.contains("hysteria2://") || trimmed.contains("hy2://") || trimmed.contains("tuic://")) {
+        if (
+            trimmed.contains("vless://") || trimmed.contains("hysteria2://") || trimmed.contains("hy2://") ||
+            trimmed.contains("tuic://") || trimmed.contains("ss://") || trimmed.contains("vmess://") ||
+            trimmed.contains("trojan://") || trimmed.contains("socks://") || trimmed.contains("socks5://")
+        ) {
             return parseVlessLines(trimmed, providerTag)
         }
 
@@ -133,7 +139,12 @@ class SubscriptionParser @Inject constructor(
                 line.startsWith("vless://") ||
                     line.startsWith("hysteria2://") ||
                     line.startsWith("hy2://") ||
-                    line.startsWith("tuic://")
+                    line.startsWith("tuic://") ||
+                    line.startsWith("ss://") ||
+                    line.startsWith("vmess://") ||
+                    line.startsWith("trojan://") ||
+                    line.startsWith("socks://") ||
+                    line.startsWith("socks5://")
             }
             .mapNotNull { line ->
                 when {
@@ -141,6 +152,11 @@ class SubscriptionParser @Inject constructor(
                     line.startsWith("hysteria2://") || line.startsWith("hy2://") ->
                         parseHysteria2Uri(line, providerTag)
                     line.startsWith("tuic://") -> parseTuicUri(line, providerTag)
+                    line.startsWith("ss://") -> ExtraUriParsers.parseShadowsocks(line, providerTag, logCollector)
+                    line.startsWith("vmess://") -> ExtraUriParsers.parseVmess(line, providerTag, logCollector)
+                    line.startsWith("trojan://") -> ExtraUriParsers.parseTrojan(line, providerTag, logCollector)
+                    line.startsWith("socks://") || line.startsWith("socks5://") ->
+                        ExtraUriParsers.parseSocks(line, providerTag, logCollector)
                     else -> null
                 }
             }
@@ -226,18 +242,10 @@ class SubscriptionParser @Inject constructor(
     private fun decodeUriComponent(value: String): String =
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
 
-    /**
-     * Optional XHTTP `extra`:
-     * - missing / blank / literal "null" → empty JSON object without WARN
-     * - valid JSON object → normalized string
-     * - present but invalid / non-object → WARN once and null
-     */
     private fun normalizeXhttpExtra(
         decodedValue: String?,
         queryParams: Map<String, String> = emptyMap()
     ): String? {
-        // parseUriQuery() has already URL-decoded the value. Decoding it a second time
-        // would turn literal '+' characters inside JSON values into spaces.
         val trimmed = decodedValue.orEmpty().trim()
         val extraObject = if (
             trimmed.isEmpty() ||
@@ -262,8 +270,6 @@ class SubscriptionParser @Inject constructor(
         }
 
         val normalized = extraObject.toMutableMap()
-        // Some Xray links put these fields directly in the URI query rather than in
-        // URL-encoded extra JSON. Explicit extra settings take precedence over flat aliases.
         val placementKeys = setOf(
             "session_placement", "sessionPlacement", "sessionIDPlacement",
             "sessionIdPlacement", "session_id_placement"
@@ -357,7 +363,7 @@ class SubscriptionParser @Inject constructor(
             val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
             val uuid = user["id"]?.jsonPrimitive?.content ?: return null
             val stream = obj["streamSettings"]?.jsonObject
-            val transport = stream?.get("method")?.jsonPrimitive?.content ?: "tcp"
+            val transport = stream?.get("network")?.jsonPrimitive?.content ?: "tcp"
             val security = stream?.get("security")?.jsonPrimitive?.content ?: "none"
             val reality = stream?.get("realitySettings")?.jsonObject
             val xhttp = stream?.get("xhttpSettings")?.jsonObject
@@ -396,13 +402,10 @@ class SubscriptionParser @Inject constructor(
                     val tls = proxy["tls"] as? Boolean ?: false
                     ParsedConfig(
                         uuid = uuid, address = server, port = port,
-                        transport = if (network == "ws") "ws" else "raw",
-                        security = if (tls) "tls" else "none",
+                        transport = network, security = if (tls) "tls" else "none",
                         sni = proxy["servername"] as? String,
-                        path = proxy["ws-path"] as? String,
-                        host = proxy["ws-headers"]?.let { (it as? Map<String, String>)?.get("Host") },
-                        mode = null, fingerprint = proxy["client-fingerprint"] as? String,
-                        publicKey = null, shortId = null, flow = proxy["flow"] as? String,
+                        path = null, host = null, mode = null, fingerprint = null,
+                        publicKey = null, shortId = null, flow = null,
                         name = name, providerTag = providerTag
                     ).takeIf { it.isValid() }
                 } catch (_: Exception) { null }
