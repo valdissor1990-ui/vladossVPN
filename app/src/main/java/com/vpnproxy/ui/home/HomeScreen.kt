@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,10 +23,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vpnproxy.R
 import com.vpnproxy.ui.components.ConnectionStatsCard
 import com.vpnproxy.ui.components.GlowPowerButton
 import com.vpnproxy.ui.servers.ServerListContent
@@ -176,6 +179,28 @@ fun HomeScreen(
                     }
                 )
 
+                val canSwitchServer = uiState.connectionState == ConnectionUiState.CONNECTED ||
+                    uiState.connectionState == ConnectionUiState.UNSTABLE
+                if (canSwitchServer) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.switchServer() },
+                        enabled = !uiState.isBusy,
+                        modifier = Modifier.fillMaxWidth(0.72f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            tint = OnDark
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.switch_server),
+                            color = OnDark
+                        )
+                    }
+                }
+
                 Spacer(Modifier.height(12.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -286,8 +311,8 @@ fun HomeScreen(
 
                 Card(
                     modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showServers = true },
+                        .fillMaxWidth()
+                        .clickable { showServers = true },
                     colors = CardDefaults.cardColors(
                         containerColor = CosmosSurface.copy(alpha = 0.9f)
                     )
