@@ -1,7 +1,10 @@
 package com.vpnproxy.update
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -12,12 +15,7 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Установка APK:
- * 1. Проверяет разрешение REQUEST_INSTALL_PACKAGES
- * 2. Если не дано — открывает настройки
- * 3. Иначе — запускает системный установщик через ACTION_VIEW + FileProvider
- */
+/** Validates the downloaded APK and launches Android's package installer. */
 @Singleton
 class UpdateInstaller @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -25,14 +23,9 @@ class UpdateInstaller @Inject constructor(
 ) {
     companion object { private const val TAG = "UpdateInstaller" }
 
-    /** Можно ли устанавливать пакеты без запроса пользователя. */
-    fun canInstallPackages(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.packageManager.canRequestPackageInstalls()
-        } else true
-    }
+    fun canInstallPackages(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.packageManager.canRequestPackageInstalls() else true
 
-    /** Открывает экран настроек «Установка неизвестных приложений». */
     fun openInstallPermissionSettings() {
         try {
             val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
@@ -45,26 +38,55 @@ class UpdateInstaller @Inject constructor(
         }
     }
 
-    /**
-     * Запускает установку APK. Вызывать только если canInstallPackages() == true.
-     */
+    @Suppress("DEPRECATION")
+    private fun readVersionCode(info: PackageInfo): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+
     fun install(apkFile: File): Boolean {
         return try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apkFile
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
+            if (!apkFile.isFile || apkFile.length() <= 0L) {
+                logCollector.warn(TAG, "Install rejected: APK file missing or empty")
+                return false
+            }
+            val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            }
+            if (archiveInfo == null) {
+                logCollector.warn(TAG, "Install rejected: Android cannot parse APK")
+                return false
+            }
+            if (archiveInfo.packageName != context.packageName) {
+                logCollector.warn(TAG, "Install rejected: package mismatch expected=${context.packageName} actual=${archiveInfo.packageName}")
+                return false
+            }
+            val currentInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            val newVersion = readVersionCode(archiveInfo)
+            val currentVersion = readVersionCode(currentInfo)
+            if (newVersion <= currentVersion) {
+                logCollector.warn(TAG, "Install rejected: APK version=$newVersion current=$currentVersion")
+                return false
+            }
+
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
+            val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                data = uri
+                clipData = ClipData.newRawUri(apkFile.name, uri)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(intent)
-            logCollector.info(TAG, "Install intent launched for ${apkFile.name}")
+            logCollector.info(TAG, "Package installer launched: ${apkFile.name}, versionCode=$newVersion")
             true
         } catch (e: Exception) {
-            logCollector.error(TAG, "Install failed", e)
+            logCollector.error(TAG, "Install failed: ${e.javaClass.simpleName}: ${e.message}", e)
             false
         }
     }
