@@ -187,7 +187,7 @@ class SubscriptionParser @Inject constructor(
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to parse hysteria2 URI", e)
+            logCollector.debug(TAG, "Failed to parse hysteria2 URI: ${e.message}")
             null
         }
     }
@@ -220,7 +220,7 @@ class SubscriptionParser @Inject constructor(
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to parse tuic URI", e)
+            logCollector.debug(TAG, "Failed to parse tuic URI: ${e.message}")
             null
         }
     }
@@ -325,7 +325,7 @@ class SubscriptionParser @Inject constructor(
             }
             config
         } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to parse vless URI", e)
+            logCollector.debug(TAG, "Failed to parse vless URI: ${e.message}")
             null
         }
     }
@@ -400,18 +400,30 @@ class SubscriptionParser @Inject constructor(
                     val uuid = proxy["uuid"] as? String ?: return@mapNotNull null
                     val network = proxy["network"] as? String ?: "tcp"
                     val tls = proxy["tls"] as? Boolean ?: false
+                    val reality = proxy["reality-opts"] as? Map<String, Any>
+                    val security = when {
+                        reality != null -> "reality"
+                        tls -> "tls"
+                        else -> "none"
+                    }
                     ParsedConfig(
                         uuid = uuid, address = server, port = port,
-                        transport = network, security = if (tls) "tls" else "none",
-                        sni = proxy["servername"] as? String,
-                        path = null, host = null, mode = null, fingerprint = null,
-                        publicKey = null, shortId = null, flow = null,
+                        transport = network, security = security,
+                        sni = proxy["servername"] as? String ?: proxy["sni"] as? String,
+                        path = (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
+                            ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String,
+                        host = ((proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>)?.get("Host") as? String,
+                        mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
+                        fingerprint = proxy["client-fingerprint"] as? String,
+                        publicKey = reality?.get("public-key") as? String,
+                        shortId = reality?.get("short-id") as? String,
+                        flow = proxy["flow"] as? String,
                         name = name, providerTag = providerTag
                     ).takeIf { it.isValid() }
                 } catch (_: Exception) { null }
             }
         } catch (e: Exception) {
-            logCollector.warn(TAG, "YAML parse failed: ${e.message}")
+            logCollector.warn(TAG, "Clash YAML parse failed: ${e.message}")
             emptyList()
         }
     }
