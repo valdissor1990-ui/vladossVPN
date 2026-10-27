@@ -1,24 +1,28 @@
 # Протоколы и конфигурация
 
-## Поддерживаемые протоколы
+## Production path (парсер → SingboxConfigBuilder → libbox)
 
-- **VLESS + Reality:** UUID, SNI, fingerprint, public key (`pbk`), short ID (`sid`) и flow.
-- **VLESS transport:** TCP, WebSocket, gRPC, HTTP, HTTPUpgrade, QUIC и XHTTP (XHTTP предоставляется форком sing-box-lx 1.14.3-lx.23).
-- **Hysteria2:** пароль, TLS/SNI, ALPN и obfs Salamander.
-- **TUIC:** UUID, пароль, TLS/SNI, ALPN, `congestion_control` и `udp_relay_mode=native`.
+| Протокол | URI | Outbound |
+|----------|-----|----------|
+| VLESS (+ Reality, XHTTP, WS, gRPC, …) | `vless://` | да |
+| Hysteria2 | `hysteria2://` / `hy2://` | да |
+| TUIC | `tuic://` | да |
+| Shadowsocks | `ss://` | да (1.0.776) |
+| VMess | `vmess://` | да (1.0.776) |
+| Trojan | `trojan://` | да (1.0.776) |
+| SOCKS5 | `socks://` / `socks5://` | да (1.0.776) |
+
+## Как кодируется протокол в `ParsedConfig`
+
+- `transport = hysteria2 | tuic | shadowsocks | socks | trojan | vmess` — тип outbound
+- для VLESS `transport` = сеть (`tcp`/`ws`/`xhttp`/…)
+- для VMess/Trojan сеть лежит в `mode` (`tcp`/`ws`/…)
+- Shadowsocks: `security` = method, `password`/`uuid` = пароль
+
+## Пакет `core/protocols/`
+
+Отдельная модель для будущей миграции. Сейчас production идёт через `subscription.SubscriptionParser` + `ExtraUriParsers`.
 
 ## XHTTP через sing-box-lx
 
-Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` версии `1.14.3-lx.23`, собранный с `with_xhttp`. Builder создаёт `transport.type=xhttp` и передаёт `host`, `path`, `mode`; поля JSON из URI-параметра `extra` разворачиваются в поддерживаемые XHTTP options. TLS/Reality остаётся на уровне outbound `tls`. Релиз AAR фиксируется SHA-256 в `scripts/download_libbox.sh`.
-
-## VLESS + Reality: поля URI
-
-| URI parameter | Sing-box JSON |
-|---|---|
-| `pbk` | `tls.reality.public_key` |
-| `sid` | `tls.reality.short_id` |
-| `sni` | `tls.server_name` |
-| `fp` | `tls.utls.fingerprint` |
-| `flow` | outbound `flow` (например, `xtls-rprx-vision`) |
-
-Reality + Vision flow подходит для поддерживаемого TCP-сценария. Не задавайте Vision flow для транспорта, который его не поддерживает.
+Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` `1.14.3-lx.23` с `with_xhttp`.
