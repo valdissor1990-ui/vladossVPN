@@ -1,7 +1,7 @@
 package com.vpnproxy.logging
 
 /**
- * Маскировка чувствительных данных: UUID, Reality-ключи, URL подписок, токены.
+ * Маскировка чувствительных данных: UUID, Reality-ключи, URL подписок, токены, пароли.
  *
  * ⚠️ Java/Kotlin Regex НЕ поддерживает variable-length lookbehind.
  * Поэтому вместо `(?<=prefix)value` используем capture-group + replace с лямбдой:
@@ -33,6 +33,12 @@ object SensitiveMasker {
     /** token=XXX / token: XXX. */
     private val TOKEN_REGEX = Regex(
         """(?:token[=:]\\s*)([A-Za-z0-9_\\-]+)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** password= / password: / "password": "..." / obfsPassword= */
+    private val PASSWORD_REGEX = Regex(
+        """(?:password|obfsPassword|obfs-password)["']?\\s*[:=]\\s*["']?([^\\s,"'\\\\]+)|password=([^&\\s]+)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -88,6 +94,12 @@ object SensitiveMasker {
                 val full = m.value
                 val prefixLen = full.length - m.groupValues[1].length
                 full.substring(0, prefixLen) + "***TOKEN***"
+            }
+
+            // 6. passwords (subscription / protocol secrets)
+            result = PASSWORD_REGEX.replace(result) { m ->
+                val secret = m.groupValues.drop(1).firstOrNull { it.isNotEmpty() } ?: return@replace "***PASSWORD***"
+                m.value.replace(secret, "***PASSWORD***")
             }
 
             result

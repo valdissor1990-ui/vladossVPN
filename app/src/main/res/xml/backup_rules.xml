@@ -3,6 +3,9 @@
 <full-backup-content>
     <!-- Исключаем чувствительные данные из бэкапа -->
     <exclude domain="sharedpref" path="vpnproxy_subscriptions.xml" />
+    <exclude domain="sharedpref" path="vpnproxy_subscriptions" />
     <exclude domain="file" path="logs/" />
+    <exclude domain="file" path="cached_configs.json" />
     <exclude domain="file" path="hev_config.yaml" />
+    <exclude domain="file" path="updates/" />
 </full-backup-content>

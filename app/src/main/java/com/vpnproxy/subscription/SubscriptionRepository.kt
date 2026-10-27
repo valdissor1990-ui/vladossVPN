@@ -2,6 +2,7 @@ package com.vpnproxy.subscription
 
 import android.content.Context
 import android.os.Build
+import androidx.security.crypto.EncryptedFile
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.core.diagnostics.DeviceIdManager
@@ -221,8 +222,6 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            // Preserve attribution per provider while removing duplicate profiles within each
-            // provider. Global scanning/counts use connectionKey() without providerTag.
             val providerUniqueConfigs = allConfigsList.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -384,7 +383,6 @@ class SubscriptionRepository @Inject constructor(
         } catch (_: Exception) { }
     }
 
-    /** Configs deduplicated per provider, preserving provider attribution for subscription UI. */
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
@@ -418,7 +416,7 @@ class SubscriptionRepository @Inject constructor(
         val congestionControl: String = "bbr",
         val extra: String? = null
     ) {
-        fun toParsedConfig() = ParsedConfig(
+        fun toParsedConfig(): ParsedConfig = ParsedConfig(
             uuid = uuid, address = address, port = port, transport = transport, security = security,
             sni = sni, path = path, host = host, mode = mode, fingerprint = fingerprint,
             publicKey = publicKey, shortId = shortId, flow = flow, name = name, providerTag = providerTag,
@@ -426,6 +424,7 @@ class SubscriptionRepository @Inject constructor(
             obfsPassword = obfsPassword, pinSHA256 = pinSHA256,
             congestionControl = congestionControl, extra = extra
         )
+
         companion object {
             fun from(c: ParsedConfig) = CachedConfig(
                 uuid = c.uuid, address = c.address, port = c.port, transport = c.transport, security = c.security,
@@ -438,11 +437,27 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
+    private fun cacheFile(): File = File(context.filesDir, CACHE_FILE)
+
+    private fun encryptedCacheFile(): EncryptedFile =
+        EncryptedFile.Builder(
+            context,
+            cacheFile(),
+            masterKey,
+            EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB
+        ).build()
+
     private fun saveConfigsToCache(configs: List<ParsedConfig>) {
         try {
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
-            File(context.filesDir, CACHE_FILE).writeText(jsonStr)
+            val target = cacheFile()
+            if (target.exists()) {
+                target.delete()
+            }
+            encryptedCacheFile().openFileOutput().use { out ->
+                out.write(jsonStr.toByteArray(Charsets.UTF_8))
+            }
         } catch (e: Exception) {
             logCollector.error(TAG, "Cache save failed", e)
         }
@@ -450,9 +465,26 @@ class SubscriptionRepository @Inject constructor(
 
     private fun loadConfigsFromCache(): List<CachedConfig> {
         return try {
-            val f = File(context.filesDir, CACHE_FILE)
-            if (!f.exists()) return emptyList()
-            json.decodeFromString(configsSerializer, f.readText())
+            val plain = cacheFile()
+            if (plain.exists()) {
+                try {
+                    val text = plain.readText()
+                    val trimmed = text.trimStart()
+                    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+                        val parsed = json.decodeFromString(configsSerializer, text)
+                        saveConfigsToCache(parsed.map { it.toParsedConfig() })
+                        logCollector.info(TAG, "Migrated plaintext cached_configs.json to EncryptedFile")
+                        return parsed
+                    }
+                } catch (_: Exception) {
+                    // fall through to encrypted read
+                }
+            }
+            if (!plain.exists()) return emptyList()
+            encryptedCacheFile().openFileInput().use { input ->
+                val text = input.readBytes().toString(Charsets.UTF_8)
+                json.decodeFromString(configsSerializer, text)
+            }
         } catch (e: Exception) {
             logCollector.error(TAG, "Cache load failed", e)
             emptyList()

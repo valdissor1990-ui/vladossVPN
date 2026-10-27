@@ -23,8 +23,18 @@ class UpdateInstaller @Inject constructor(
 ) {
     companion object { private const val TAG = "UpdateInstaller" }
 
-    fun canInstallPackages(): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.packageManager.canRequestPackageInstalls() else true
+    fun canInstallPackages(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+        return try {
+            context.packageManager.canRequestPackageInstalls()
+        } catch (e: SecurityException) {
+            logCollector.error(TAG, "canRequestPackageInstalls blocked — need REQUEST_INSTALL_PACKAGES", e)
+            false
+        } catch (e: Exception) {
+            logCollector.error(TAG, "canInstallPackages failed: ${e.javaClass.simpleName}", e)
+            false
+        }
+    }
 
     fun openInstallPermissionSettings() {
         try {
