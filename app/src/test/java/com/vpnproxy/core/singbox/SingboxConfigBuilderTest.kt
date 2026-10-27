@@ -201,9 +201,7 @@ class SingboxConfigBuilderTest {
             SingboxConfigBuilder.build(config)
         ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject["transport"]!!.jsonObject
 
-        // Supported field survives
         assertEquals("100-200", transport["x_padding_bytes"]!!.jsonPrimitive.content)
-        // Unsupported fields must not appear under any known alias
         assertFalse(transport.containsKey("session_idtable"))
         assertFalse(transport.containsKey("session_i_d_table"))
         assertFalse(transport.containsKey("sessionIDTable"))
@@ -234,7 +232,6 @@ class SingboxConfigBuilderTest {
         assertFalse(first.connectionKey() == second.connectionKey())
     }
 
-
     @Test
     fun transportPathsAreNormalizedWhenLeadingSlashIsMissing() {
         val ws = config("ws", "secret").copy(path = "ws")
@@ -250,4 +247,85 @@ class SingboxConfigBuilderTest {
         assertEquals("/xhttp", xhttpTransport["path"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun shadowsocksBuildsMethodAndPassword() {
+        val cfg = ParsedConfig(
+            uuid = "ss-pass",
+            address = "ss.example.org",
+            port = 8388,
+            transport = "shadowsocks",
+            security = "aes-256-gcm",
+            sni = null, path = null, host = null, mode = null,
+            fingerprint = null, publicKey = null, shortId = null, flow = null,
+            name = "ss", password = "ss-pass"
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(cfg)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        assertEquals("shadowsocks", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals("aes-256-gcm", outbound["method"]!!.jsonPrimitive.content)
+        assertEquals("ss-pass", outbound["password"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun vmessBuildsUuidAndType() {
+        val cfg = ParsedConfig(
+            uuid = "11111111-1111-1111-1111-111111111111",
+            address = "vmess.example.org",
+            port = 443,
+            transport = "vmess",
+            security = "tls",
+            sni = "vmess.example.org", path = null, host = null, mode = "tcp",
+            fingerprint = "chrome", publicKey = null, shortId = null, flow = null,
+            name = "vmess"
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(cfg)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        assertEquals("vmess", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals("11111111-1111-1111-1111-111111111111", outbound["uuid"]!!.jsonPrimitive.content)
+        assertEquals("auto", outbound["security"]!!.jsonPrimitive.content)
+        assertTrue(outbound.containsKey("tls"))
+    }
+
+    @Test
+    fun trojanBuildsPasswordAndTls() {
+        val cfg = ParsedConfig(
+            uuid = "trojan-secret",
+            address = "trojan.example.org",
+            port = 443,
+            transport = "trojan",
+            security = "tls",
+            sni = "trojan.example.org", path = null, host = null, mode = "tcp",
+            fingerprint = null, publicKey = null, shortId = null, flow = null,
+            name = "trojan", password = "trojan-secret"
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(cfg)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        assertEquals("trojan", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals("trojan-secret", outbound["password"]!!.jsonPrimitive.content)
+        assertTrue(outbound.containsKey("tls"))
+    }
+
+    @Test
+    fun socksBuildsVersionAndOptionalAuth() {
+        val cfg = ParsedConfig(
+            uuid = "user",
+            address = "socks.example.org",
+            port = 1080,
+            transport = "socks",
+            security = "none",
+            sni = null, path = null, host = null, mode = null,
+            fingerprint = null, publicKey = null, shortId = null, flow = null,
+            name = "socks", password = "pass"
+        )
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(cfg)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+        assertEquals("socks", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals("5", outbound["version"]!!.jsonPrimitive.content)
+        assertEquals("user", outbound["username"]!!.jsonPrimitive.content)
+        assertEquals("pass", outbound["password"]!!.jsonPrimitive.content)
+    }
 }
