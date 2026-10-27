@@ -23,8 +23,27 @@ class UpdateInstaller @Inject constructor(
 ) {
     companion object { private const val TAG = "UpdateInstaller" }
 
-    fun canInstallPackages(): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.packageManager.canRequestPackageInstalls() else true
+    /**
+     * Returns whether the app may request package installs.
+     * Must never throw: missing REQUEST_INSTALL_PACKAGES in the manifest causes
+     * SecurityException on API 26+ (seen as FATAL CrashHandler in production logs).
+     */
+    fun canInstallPackages(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+        return try {
+            context.packageManager.canRequestPackageInstalls()
+        } catch (e: SecurityException) {
+            logCollector.error(
+                TAG,
+                "canRequestPackageInstalls blocked — declare android.permission.REQUEST_INSTALL_PACKAGES",
+                e
+            )
+            false
+        } catch (e: Exception) {
+            logCollector.error(TAG, "canInstallPackages failed: ${e.javaClass.simpleName}", e)
+            false
+        }
+    }
 
     fun openInstallPermissionSettings() {
         try {
