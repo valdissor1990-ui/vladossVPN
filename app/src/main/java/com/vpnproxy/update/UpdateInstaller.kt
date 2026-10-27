@@ -3,6 +3,7 @@ package com.vpnproxy.update
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -37,6 +38,10 @@ class UpdateInstaller @Inject constructor(
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun readVersionCode(info: PackageInfo): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+
     fun install(apkFile: File): Boolean {
         return try {
             if (!apkFile.isFile || apkFile.length() <= 0L) {
@@ -63,8 +68,8 @@ class UpdateInstaller @Inject constructor(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            val newVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) archiveInfo.longVersionCode else @Suppress("DEPRECATION") archiveInfo.versionCode.toLong()
-            val currentVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) currentInfo.longVersionCode else @Suppress("DEPRECATION") currentInfo.versionCode.toLong()
+            val newVersion = readVersionCode(archiveInfo)
+            val currentVersion = readVersionCode(currentInfo)
             if (newVersion <= currentVersion) {
                 logCollector.warn(TAG, "Install rejected: APK version=$newVersion current=$currentVersion")
                 return false
