@@ -86,6 +86,8 @@ class VpnProxyService : VpnService() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnJob: Job? = null
+    @Volatile private var restartRequestGeneration: Long = 0L
+    @Volatile private var restartCompletedGeneration: Long = 0L
     private var stateCollectorJob: Job? = null
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
@@ -312,28 +314,48 @@ class VpnProxyService : VpnService() {
     }
 
     private fun restartVpnForDesiredState(state: ConnectionState) {
-        if ((_serviceState.value == ServiceState.Stopping)) return
-        if ((_serviceState.value == ServiceState.Starting)) {
-            logCollector.debug(TAG, "restartVpn skipped: serviceState=${_serviceState.value} for $state")
-            return
-        }
+        if (_serviceState.value == ServiceState.Stopping) return
         if (!connectionCoordinator.hasSelectedServer()) {
             logCollector.warn(TAG, "restartVpn deferred — coordinator has no selected server")
             return
         }
-        vpnJob?.cancel()
+
+        val requestedGeneration = ++restartRequestGeneration
+        val existingJob = vpnJob
+        if (existingJob?.isActive == true) {
+            logCollector.info(
+                TAG,
+                "restartVpn coalesced generation=$requestedGeneration inFlight=true state=$state"
+            )
+            return
+        }
+        if (_serviceState.value == ServiceState.Starting) {
+            logCollector.debug(TAG, "restartVpn skipped: serviceState=${_serviceState.value} generation=$requestedGeneration for $state")
+            return
+        }
+
         vpnJob = scope.launch {
+            var completedThisWorker = restartCompletedGeneration
             try {
                 val controller = lifecycleController
                     ?: error("VPN lifecycle controller was not initialized")
-                controller.restartSession(
-                    coreIsRunning = { _isRunning.value },
-                    stopSession = {
-                        stopVpnInternal("soft restart for $state", softRestart = true)
-                    },
-                    startSession = { startVpnSession() },
-                    restartDelayMs = 3_000L
-                )
+                while (completedThisWorker < restartRequestGeneration &&
+                    _serviceState.value != ServiceState.Stopping
+                ) {
+                    val generation = restartRequestGeneration
+                    logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
+                    controller.restartSession(
+                        coreIsRunning = { _isRunning.value },
+                        stopSession = {
+                            stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
+                        },
+                        startSession = { startVpnSession() },
+                        restartDelayMs = 3_000L
+                    )
+                    completedThisWorker = generation
+                    restartCompletedGeneration = generation
+                    logCollector.info(TAG, "restartVpn worker completed generation=$generation inFlight=false")
+                }
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {

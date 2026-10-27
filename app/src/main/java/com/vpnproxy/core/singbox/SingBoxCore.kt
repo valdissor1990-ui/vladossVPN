@@ -83,6 +83,7 @@ class SingBoxCore(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineName("SingBoxCoreLifecycle")
     )
     private val lifecycleMutex = Mutex()
+    private val lifecycleGeneration = LifecycleGenerationGate()
 
     @Volatile private var currentServer: CommandServer? = null
     @Volatile private var activeConfig: String? = null
@@ -139,29 +140,43 @@ class SingBoxCore(
     }
 
     /** Queues a complete stop/wait/start transition on the single lifecycle executor. */
-    fun startAsync(configJson: String): Deferred<Result<Unit>> = lifecycleScope.async {
-        lifecycleMutex.withLock {
-            runCatching { startSuspended(configJson) }
+    fun startAsync(configJson: String): Deferred<Result<Unit>> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
+        return lifecycleScope.async {
+            lifecycleMutex.withLock {
+                runCatching { startSuspended(configJson, generation) }
+            }
         }
     }
 
     /** Queues a serialized stop without blocking the caller/native callback. */
-    fun stopAsync(): Deferred<Result<Unit>> = lifecycleScope.async {
-        lifecycleMutex.withLock {
-            runCatching { stopSuspended() }
+    fun stopAsync(): Deferred<Result<Unit>> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
+        return lifecycleScope.async {
+            lifecycleMutex.withLock {
+                runCatching { stopSuspended() }
+            }
         }
     }
 
     /** Compatibility API for existing synchronous call sites. */
-    @Synchronized
-    fun startBlocking(configJson: String): Result<Unit> = runBlocking {
-        lifecycleMutex.withLock { runCatching { startSuspended(configJson) } }
+    fun startBlocking(configJson: String): Result<Unit> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
+        return runBlocking {
+            lifecycleMutex.withLock { runCatching { startSuspended(configJson, generation) } }
+        }
     }
 
     /** Compatibility API for existing synchronous call sites. */
-    @Synchronized
-    fun stopBlocking(): Result<Unit> = runBlocking {
-        lifecycleMutex.withLock { runCatching { stopSuspended() } }
+    fun stopBlocking(): Result<Unit> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
+        return runBlocking {
+            lifecycleMutex.withLock { runCatching { stopSuspended() } }
+        }
     }
 
     /** Legacy source-compatible wrapper; lifecycle serialization is owned here. */
@@ -174,16 +189,29 @@ class SingBoxCore(
         stopBlocking().getOrThrow()
     }
 
-    private suspend fun startSuspended(configJson: String) {
+    private suspend fun startSuspended(configJson: String, generation: Long) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
-        logCollector?.info(TAG, "Core lifecycle: stop phase begin")
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.current()}")
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
+        }
+        logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
         stopSuspended()
 
-        val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+        var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
-            val message = "Port ${SingboxConfigBuilder.PROXY_PORT} still in use after 5s, aborting start"
+            logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; force-close and retry once")
+            stopSuspended()
+            portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+        }
+        if (!portFreed) {
+            val message = "Port ${SingboxConfigBuilder.PROXY_PORT} still in use after retry; generation=$generation"
             logCollector?.error(TAG, message)
             throw IllegalStateException(message)
+        }
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.current()}")
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: port ${SingboxConfigBuilder.PROXY_PORT} free=true")
 
@@ -196,14 +224,22 @@ class SingBoxCore(
             logCollector?.info(TAG, "Core lifecycle: cooldown applied 0ms")
         }
 
-        logCollector?.info(TAG, "Core lifecycle: start phase begin")
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after cooldown; current=${lifecycleGeneration.current()}")
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
+        }
+        logCollector?.info(TAG, "Core lifecycle: start phase begin generation=$generation")
         var server: CommandServer? = null
         try {
             setup(context)
             logCollector?.info(TAG, "libbox logger attached")
+            if (!lifecycleGeneration.isCurrent(generation)) {
+                logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation immediately before native start; current=${lifecycleGeneration.current()}")
+                throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
+            }
             val portFreeBeforeStart = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, 2_000L)
             if (!portFreeBeforeStart) {
-                throw IllegalStateException("Port ${SingboxConfigBuilder.PROXY_PORT} not free before start — previous instance not cleaned up")
+                throw IllegalStateException("Port ${SingboxConfigBuilder.PROXY_PORT} not free before start — generation=$generation")
             }
             logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} confirmed free, starting CommandServer")
             val createdServer = CommandServer(handler, platform)
@@ -212,8 +248,17 @@ class SingBoxCore(
             createdServer.startOrReloadService(configJson, OverrideOptions())
             currentServer = createdServer
             activeConfig = configJson
-            logCollector?.info(TAG, "Core lifecycle: started successfully")
+            logCollector?.info(TAG, "Core lifecycle: started successfully generation=$generation")
             Log.i(TAG, "libbox 1.14.3 started in the app process")
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            server?.let { created ->
+                runCatching { created.closeService() }
+                runCatching { created.close() }
+            }
+            runCatching { platform.closeTun() }
+            currentServer = null
+            activeConfig = null
+            throw c
         } catch (t: Throwable) {
             logCollector?.error(TAG, "Core lifecycle: start failed: ${t.message}")
             Log.e(TAG, "Failed to initialize/start libbox", t)
@@ -262,7 +307,8 @@ class SingBoxCore(
      * by this probe, so bind failures remain guarded by the start error path.
      */
     private suspend fun waitForPortFree(host: String, port: Int, timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        val startedAtMs = System.currentTimeMillis()
+        val deadline = startedAtMs + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val occupied = runCatching {
                 Socket().use { socket ->
@@ -270,9 +316,13 @@ class SingBoxCore(
                     true
                 }
             }.getOrDefault(false)
-            if (!occupied) return true
+            if (!occupied) {
+                logCollector?.debug(TAG, "Port $port wait completed free=true elapsedMs=${System.currentTimeMillis() - startedAtMs}")
+                return true
+            }
             delay(PORT_POLL_INTERVAL_MS)
         }
+        logCollector?.warn(TAG, "Port $port wait completed free=false elapsedMs=${System.currentTimeMillis() - startedAtMs} timeoutMs=$timeoutMs")
         return false
     }
 }
