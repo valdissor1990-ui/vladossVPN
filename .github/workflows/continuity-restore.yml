@@ -1,0 +1,115 @@
+name: Continuity Restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Branch to restore files on
+        required: true
+        default: feat/continuity-engine-781
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Fetch main for source files
+        run: git fetch origin main
+
+      - name: Restore AutoSwitcher from main + Continuity patch
+        run: |
+          set -euo pipefail
+          git show origin/main:app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt > /tmp/asw.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("/tmp/asw.kt")
+          t = p.read_text(encoding="utf-8")
+          old = '''    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
+        val key = blacklistKey(target)
+        val expiresAt = nowMs + ttlMs
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
+    }'''
+          new = '''    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
+        // Continuity: hard fail feeds scoring history (chronic free nodes drop rank).
+        runCatching { scoringEngine.recordHardFailure(target, weight = 2) }
+        val key = blacklistKey(target)
+        val priorExpiry = serverBlacklist[key] ?: blacklistPreferences.getLong(key, 0L)
+        val escalated = priorExpiry > 0L
+        val effectiveTtl = if (escalated) maxOf(ttlMs, AutoSwitcherConfig.serverBlacklistEscalatedMs) else ttlMs
+        val expiresAt = nowMs + effectiveTtl
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(TAG, "Server blacklisted for ${effectiveTtl}ms escalated=$escalated on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
+    }'''
+          if old not in t:
+              raise SystemExit("markServerFailed pattern missing")
+          t = t.replace(old, new, 1)
+          Path("app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt").write_text(t, encoding="utf-8")
+          assert "recordHardFailure" in t
+          print("AutoSwitcher OK", len(t))
+          PY
+
+      - name: Restore VpnProxyService + standbyConfigs
+        run: |
+          set -euo pipefail
+          git show origin/main:app/src/main/java/com/vpnproxy/service/VpnProxyService.kt > /tmp/vpn.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          t = Path("/tmp/vpn.kt").read_text(encoding="utf-8")
+          if "standbyConfigs" in t and "buildVpn(parsed, diagnosticOptions, standbyConfigs)" in t:
+              print("already wired")
+          else:
+              m = re.search(r"^([ \t]*)(.*SingboxConfigBuilder\.buildVpn\(parsed,\s*diagnosticOptions\))", t, re.M)
+              if not m:
+                  raise SystemExit("buildVpn call not found")
+              indent = m.group(1)
+              block = (
+                  f"{indent}val standbyConfigs = autoSwitcher.rankedServers.value\n"
+                  f"{indent}    .map {{ it.config }}\n"
+                  f"{indent}    .filter {{ it.connectionKey() != parsed.connectionKey() }}\n"
+                  f"{indent}    .distinctBy {{ it.connectionKey() }}\n"
+                  f"{indent}    .take(com.vpnproxy.smartconnect.AutoSwitcherConfig.urlTestStandbyCount)\n"
+                  f"{indent}if (standbyConfigs.isNotEmpty()) {{\n"
+                  f"{indent}    logCollector.info(TAG, \"Continuity urltest standbys=${{standbyConfigs.size}}: \" +\n"
+                  f"{indent}        standbyConfigs.joinToString {{ it.name }})\n"
+                  f"{indent}}}\n"
+              )
+              start = m.start()
+              t = t[:start] + block + t[start:]
+              t = t.replace(
+                  "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)",
+                  "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)",
+                  1,
+              )
+          Path("app/src/main/java/com/vpnproxy/service/VpnProxyService.kt").write_text(t, encoding="utf-8")
+          assert "standbyConfigs" in t
+          print("VpnProxyService OK", len(t))
+          PY
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt \
+                  app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "fix(continuity): restore AutoSwitcher + VpnProxyService standby wiring"
+            git push origin HEAD:${{ github.event.inputs.target_branch }}
+          fi
