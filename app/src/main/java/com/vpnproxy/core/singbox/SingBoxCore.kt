@@ -163,7 +163,6 @@ class SingBoxCore(
     }
 
     /** Compatibility API for existing synchronous call sites. */
-    @Synchronized
     fun startBlocking(configJson: String): Result<Unit> {
         val generation = lifecycleGeneration.incrementAndGet()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
@@ -173,7 +172,6 @@ class SingBoxCore(
     }
 
     /** Compatibility API for existing synchronous call sites. */
-    @Synchronized
     fun stopBlocking(): Result<Unit> {
         val generation = lifecycleGeneration.incrementAndGet()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
