@@ -36,7 +36,7 @@ object AutoSwitcherConfig {
     const val serverBlacklistEscalatedMs = 45 * 60_000L
     /** After Connected, suppress automatic app-level switches (core urltest still active). */
     const val postConnectWarmupMs = 60_000L
-    const val ruTokenPattern = "(^|[^a-z0-9])ru([^a-z0-9]|$)"
+    const val ruTokenPattern = "(^|[^a-z0-9])ru([^a-z0-9]|$)
     const val microProbeUrl = "https://proof.ovh.net/files/1Mb.dat"
     /** Extra outbounds packed into sing-box urltest group beside the primary. */
     const val urlTestStandbyCount = 2
