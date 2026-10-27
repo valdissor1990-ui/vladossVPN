@@ -523,6 +523,7 @@ class AutoSwitcher @Inject constructor(
         _rankedServers.value = listOf(selected) + filtered
             .filterNot { sameConfig(it, config) }
             .map { ScoredServer(it, Long.MAX_VALUE, 0f, 0f, 0f) }
+        connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(_rankedServers.value))
         baselineRtt = 0L
         consecutiveErrors = 0
         logCollector.info(TAG, "Instant connect to [${config.name}] — background probing scheduled")
@@ -534,6 +535,7 @@ class AutoSwitcher @Inject constructor(
         val selected = filtered.firstOrNull { sameConfig(it.config, server.config) } ?: server
         _currentServer.value = selected
         _rankedServers.value = listOf(selected) + filtered.filterNot { sameConfig(it.config, selected.config) }
+        connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(_rankedServers.value))
         baselineRtt = selected.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
         consecutiveErrors = 0
         logCollector.info(TAG, "Instant scanned-server selection -> ${selected.config.name} (${selected.latencyMs}ms)")
@@ -577,6 +579,7 @@ class AutoSwitcher @Inject constructor(
                     return@launch
                 }
                 _rankedServers.value = ranked
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(ranked))
                 logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
 
                 val current = _currentServer.value
