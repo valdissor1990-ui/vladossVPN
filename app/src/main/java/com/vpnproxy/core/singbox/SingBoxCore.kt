@@ -193,7 +193,7 @@ class SingBoxCore(
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
         if (!lifecycleGeneration.isCurrent(generation)) {
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.current()}")
-            return
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
         stopSuspended()
@@ -211,7 +211,7 @@ class SingBoxCore(
         }
         if (!lifecycleGeneration.isCurrent(generation)) {
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.current()}")
-            return
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: port ${SingboxConfigBuilder.PROXY_PORT} free=true")
 
@@ -226,7 +226,7 @@ class SingBoxCore(
 
         if (!lifecycleGeneration.isCurrent(generation)) {
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after cooldown; current=${lifecycleGeneration.current()}")
-            return
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: start phase begin generation=$generation")
         var server: CommandServer? = null
@@ -235,7 +235,7 @@ class SingBoxCore(
             logCollector?.info(TAG, "libbox logger attached")
             if (!lifecycleGeneration.isCurrent(generation)) {
                 logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation immediately before native start; current=${lifecycleGeneration.current()}")
-                return
+                throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
             }
             val portFreeBeforeStart = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, 2_000L)
             if (!portFreeBeforeStart) {
@@ -250,6 +250,15 @@ class SingBoxCore(
             activeConfig = configJson
             logCollector?.info(TAG, "Core lifecycle: started successfully generation=$generation")
             Log.i(TAG, "libbox 1.14.3 started in the app process")
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            server?.let { created ->
+                runCatching { created.closeService() }
+                runCatching { created.close() }
+            }
+            runCatching { platform.closeTun() }
+            currentServer = null
+            activeConfig = null
+            throw c
         } catch (t: Throwable) {
             logCollector?.error(TAG, "Core lifecycle: start failed: ${t.message}")
             Log.e(TAG, "Failed to initialize/start libbox", t)
