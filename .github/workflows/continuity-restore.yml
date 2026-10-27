@@ -1,0 +1,212 @@
+name: Continuity Restore Large Files
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/continuity-engine-781]
+    paths:
+      - '.github/workflows/continuity-restore.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/continuity-engine-781
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore AutoSwitcher from main + Continuity markServerFailed
+        run: |
+          set -euo pipefail
+          git show origin/main:app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt > /tmp/asw_main.kt
+          python3 << 'PY'
+          from pathlib import Path
+          main = Path("/tmp/asw_main.kt").read_text(encoding="utf-8")
+          old = '''    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
+        val key = blacklistKey(target)
+        val expiresAt = nowMs + ttlMs
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
+    }'''
+          new = '''    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
+        // Continuity: hard fail feeds scoring history (chronic free nodes drop rank).
+        runCatching { scoringEngine.recordHardFailure(target, weight = 2) }
+        val key = blacklistKey(target)
+        val priorExpiry = serverBlacklist[key] ?: blacklistPreferences.getLong(key, 0L)
+        val escalated = priorExpiry > 0L
+        val effectiveTtl = if (escalated) {
+            maxOf(ttlMs, AutoSwitcherConfig.serverBlacklistEscalatedMs)
+        } else {
+            ttlMs
+        }
+        val expiresAt = nowMs + effectiveTtl
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(
+            TAG,
+            "Server blacklisted for ${effectiveTtl}ms escalated=$escalated on ${currentNetworkBucket()} after failed start: ${target.name}",
+            mapOf("server" to serverKey(target))
+        )
+    }'''
+          if old not in main:
+              raise SystemExit("markServerFailed pattern not found on main")
+          patched = main.replace(old, new, 1)
+          out = Path("app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt")
+          out.write_text(patched, encoding="utf-8")
+          print("AutoSwitcher restored", out.stat().st_size, "bytes")
+          assert "recordHardFailure" in patched
+          assert "serverBlacklistEscalatedMs" in patched
+          PY
+
+      - name: Restore VpnProxyService from main + standbyConfigs wiring
+        run: |
+          set -euo pipefail
+          git show origin/main:app/src/main/java/com/vpnproxy/service/VpnProxyService.kt > /tmp/vpn_main.kt
+          python3 << 'PY'
+          from pathlib import Path
+          import re
+          main = Path("/tmp/vpn_main.kt").read_text(encoding="utf-8")
+          # Find buildVpn call without standbyConfigs and upgrade it
+          # Pattern: SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)
+          old1 = "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)"
+          new1 = "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)"
+          if old1 not in main:
+              # maybe already has 2-arg with different spacing
+              if "buildVpn(parsed" not in main:
+                  raise SystemExit("buildVpn call not found")
+              print("buildVpn pattern variant — scanning")
+          # Insert standbyConfigs extraction before buildVpn
+          marker = "val configJson = SingboxConfigBuilder.buildVpn"
+          if marker not in main and "SingboxConfigBuilder.buildVpn" in main:
+              # find the line
+              lines = main.splitlines(keepends=True)
+              out_lines = []
+              inserted = False
+              for i, line in enumerate(lines):
+                  if (not inserted) and "SingboxConfigBuilder.buildVpn" in line and "standbyConfigs" not in line:
+                      indent = line[:len(line) - len(line.lstrip())]
+                      block = (
+                          f"{indent}val standbyConfigs = autoSwitcher.rankedServers.value\n"
+                          f"{indent}    .map {{ it.config }}\n"
+                          f"{indent}    .filter {{ it.connectionKey() != parsed.connectionKey() }}\n"
+                          f"{indent}    .distinctBy {{ it.connectionKey() }}\n"
+                          f"{indent}    .take(com.vpnproxy.smartconnect.AutoSwitcherConfig.urlTestStandbyCount)\n"
+                          f"{indent}if (standbyConfigs.isNotEmpty()) {{\n"
+                          f"{indent}    logCollector.info(TAG, \"Continuity urltest standbys=${{standbyConfigs.size}}: \" +\n"
+                          f"{indent}        standbyConfigs.joinToString {{ it.name }})\n"
+                          f"{indent}}}\n"
+                      )
+                      out_lines.append(block)
+                      # fix the buildVpn call on this line
+                      line = line.replace(
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)",
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)",
+                      )
+                      if "standbyConfigs" not in line and "buildVpn(parsed" in line:
+                          # try broader replace
+                          line = re.sub(
+                              r"SingboxConfigBuilder\.buildVpn\(parsed,\s*diagnosticOptions\)",
+                              "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)",
+                              line,
+                          )
+                      inserted = True
+                  out_lines.append(line)
+              if not inserted:
+                  raise SystemExit("Failed to insert standbyConfigs wiring")
+              patched = "".join(out_lines)
+          else:
+              # simpler path
+              if "standbyConfigs" in main and "buildVpn(parsed, diagnosticOptions, standbyConfigs)" in main:
+                  patched = main
+                  print("Already wired")
+              else:
+                  # insert before configJson assignment
+                  idx = main.find("val configJson = SingboxConfigBuilder.buildVpn")
+                  if idx < 0:
+                      idx = main.find("SingboxConfigBuilder.buildVpn(parsed")
+                      if idx < 0:
+                          raise SystemExit("Cannot locate buildVpn")
+                      # find start of line
+                      line_start = main.rfind("\n", 0, idx) + 1
+                      indent = ""
+                      for ch in main[line_start:idx]:
+                          if ch in " \t":
+                              indent += ch
+                          else:
+                              break
+                      block = (
+                          f"{indent}val standbyConfigs = autoSwitcher.rankedServers.value\n"
+                          f"{indent}    .map {{ it.config }}\n"
+                          f"{indent}    .filter {{ it.connectionKey() != parsed.connectionKey() }}\n"
+                          f"{indent}    .distinctBy {{ it.connectionKey() }}\n"
+                          f"{indent}    .take(com.vpnproxy.smartconnect.AutoSwitcherConfig.urlTestStandbyCount)\n"
+                          f"{indent}if (standbyConfigs.isNotEmpty()) {{\n"
+                          f"{indent}    logCollector.info(TAG, \"Continuity urltest standbys=${{standbyConfigs.size}}: \" +\n"
+                          f"{indent}        standbyConfigs.joinToString {{ it.name }})\n"
+                          f"{indent}}}\n"
+                      )
+                      main = main[:line_start] + block + main[line_start:]
+                      main = main.replace(
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)",
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)",
+                          1,
+                      )
+                      patched = main
+                  else:
+                      line_start = main.rfind("\n", 0, idx) + 1
+                      indent = ""
+                      for ch in main[line_start:idx]:
+                          if ch in " \t":
+                              indent += ch
+                          else:
+                              break
+                      block = (
+                          f"{indent}val standbyConfigs = autoSwitcher.rankedServers.value\n"
+                          f"{indent}    .map {{ it.config }}\n"
+                          f"{indent}    .filter {{ it.connectionKey() != parsed.connectionKey() }}\n"
+                          f"{indent}    .distinctBy {{ it.connectionKey() }}\n"
+                          f"{indent}    .take(com.vpnproxy.smartconnect.AutoSwitcherConfig.urlTestStandbyCount)\n"
+                          f"{indent}if (standbyConfigs.isNotEmpty()) {{\n"
+                          f"{indent}    logCollector.info(TAG, \"Continuity urltest standbys=${{standbyConfigs.size}}: \" +\n"
+                          f"{indent}        standbyConfigs.joinToString {{ it.name }})\n"
+                          f"{indent}}}\n"
+                      )
+                      main = main[:line_start] + block + main[line_start:]
+                      main = main.replace(
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)",
+                          "SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions, standbyConfigs)",
+                          1,
+                      )
+                      patched = main
+          out = Path("app/src/main/java/com/vpnproxy/service/VpnProxyService.kt")
+          out.write_text(patched, encoding="utf-8")
+          print("VpnProxyService restored", out.stat().st_size, "bytes")
+          assert "standbyConfigs" in patched
+          assert "buildVpn(parsed, diagnosticOptions, standbyConfigs)" in patched or "Continuity urltest" in patched
+          PY
+
+      - name: Commit and push restored sources
+        run: |
+          set -euo pipefail
+          git config user.name "continuity-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt \
+                  app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
+          if git diff --staged --quiet; then
+            echo "No changes — already restored"
+          else
+            git commit -m "fix(continuity): restore full AutoSwitcher + VpnProxyService standby wiring"
+            git push origin feat/continuity-engine-781
+            echo "Pushed restore commit"
+          fi
