@@ -2,13 +2,19 @@
 <!-- Android 12+: правила backup и transfer -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Исключаем секреты и логи из облачного бэкапа -->
         <exclude domain="sharedpref" path="vpnproxy_subscriptions.xml" />
+        <exclude domain="sharedpref" path="vpnproxy_subscriptions" />
         <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="cached_configs.json" />
         <exclude domain="file" path="hev_config.yaml" />
+        <exclude domain="file" path="updates/" />
     </cloud-backup>
     <device-transfer>
-        <!-- При переносе на другое устройство тоже не переносим подписки -->
         <exclude domain="sharedpref" path="vpnproxy_subscriptions.xml" />
+        <exclude domain="sharedpref" path="vpnproxy_subscriptions" />
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="cached_configs.json" />
+        <exclude domain="file" path="hev_config.yaml" />
+        <exclude domain="file" path="updates/" />
     </device-transfer>
 </data-extraction-rules>
