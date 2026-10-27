@@ -298,7 +298,8 @@ class SingBoxCore(
      * by this probe, so bind failures remain guarded by the start error path.
      */
     private suspend fun waitForPortFree(host: String, port: Int, timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        val startedAtMs = System.currentTimeMillis()
+        val deadline = startedAtMs + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val occupied = runCatching {
                 Socket().use { socket ->
@@ -306,9 +307,13 @@ class SingBoxCore(
                     true
                 }
             }.getOrDefault(false)
-            if (!occupied) return true
+            if (!occupied) {
+                logCollector?.debug(TAG, "Port $port wait completed free=true elapsedMs=${System.currentTimeMillis() - startedAtMs}")
+                return true
+            }
             delay(PORT_POLL_INTERVAL_MS)
         }
+        logCollector?.warn(TAG, "Port $port wait completed free=false elapsedMs=${System.currentTimeMillis() - startedAtMs} timeoutMs=$timeoutMs")
         return false
     }
 }
