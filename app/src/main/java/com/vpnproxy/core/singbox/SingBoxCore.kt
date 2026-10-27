@@ -25,7 +25,6 @@ import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Owns the libbox 1.14.3 CommandServer in the application's main process.
@@ -84,7 +83,7 @@ class SingBoxCore(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineName("SingBoxCoreLifecycle")
     )
     private val lifecycleMutex = Mutex()
-    private val lifecycleGeneration = AtomicLong(0L)
+    private val lifecycleGeneration = LifecycleGenerationGate()
 
     @Volatile private var currentServer: CommandServer? = null
     @Volatile private var activeConfig: String? = null
@@ -142,7 +141,7 @@ class SingBoxCore(
 
     /** Queues a complete stop/wait/start transition on the single lifecycle executor. */
     fun startAsync(configJson: String): Deferred<Result<Unit>> {
-        val generation = lifecycleGeneration.incrementAndGet()
+        val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
         return lifecycleScope.async {
             lifecycleMutex.withLock {
@@ -192,7 +191,7 @@ class SingBoxCore(
 
     private suspend fun startSuspended(configJson: String, generation: Long) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
-        if (generation != lifecycleGeneration.get()) {
+        if (!lifecycleGeneration.isCurrent(generation)) {
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.get()}")
             return
         }
