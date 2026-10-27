@@ -3,8 +3,6 @@ name: Build, Sign & Release
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +15,7 @@ env:
 
 jobs:
   build-and-release:
+    if: github.ref == 'refs/heads/main'
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -133,18 +132,12 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-              if [ -z "${!name:-}" ]; then
-                echo "::error::$name secret is required for a production release"
-                exit 1
-              fi
-            done
-          fi
-          if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "Release signing secrets unavailable (non-release build); Gradle may use debug signing."
-            exit 0
-          fi
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name secret is required for a production release"
+              exit 1
+            fi
+          done
           CLEAN=$(printf '%s' "$KEYSTORE_BASE64" | tr -d '\n\r \t')
           printf '%s' "$CLEAN" | base64 -d > "$RUNNER_TEMP/release.keystore"
           SIZE=$(wc -c < "$RUNNER_TEMP/release.keystore")
