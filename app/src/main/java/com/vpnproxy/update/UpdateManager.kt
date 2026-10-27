@@ -12,12 +12,6 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Центральный фасад обновления.
- *
- * Mutex защищает от параллельных checkForUpdate() — если один вызов уже идёт,
- * второй просто возвращается, дожидаясь результата первого.
- */
 @Singleton
 class UpdateManager @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -38,28 +32,23 @@ class UpdateManager @Inject constructor(
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
-
     private val checkMutex = Mutex()
     private var lastCheckAt = 0L
     private val checkCooldownMs = 60_000L
 
-    /** Проверка обновлений. Идемпотентно — повторный вызов не запустит новую сеть. */
     suspend fun checkForUpdate(force: Boolean = false) {
         if (!force && System.currentTimeMillis() - lastCheckAt < checkCooldownMs) {
             logCollector.debug("UpdateManager", "Skip check (cooldown)")
             return
         }
-
         checkMutex.withLock {
             if (!force && System.currentTimeMillis() - lastCheckAt < checkCooldownMs) {
                 logCollector.debug("UpdateManager", "Skip check (already done)")
                 return@withLock
             }
-
             _state.value = State.Checking
             val result = checker.check()
             lastCheckAt = System.currentTimeMillis()
-
             _state.value = when {
                 result.error != null -> State.Error(result.error)
                 result.hasUpdate && result.release != null -> State.UpdateAvailable(result.release)
@@ -75,14 +64,12 @@ class UpdateManager @Inject constructor(
             _state.value = State.Error("APK asset not found in release")
             return
         }
-
         _state.value = State.Downloading(0, release)
-        val file = downloader.download(asset.downloadUrl, asset.name) { percent ->
-            _state.value = State.Downloading(percent, release)
+        val file = downloader.download(asset.downloadUrl, asset.name, asset.size) { percent ->
+            _state.value = State.Downloading(percent.coerceIn(0, 100), release)
         }
-
         _state.value = if (file != null) State.Ready(file, release)
-        else State.Error("Download failed")
+        else State.Error("Не удалось скачать или проверить APK. Повторите загрузку.")
     }
 
     fun installReady() {
@@ -91,7 +78,9 @@ class UpdateManager @Inject constructor(
             installer.openInstallPermissionSettings()
             return
         }
-        installer.install(ready.file)
+        if (!installer.install(ready.file)) {
+            _state.value = State.Error("Не удалось запустить установщик. APK сохранён в кэше; проверьте разрешение на установку и версию приложения.")
+        }
     }
 
     fun reset() { _state.value = State.Idle }
