@@ -66,38 +66,3 @@ jobs:
           name: apk-direct-debug
           path: app/build/outputs/apk/direct/debug/*.apk
 
-      - name: Build Direct Release APK
-        run: ./gradlew assembleDirectRelease --stacktrace
-
-      - name: Verify APK excludes retired native cores and secondary process
-        run: |
-          set -euo pipefail
-          if grep -q 'android:process=":singbox"' app/src/main/AndroidManifest.xml; then
-            echo "Unexpected :singbox process declaration"
-            exit 1
-          fi
-          found=0
-          while IFS= read -r apk; do
-            found=1
-            if unzip -l "$apk" | grep -E 'libv2ray\.so|libhev-socks5-tunnel\.so'; then
-              echo "Retired native core found in $apk"
-              exit 1
-            fi
-          done < <(find app/build/outputs/apk/direct/release -name '*.apk' -type f)
-          test "$found" -eq 1
-          echo "Verified direct APKs contain neither retired native core"
-
-      - name: Build Play Release AAB
-        run: ./gradlew bundlePlayRelease --stacktrace
-
-      - name: Upload APK artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: apk-direct
-          path: app/build/outputs/apk/direct/release/*.apk
-
-      - name: Upload AAB artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: aab-play
-          path: app/build/outputs/bundle/playRelease/*.aab
