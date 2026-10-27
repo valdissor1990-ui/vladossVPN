@@ -10,8 +10,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.779"
-  APP_VERSION_CODE: "10779"
+  APP_VERSION_NAME: "1.0.781"
+  APP_VERSION_CODE: "10781"
 
 jobs:
   build-and-release:
@@ -292,8 +292,6 @@ jobs:
             "$DIR/app-direct-x86_64-release.apk"; do
             if [ ! -f "$f" ]; then
               echo "❌ Missing expected APK: $f"
-              echo "Directory contents:"
-              ls -la "$DIR"
               exit 1
             fi
             echo "✅ $f ($(du -h "$f" | cut -f1))"
