@@ -90,15 +90,8 @@ class UpdateInstaller @Inject constructor(
         return info.signatures?.map { certificateSha256(it.toByteArray()) }?.toSet().orEmpty()
     }
 
-    internal fun hasCompatibleSigningIdentity(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean {
-        if (installedSigners.isEmpty() || archiveSigners.isEmpty()) return false
-
-        // Single-signer updates may use a declared signing lineage; multi-signer
-        // packages must match exactly. archiveSigners is the installed signer
-        // plus the archive's declared signing-certificate history.
-        if (installedSigners.size == 1) return installedSigners.single() in archiveSigners
-        return installedSigners == archiveSigners
-    }
+    private fun hasCompatibleSigningIdentity(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean =
+        signerSetsCompatible(installedSigners, archiveSigners)
 
     fun install(apkFile: File): Boolean {
         return try {
@@ -173,4 +166,18 @@ class UpdateInstaller @Inject constructor(
             false
         }
     }
+}
+
+
+/**
+ * Pure signer policy so mismatch and key-rotation behavior can be regression-tested
+ * without constructing Android PackageInfo objects.
+ */
+internal fun signerSetsCompatible(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean {
+    if (installedSigners.isEmpty() || archiveSigners.isEmpty()) return false
+
+    // Single-signer updates may use a declared signing lineage; multi-signer
+    // packages must match exactly.
+    if (installedSigners.size == 1) return installedSigners.single() in archiveSigners
+    return installedSigners == archiveSigners
 }
