@@ -4,8 +4,8 @@
 
 - Target: Android direct-APK distribution, repository source, Gradle build, GitHub Actions, scripts, and bundled native dependencies.
 - Method: read-only static review of repository files and public upstream advisories.
-- Initial audit was static-only. Follow-up CI runs CodeQL and a dedicated Android compile/unit-test workflow. The latest completed security validation on commit 5eb3ffde passed wrapper validation, Android compile tasks, and unit tests. CodeQL runs on later commits failed during Android SDK preparation before source extraction (first due to requesting the removed SDK package `tools`; then due to `yes` receiving a broken pipe under `pipefail`). Both workflow defects have been corrected in the branch; validation of the latest commit remains in progress.
-- Not performed: a successful build/test run, completed CodeQL/SCA results, APK reverse engineering, dynamic testing, network/VPN leak tests, server/infrastructure review, or validation against a physical device.
+- Initial audit was static-only. Follow-up CI runs CodeQL and a dedicated Android compile/unit-test workflow. The latest completed security validation on commit 5eb3ffde passed wrapper validation, Android compile tasks, and unit tests. CodeQL Android SDK preparation defects (removed SDK package `tools`; then `yes` broken pipe under `pipefail`) were corrected. On commit `67c4e122`, CodeQL, dependency graph report, security validation, PR build validation, and unit tests all completed successfully.
+- Not performed: APK reverse engineering, dynamic testing, network/VPN leak tests, server/infrastructure review, or validation against a physical device. A new SBOM/SCA workflow was added after the last confirmed CI head; its first run must complete before its output is treated as verified.
 - No code or behavior finding below should be interpreted as proof of exploitation unless explicitly stated.
 - The repository's current source was reviewed on 2026-10-28. Dependency versions below are declarations, not a resolved transitive dependency inventory.
 
@@ -142,3 +142,10 @@ These are positive controls, not proof that all threat scenarios are covered.
 - Gradle security subscription / version guidance: https://blog.gradle.org/gradle-security-subscription
 - AndroidX Security release notes: https://developer.android.com/jetpack/androidx/releases/security
 - OkHttp 4.x changelog: https://lysine.dev/okhttp/changelogs/changelog_4x/
+
+
+## Additional automation added after initial audit
+
+- `.github/workflows/sca-sbom.yml` generates an SPDX JSON SBOM with Syft via Anchore's SBOM action, scans the checkout (including the verified `libbox.aar`) with Grype, uploads SARIF to GitHub code scanning, and retains scan output as an artifact.
+- This workflow is best-effort for vulnerability findings (`fail-build: false`) so findings are surfaced rather than silently blocking builds before baseline review. Review severity, reachability, and applicability manually; scanner output is not proof of exploitability.
+- **Status:** workflow committed; first run/results pending. The generated SBOM may not enumerate native code-level components inside the bundled AAR as richly as an upstream build-provenance SBOM. Native binary provenance and vulnerability review remain open.
