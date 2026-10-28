@@ -108,15 +108,29 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          # Scan the generated CycloneDX SBOM directly. A source scan alone can
-          # report no package sources in a Gradle-only repository and miss resolved deps.
-          "$RUNNER_TEMP/osv-scanner" scan source -L build/dependency-audit/cyclonedx-bom.json \
+          # OSV-Scanner v2 auto-detects CycloneDX by filename (bom.json or *.cdx.json).
+          # Give the generated SBOM a recognized name before scanning it explicitly.
+          cp build/dependency-audit/cyclonedx-bom.json build/dependency-audit/app.cdx.json
+          "$RUNNER_TEMP/osv-scanner" scan source -L build/dependency-audit/app.cdx.json \
             --format json --output-file build/dependency-audit/osv-scan-results.json
           status=$?
           set -e
           echo "$status" > build/dependency-audit/osv-scanner-exit-code.txt
           if [ "$status" -ne 0 ]; then
             echo "OSV-Scanner returned $status; inspect osv-scan-results.json and workflow logs. This step is report-only while the initial baseline is reviewed."
+          fi
+
+      - name: Validate OSV-Scanner execution
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s build/dependency-audit/osv-scanner-exit-code.txt
+          status=$(cat build/dependency-audit/osv-scanner-exit-code.txt)
+          # Vulnerability findings are report-only during initial triage, but an
+          # operational scanner failure must never be presented as a successful audit.
+          if [ "$status" -ge 128 ]; then
+            echo "::error::OSV-Scanner failed operationally (exit $status); the dependency audit is incomplete."
+            exit 1
           fi
 
       - name: Upload dependency reports
