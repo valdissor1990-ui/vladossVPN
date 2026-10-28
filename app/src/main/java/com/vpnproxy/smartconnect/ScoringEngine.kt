@@ -72,6 +72,15 @@ class ScoringEngine @Inject constructor(
         return synchronized(item) { item.rate() }
     }
 
+    /**
+     * Record a hard connect/traffic failure (not a soft latency miss).
+     * Counts as failed attempts so chronic free-pool nodes lose rank quickly.
+     */
+    fun recordHardFailure(config: ParsedConfig, weight: Int = 2) {
+        val w = weight.coerceIn(1, 5)
+        repeat(w) { recordProbe(config, success = false) }
+    }
+
     fun computeScore(
         latencyResults: List<LatencyResult>,
         speedResults: List<SpeedResult> = emptyList()
@@ -89,9 +98,19 @@ class ScoringEngine @Inject constructor(
                 val normalizedLatency = 1.0f / (lr.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
                 val normalizedSpeed = speed / maxSpeed
                 val observedSuccessRate = successRate(lr.config)
-                val score = 0.6f * normalizedLatency +
-                    0.3f * normalizedSpeed +
-                    0.1f * observedSuccessRate
+                // Continuity: success history weighs as much as raw RTT — free nodes
+                // often answer TCP/HTTP probes while collapsing under real traffic later.
+                var score = 0.40f * normalizedLatency +
+                    0.25f * normalizedSpeed +
+                    0.35f * observedSuccessRate
+                val hist = history.computeIfAbsent(lr.config.connectionKey()) { loadHistory(lr.config) }
+                val attempts = synchronized(hist) { hist.attempts }
+                if (attempts >= 5L && observedSuccessRate < 0.4f) {
+                    score *= 0.5f
+                }
+                if (attempts >= 3L && observedSuccessRate < 0.2f) {
+                    score *= 0.4f
+                }
 
                 ScoredServer(
                     config = lr.config,
