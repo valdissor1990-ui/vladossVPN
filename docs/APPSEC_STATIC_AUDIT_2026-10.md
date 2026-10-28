@@ -174,3 +174,8 @@ Grype 0.97.1 reported **0 vulnerability matches across 41 packages** using vulne
 - **CodeQL triage:** analysis upload succeeded; the actual alert list must be reviewed in GitHub Code Scanning and each finding classified as confirmed, false positive, or accepted risk.
 
 **Disposition:** static CI validation is green on the commit above. The overall security audit is not fully closed until the remaining items above are either tested or explicitly accepted with documented risk. Keep this PR open pending review of CodeQL alerts and APK signer test coverage.
+
+
+## Follow-up on signer policy tests
+
+The signer comparison was extracted into the pure `signerSetsCompatible` function, which is called by the production updater. Unit tests now exercise that exact function for empty signer data, matching signer, accepted single-signer lineage, unrelated lineage rejection, and exact multi-signer matching. These tests are part of the normal Android unit-test task and must pass on the final PR head. They do not replace PackageManager integration/device tests for actual APK signing histories across Android API levels.
