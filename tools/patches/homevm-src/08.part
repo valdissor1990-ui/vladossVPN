@@ -1,0 +1,37 @@
+ Log.d(TAG, "Connect debounced")
+            return
+        }
+        lastConnectClickMs = now
+        cancelSelectionJob("new connect")
+        try {
+            activeTraceId = TraceId.newId()
+            connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
+            VpnProxyService.clearError()
+            _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
+            armConnectingWatchdog()
+            vpnPermissionRequester?.invoke()
+        } catch (e: Exception) {
+            connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
+            _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
+        }
+    }
+
+    fun onVpnPermissionGranted() {
+        val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
+        armConnectingWatchdog()
+        ensureServiceRunning()
+        selectionJob?.cancel()
+        selectionJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val hasNetwork = cm.activeNetwork != null
+                var configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
+                if (activeTraceId != traceId) return@launch
+                var refreshedSubscription = false
+                if (hasNetwork) {
+                    configs = try {
+                        subscriptionRepository.refreshAll()
+                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
+                            serverScanner.sc
