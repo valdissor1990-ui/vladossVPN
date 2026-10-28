@@ -21,7 +21,7 @@ This is a preliminary static audit, not an OWASP MASVS certification or a comple
 ### APPSEC-001 — Gradle Wrapper version is affected by published security advisories
 
 - **Severity:** High (build-environment risk; exploitability depends on the build host and attack preconditions).
-- **Evidence:** `gradle/wrapper/gradle-wrapper.properties` declares Gradle 8.11.1. Gradle advisories GHSA-xwqc-3h47-hg64 and GHSA-mvvg-497x-hmj8, published 2026-10-07, list versions below 8.14.6 as affected and 8.14.6 as patched. The advisories describe local loopback client/daemon or worker/daemon deserialization paths; they explicitly do not describe remote-network exploitation.
+- **Evidence:** `gradle/wrapper/gradle-wrapper.properties` previously declared Gradle 8.11.1 and now declares 8.14.6 with the official binary distribution SHA-256 pinned. Gradle advisories GHSA-xwqc-3h47-hg64 and GHSA-mvvg-497x-hmj8, published 2026-10-07, list versions below 8.14.6 as affected and 8.14.6 as patched. The advisories describe local loopback client/daemon or worker/daemon deserialization paths; they explicitly do not describe remote-network exploitation.
 - **Impact:** A local attacker able to win the documented IPC race during an active build (or connect to an active daemon for the client/daemon issue) may execute code with build-user privileges or cause denial of service.
 - **Recommendation:** **Changed in branch:** upgraded wrapper to Gradle 8.14.6 and pinned official distribution SHA-256 in `gradle-wrapper.properties`. CI build compatibility with AGP 8.7.3, Kotlin 2.1.0, native AAR download, and release packaging still requires a successful workflow run.
 - **SDLC:** CI / build infrastructure.
@@ -30,7 +30,7 @@ This is a preliminary static audit, not an OWASP MASVS certification or a comple
 ### APPSEC-002 — Gradle Wrapper JAR bootstrap lacks checksum verification
 
 - **Severity:** High (supply-chain integrity risk).
-- **Evidence:** `.github/workflows/release.yml`, step `Bootstrap Gradle Wrapper JAR`, downloads `gradle-wrapper.jar` from a GitHub URL when the file is missing and does not verify a pinned digest in that step.
+- **Evidence:** `.github/workflows/release.yml` previously downloaded `gradle-wrapper.jar` from a GitHub URL when the file was missing without verifying a pinned digest. The branch now downloads from `services.gradle.org`, checks the official SHA-256 whether the JAR was pre-existing or freshly downloaded, and invokes the Gradle wrapper-validation action.
 - **Impact:** If the downloaded artifact or source is compromised, malicious wrapper code could execute in the release workflow with access to build-time credentials and signing material.
 - **Recommendation:** **Changed in branch:** the bootstrap downloads the official Gradle 8.14.6 Wrapper JAR from `services.gradle.org`, verifies its pinned official SHA-256 on every run (including when a JAR is already present), and the release workflow invokes `gradle/actions/wrapper-validation@v4`. `distributionSha256Sum` is set. Consider pinning third-party GitHub Actions to full commit SHAs as a separate supply-chain hardening task.
 - **SDLC:** CI / release engineering.
@@ -39,7 +39,7 @@ This is a preliminary static audit, not an OWASP MASVS certification or a comple
 ### APPSEC-003 — Updater does not independently verify the expected APK signing identity
 
 - **Severity:** Medium (defense-in-depth and update-channel trust).
-- **Evidence:** `UpdateDownloader.kt` checks HTTP response, declared/actual size and ZIP manifest entry. `UpdateInstaller.kt` checks APK parsing, package name, and versionCode before launching `ACTION_INSTALL_PACKAGE`. No explicit comparison to a pinned or otherwise trusted release signer was found in the reviewed installer code.
+- **Evidence:** `UpdateDownloader.kt` checks HTTP response, declared/actual size and ZIP manifest entry. `UpdateInstaller.kt` checks APK parsing, package name, and versionCode, and now compares SHA-256 signer fingerprints with the installed app before launching `ACTION_INSTALL_PACKAGE`.
 - **Impact:** These checks do not establish publisher identity. Android's package installer still checks signing compatibility for an update over an installed app, but that check occurs after the app has handed the APK to the system installer.
 - **Recommendation:** **Changed in branch:** the installer now compares SHA-256 signer fingerprints for the installed package and downloaded APK before opening the installer, including a declared single-signer signing lineage. This is an independent consistency check against the installed publisher, not a separately provisioned pinned publisher key. Do not trust a checksum delivered only alongside the APK from the same release channel. Signing-key rotation still requires explicit testing.
 - **SDLC:** CI / runtime.
