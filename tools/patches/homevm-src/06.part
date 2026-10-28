@@ -1,0 +1,33 @@
+.UNSTABLE -> disconnect()
+            ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> connect()
+            ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> { }
+        }
+    }
+
+    fun retryConnect() { connect() }
+
+    fun setAutomaticSubscription(subscriptionId: String) {
+        val validId = if (subscriptionId == ALL_SUBSCRIPTIONS_ID || subscriptionRepository.subscriptions.value.any { it.id == subscriptionId }) subscriptionId else ALL_SUBSCRIPTIONS_ID
+        modePreferences.edit().putString(KEY_AUTOMATIC_SUBSCRIPTION_ID, validId).apply()
+        _uiState.value = _uiState.value.copy(selectedSubscriptionId = validId)
+        updateAutoSwitcherProviderScope()
+        if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+    }
+
+    private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
+        if (!_uiState.value.isAutomaticMode) return configs
+        val selectedId = _uiState.value.selectedSubscriptionId
+        if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
+        val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
+        if (subscription == null) return emptyList()
+        return configs.filter { it.providerTag == subscription.name }
+    }
+
+    private fun updateAutoSwitcherProviderScope() {
+        val state = _uiState.value
+        val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
+        val selectedSubscription = if (scopedSelection) subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId } else null
+        val blocked = scopedSelection && selectedSubscription == null
+        val providerTag = selectedSubscription?.name
+        autoSwitcher.setProviderScope(providerTag, blocked = blocked)
+        connectionCoord
