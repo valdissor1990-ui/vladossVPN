@@ -179,3 +179,13 @@ Grype 0.97.1 reported **0 vulnerability matches across 41 packages** using vulne
 ## Follow-up on signer policy tests
 
 The signer comparison was extracted into the pure `signerSetsCompatible` function, which is called by the production updater. Unit tests now exercise that exact function for empty signer data, matching signer, accepted single-signer lineage, unrelated lineage rejection, and exact multi-signer matching. These tests are part of the normal Android unit-test task and must pass on the final PR head. They do not replace PackageManager integration/device tests for actual APK signing histories across Android API levels.
+
+## Follow-up — OSV scan execution and closure status (2026-10-28)
+
+- The Dependency Audit artifact showed that the previous OSV-Scanner invocation returned exit code 127 and did not produce a results JSON. The job was green only because the scan step was report-only. This was an operational failure, not a clean vulnerability result.
+- The workflow now copies the generated CycloneDX SBOM to the recognized filename `app.cdx.json`, scans it explicitly with OSV-Scanner v2, retains artifacts, and has a post-upload validation step that fails the job for operational scanner errors (exit code >= 128). Vulnerability findings remain report-only while they are triaged; they must not be described as clean without inspecting the report.
+- The latest changes trigger a new CI run. Until that run finishes and its artifact/report is inspected, OSV scan execution is **not yet verified**.
+- Grype's earlier zero-match result is limited to its scanned package inventory and database snapshot. It is not evidence that all native code inside the pinned `libbox.aar` has been mapped to upstream advisories.
+- Remaining closure gates: inspect actual CodeQL alerts in GitHub Code Scanning; review the OSV and Grype findings; add/run Android PackageManager integration tests for signer history where feasible; exercise signed update install and reject cases on emulator/device; run IPv4, IPv6, and DNS leak tests plus reconnect, kill-switch, and network-transition scenarios against controlled VPN endpoints; and verify production signing-certificate continuity and release artifact/source correspondence.
+
+**Current disposition:** do not mark the audit closed or merge solely because build/test workflows are green. Static CI and runtime security validation are separate evidence categories. Runtime checks need an Android emulator/device and controlled VPN endpoints; where these are unavailable, record them as unverified rather than claiming they passed.
