@@ -1,19 +1,21 @@
 package com.vpnproxy.smartconnect
 
 /**
- * Named thresholds used by AutoSwitcher. Values intentionally match the existing policy;
- * this object centralizes configuration without changing server-selection heuristics.
+ * Continuity Engine thresholds — tuned for unstable free-subscription pools
+ * without weakening hard validation (still requires evidence before switch).
  */
 object AutoSwitcherConfig {
-    /** Normal monitoring cadence; reduced-frequency checks are used in Android Battery Saver. */
-    const val healthCheckIntervalMs = 150_000L
-    const val batterySaverHealthCheckIntervalMs = 300_000L
+    /** Health cadence: tighter than legacy 150s so free-node death is noticed sooner. */
+    const val healthCheckIntervalMs = 90_000L
+    const val batterySaverHealthCheckIntervalMs = 240_000L
     const val suspectRttMs = 500L
     const val suspectJitterMs = 150L
     const val directFastRttMs = 100L
     const val microProbeMinMbps = 1.0
-    const val switchCooldownMs = 5 * 60_000L
+    /** Base cooldown after a switch; still prevents flapping. */
+    const val switchCooldownMs = 3 * 60_000L
     const val switchWindowMs = 15 * 60_000L
+    /** Keep at 3 — unit tests and anti-flap policy depend on this ceiling. */
     const val maxSwitchesPerWindow = 3
     const val directProbeTimeoutMs = 1_500
     const val microProbeTimeoutMs = 3_000
@@ -22,7 +24,7 @@ object AutoSwitcherConfig {
     const val networkDegradationConfirmations = 2
     const val evidenceWindowMs = 10 * 60_000L
     const val maxConsecutiveErrors = 3
-    const val rttDegradationFactor = 3.0
+    const val rttDegradationFactor = 2.5
     const val microProbeBufferBytes = 8 * 1_024
     const val directProbePort = 53
     const val evidenceHistoryLimit = 12
@@ -30,9 +32,16 @@ object AutoSwitcherConfig {
     const val minimumAutoSwitchScoreGain = 0.20f
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
-    const val serverBlacklistDurationMs = 10 * 60_000L
-    /** After Connected, suppress automatic switches for this period. */
-    const val postConnectWarmupMs = 45_000L
+    const val serverBlacklistDurationMs = 15 * 60_000L
+    /** Second+ fail on same node within window → longer ban. */
+    const val serverBlacklistEscalatedMs = 45 * 60_000L
+    /** After Connected, suppress automatic app-level switches (core urltest still active). */
+    const val postConnectWarmupMs = 60_000L
     const val ruTokenPattern = "(^|[^a-z0-9])ru([^a-z0-9]|$)"
     const val microProbeUrl = "https://proof.ovh.net/files/1Mb.dat"
+    /** Extra outbounds packed into sing-box urltest group beside the primary. */
+    const val urlTestStandbyCount = 2
+    const val urlTestInterval = "45s"
+    const val urlTestToleranceMs = 80
+    const val urlTestProbeUrl = "https://www.gstatic.com/generate_204"
 }
