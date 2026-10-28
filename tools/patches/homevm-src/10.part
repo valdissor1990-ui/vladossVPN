@@ -1,0 +1,41 @@
+y { it.connectionKey() == s.config.connectionKey() } }
+                            ?: run {
+                                val bestScanned = scanned.minByOrNull { it.latencyMs }
+                                if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
+                                else autoSwitcher.selectImmediate(configs.first(), configs)
+                            }
+                    }
+                }
+                if (selected == null) {
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
+                    return@launch
+                }
+                if (activeTraceId != traceId) return@launch
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
+                pendingRankingConfigs = configs
+                ensureServiceRunning()
+                logCollector.info(TAG, tmsg("Selected ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms refreshed=$refreshedSubscription"))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Ошибка выбора сервера"))
+            }
+        }
+    }
+
+    fun onVpnPermissionDenied() {
+        connectionCoordinator.send(ConnectionEvent.ShowError("Нет разрешения VPN. Выдайте доступ в настройках."))
+    }
+
+    fun disconnect() {
+        cancelConnectingWatchdog()
+        cancelSelectionJob("user disconnect")
+        VpnProxyService.clearError()
+        connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+    }
+
+    fun forceDisconnect() {
+        cancelConnectingWatchdog()
+        cancelSelectionJob("forceD
