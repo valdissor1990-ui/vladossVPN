@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -55,6 +57,9 @@ class JsonConfigRepository @Inject constructor(
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
+
+    /** Serializes read-modify-persist-publish sequences to prevent lost updates. */
+    private val mutationMutex = Mutex()
 
     private val _entries = MutableStateFlow<List<JsonEntry>>(emptyList())
     val entries: StateFlow<List<JsonEntry>> = _entries.asStateFlow()
@@ -123,15 +128,17 @@ class JsonConfigRepository @Inject constructor(
                     tag = tag.ifBlank { displayName },
                     rawJson = rawJson
                 )
-                val updatedEntries = _entries.value + entry
-                if (!persist(updatedEntries)) {
-                    logCollector.warn(TAG, "JSON import rejected because persistence failed")
-                    return@withContext null
+                mutationMutex.withLock {
+                    val updatedEntries = _entries.value + entry
+                    if (!persist(updatedEntries)) {
+                        logCollector.warn(TAG, "JSON import rejected because persistence failed")
+                        return@withLock null
+                    }
+                    _entries.value = updatedEntries
+                    reparseAll()
+                    logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
+                    parsed.size
                 }
-                _entries.value = updatedEntries
-                reparseAll()
-                logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
-                parsed.size
             } catch (e: Exception) {
                 logCollector.error(TAG, "JSON import failed", e)
                 null
@@ -139,26 +146,31 @@ class JsonConfigRepository @Inject constructor(
         }
 
     suspend fun remove(id: String): Boolean = withContext(Dispatchers.IO) {
-        val updatedEntries = _entries.value.filterNot { it.id == id }
-        if (updatedEntries.size == _entries.value.size) return@withContext false
-        if (!persist(updatedEntries)) {
-            logCollector.warn(TAG, "JSON entry removal not applied because persistence failed")
-            return@withContext false
+        mutationMutex.withLock {
+            val currentEntries = _entries.value
+            val updatedEntries = currentEntries.filterNot { it.id == id }
+            if (updatedEntries.size == currentEntries.size) return@withLock false
+            if (!persist(updatedEntries)) {
+                logCollector.warn(TAG, "JSON entry removal not applied because persistence failed")
+                return@withLock false
+            }
+            _entries.value = updatedEntries
+            reparseAll()
+            true
         }
-        _entries.value = updatedEntries
-        reparseAll()
-        true
     }
 
     suspend fun clear(): Boolean = withContext(Dispatchers.IO) {
-        if (_entries.value.isEmpty()) return@withContext true
-        if (!persist(emptyList())) {
-            logCollector.warn(TAG, "JSON entries clear not applied because persistence failed")
-            return@withContext false
+        mutationMutex.withLock {
+            if (_entries.value.isEmpty()) return@withLock true
+            if (!persist(emptyList())) {
+                logCollector.warn(TAG, "JSON entries clear not applied because persistence failed")
+                return@withLock false
+            }
+            _entries.value = emptyList()
+            _configs.value = emptyList()
+            true
         }
-        _entries.value = emptyList()
-        _configs.value = emptyList()
-        true
     }
 
     /** Merge subscription pool with local JSON servers (deduped). */
