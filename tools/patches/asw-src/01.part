@@ -1,0 +1,138 @@
+
+    private fun isDiagnosticFreezeActive(): Boolean {
+        if (!diagnosticFreezeAfterConnected) return false
+        return when (connectionCoordinator.state.value) {
+            is com.vpnproxy.core.connection.ConnectionState.Connecting,
+            is com.vpnproxy.core.connection.ConnectionState.Verifying,
+            is com.vpnproxy.core.connection.ConnectionState.Connected,
+            is com.vpnproxy.core.connection.ConnectionState.Reconnecting -> true
+            else -> false
+        }
+    }
+
+    private fun suppressIfFrozen(action: String, target: String = "none"): Boolean {
+        if (!isDiagnosticFreezeActive()) return false
+        logCollector.warn(TAG, "AutoSwitcher suppressed: action=$action target=$target reason=diagnostic freeze")
+        return true
+    }
+
+    fun isSwitching(): Boolean = switching.get()
+
+    fun markConnected() {
+        connectedAtMs = System.currentTimeMillis()
+        logCollector.info(TAG, "Warmup started ${AutoSwitcherConfig.postConnectWarmupMs}ms")
+    }
+
+    fun isInPostConnectWarmup(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (connectedAtMs <= 0L) return false
+        return nowMs - connectedAtMs < AutoSwitcherConfig.postConnectWarmupMs
+    }
+
+    // Blacklist the exact profile, not every variant sharing endpoint/UUID.
+    // Hash profile identity before persisting it; preference keys do not expose config details.
+    private fun serverKey(config: ParsedConfig): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun currentNetworkBucket(): String {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "other"
+        val active = manager.activeNetwork
+        val activeCapabilities = active?.let(manager::getNetworkCapabilities)
+        fun bucket(capabilities: NetworkCapabilities?): String? = when {
+            capabilities == null -> null
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "other"
+            else -> null
+        }
+        bucket(activeCapabilities)?.let { return it }
+
+        // With VpnService active, activeNetwork is normally TRANSPORT_VPN. Inspect
+        // validated non-VPN networks to identify the underlying Wi-Fi/mobile transport.
+        val underlying = manager.allNetworks
+            .asSequence()
+            .filter { it != active }
+            .mapNotNull { network -> manager.getNetworkCapabilities(network) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+            .mapNotNull(::bucket)
+            .firstOrNull { it == "wifi" || it == "cellular" }
+        return underlying ?: if (active == null) "offline" else "other"
+    }
+
+    private fun blacklistKey(config: ParsedConfig): String =
+        "${currentNetworkBucket()}|${serverKey(config)}"
+
+    private fun pruneBlacklist(nowMs: Long = System.currentTimeMillis()) {
+        val expired = serverBlacklist.entries.filter { it.value <= nowMs }.map { it.key }
+        expired.forEach { key ->
+            serverBlacklist.remove(key)
+            blacklistPreferences.edit().remove(key).apply()
+        }
+    }
+
+    fun isBlacklisted(config: ParsedConfig?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val target = config ?: return false
+        pruneBlacklist(nowMs)
+        val key = blacklistKey(target)
+        val expiresAt = serverBlacklist[key] ?: return false
+        if (expiresAt <= nowMs) {
+            serverBlacklist.remove(key)
+            blacklistPreferences.edit().remove(key).apply()
+            return false
+        }
+        return true
+    }
+
+    fun markServerFailed(config: ParsedConfig?, ttlMs: Long = AutoSwitcherConfig.serverBlacklistDurationMs, nowMs: Long = System.currentTimeMillis()) {
+        val target = config ?: return
+        if (suppressIfFrozen("markServerFailed", target.name)) return
+        val key = blacklistKey(target)
+        val expiresAt = nowMs + ttlMs
+        serverBlacklist[key] = expiresAt
+        blacklistPreferences.edit().putLong(key, expiresAt).apply()
+        logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
+    }
+
+    fun clearBlacklist() {
+        if (suppressIfFrozen("blacklist-clear")) return
+        serverBlacklist.clear()
+        blacklistPreferences.edit().clear().apply()
+        logCollector.info(TAG, "Server blacklist cleared after subscription update")
+    }
+
+    private fun filterUsableServers(configs: List<ParsedConfig>): List<ParsedConfig> =
+        configs.filterNot { isBlacklisted(it) }
+
+    fun startMonitoring() {
+        if (isDiagnosticFreezeActive()) {
+            logCollector.info(TAG, "AutoSwitcher monitoring disabled by diagnostic freeze")
+            stopMonitoring()
+            return
+        }
+        markConnected()
+        healthCheckJob?.cancel()
+        healthCheckJob = scope.launch {
+            while (isActive) {
+                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context)
+                delay(intervalMs)
+                if (isInPostConnectWarmup()) {
+                    logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
+                    continue
+                }
+                if (decisionEngine.isInCooldown()) {
+                    logCollector.debug(TAG, "Slow-server checks skipped during switch cooldown")
+                    continue
+                }
+                checkCurrentServer()
+            }
+        }
+    }
+
+    fun stopMonitoring() {
+        healthCheckJob?.cancel()
+        healthCheckJob = null
+    }
