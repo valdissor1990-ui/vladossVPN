@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import com.vpnproxy.logging.LogCollector
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -61,6 +62,45 @@ class UpdateInstaller @Inject constructor(
     private fun readVersionCode(info: PackageInfo): Long =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
 
+    private fun certificateSha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+
+    @Suppress("DEPRECATION")
+    private fun currentSignerDigests(info: PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            info.signatures
+        } ?: return emptySet()
+        return signatures.map { certificateSha256(it.toByteArray()) }.toSet()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun archiveSignerDigests(info: PackageInfo): Set<String> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val signingInfo = info.signingInfo ?: return emptySet()
+            // Include the signing lineage so a legitimate single-signer key rotation
+            // can be accepted when the new APK declares the currently installed signer.
+            val history = signingInfo.signingCertificateHistory
+            val certificates = history?.takeIf { it.isNotEmpty() }
+                ?: signingInfo.apkContentsSigners
+            return certificates.map { certificateSha256(it.toByteArray()) }.toSet()
+        }
+        return info.signatures?.map { certificateSha256(it.toByteArray()) }?.toSet().orEmpty()
+    }
+
+    private fun hasCompatibleSigningIdentity(current: PackageInfo, archive: PackageInfo): Boolean {
+        val installedSigners = currentSignerDigests(current)
+        val archiveSigners = archiveSignerDigests(archive)
+        if (installedSigners.isEmpty() || archiveSigners.isEmpty()) return false
+
+        // Single-signer updates may use a declared signing lineage; multi-signer
+        // packages must match exactly.
+        if (installedSigners.size == 1) return installedSigners.all { it in archiveSigners }
+        return installedSigners == archiveSigners
+    }
+
     fun install(apkFile: File): Boolean {
         return try {
             if (!apkFile.isFile || apkFile.length() <= 0L) {
@@ -68,10 +108,16 @@ class UpdateInstaller @Inject constructor(
                 return false
             }
             val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.PackageInfoFlags.of(0))
+                context.packageManager.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+                )
             } else {
                 @Suppress("DEPRECATION")
-                context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+                context.packageManager.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.GET_SIGNATURES
+                )
             }
             if (archiveInfo == null) {
                 logCollector.warn(TAG, "Install rejected: Android cannot parse APK")
@@ -82,10 +128,17 @@ class UpdateInstaller @Inject constructor(
                 return false
             }
             val currentInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+                )
             } else {
                 @Suppress("DEPRECATION")
-                context.packageManager.getPackageInfo(context.packageName, 0)
+                context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+            }
+            if (!hasCompatibleSigningIdentity(currentInfo, archiveInfo)) {
+                logCollector.warn(TAG, "Install rejected: APK signing identity does not match installed publisher")
+                return false
             }
             val newVersion = readVersionCode(archiveInfo)
             val currentVersion = readVersionCode(currentInfo)
