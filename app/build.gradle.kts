@@ -78,8 +78,11 @@ android {
 
     // Never produce a release variant signed with the publicly known debug key.
     // Fail closed when a release task is requested without a configured release keystore.
-    val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
-        taskName.contains("Release", ignoreCase = true) || taskName.equals("assemble", ignoreCase = true)
+    val releaseTaskRequested = gradle.startParameter.taskNames.any { requested ->
+        val taskName = requested.substringAfterLast(':')
+        taskName.equals("assemble", ignoreCase = true) ||
+            taskName.equals("build", ignoreCase = true) ||
+            taskName.matches(Regex("(assemble|bundle|package|install|sign)[A-Za-z0-9]*Release", RegexOption.IGNORE_CASE))
     }
     val releaseSigningConfig = signingConfigs.getByName("release")
     if (releaseTaskRequested && releaseSigningConfig.storeFile == null) {
