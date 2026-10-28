@@ -1,0 +1,53 @@
+        )
+                        logCollector.warn(TAG, tmsg("Actor Error: ${state.message}"))
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            autoSwitcher.currentServer.collect { server ->
+                if (server != null) {
+                    _uiState.value = _uiState.value.copy(currentServerName = server.config.name, currentRtt = server.latencyMs)
+                }
+            }
+        }
+        viewModelScope.launch {
+            autoSwitcher.switchEvents.collect { event ->
+                if (event != null) {
+                    logCollector.info(TAG, tmsg("Switch event: $event"))
+                    autoSwitcher.clearSwitchEvent()
+                }
+            }
+        }
+        startPinging()
+        viewModelScope.launch {
+            subscriptionRepository.allConfigs.collect { configs ->
+                val merged = jsonConfigRepository.allConfigsIncluding(configs)
+                _uiState.value = _uiState.value.copy(serverCount = merged.distinctBy { it.connectionKey() }.size)
+            }
+        }
+        viewModelScope.launch {
+            serverScanner.isScanning.collect { scanning ->
+                _uiState.value = _uiState.value.copy(isScanningServers = scanning)
+            }
+        }
+    }
+
+    private fun tmsg(message: String): String =
+        TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | ")
+
+    private fun cancelSelectionJob(reason: String) {
+        if (selectionJob?.isActive == true) {
+            logCollector.info(TAG, tmsg("Cancel selectionJob: $reason"))
+            selectionJob?.cancel()
+        }
+        selectionJob = null
+        _uiState.value = _uiState.value.copy(isBusy = false)
+    }
+
+    private fun armConnectingWatchdog() {
+        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+         
