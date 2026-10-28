@@ -64,7 +64,7 @@ class UpdateInstaller @Inject constructor(
 
     private fun certificateSha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes)
-            .joinToString("") { "%02x".format(it) }
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     @Suppress("DEPRECATION")
     private fun currentSignerDigests(info: PackageInfo): Set<String> {
