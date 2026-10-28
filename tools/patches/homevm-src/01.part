@@ -1,0 +1,44 @@
+gine: ScoringEngine,
+    private val trafficCollector: TrafficStatsCollector,
+    private val pingService: PingService,
+    private val logCollector: LogCollector,
+    private val connectionCoordinator: ConnectionCoordinator,
+    private val lastServerStore: LastServerStore,
+    private val jsonConfigRepository: JsonConfigRepository
+) : ViewModel() {
+
+    companion object {
+        private const val TAG = "HomeVM"
+        private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
+        private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
+        private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
+        private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
+        const val ALL_SUBSCRIPTIONS_ID = "all"
+    }
+
+    data class UiState(
+        val connectionState: ConnectionUiState = ConnectionUiState.DISCONNECTED,
+        val currentRtt: Long = 0L,
+        val currentServerName: String = "—",
+        val serverCount: Int = 0,
+        val isBusy: Boolean = false,
+        val sessionStartedAt: Long? = null,
+        val isRefreshingSubscription: Boolean = false,
+        val isScanningServers: Boolean = false,
+        val isAutomaticMode: Boolean = true,
+        val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
+        val lastErrorMessage: String? = null
+    )
+
+    private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(UiState(
+        isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true),
+        selectedSubscriptionId = modePreferences.getString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID) ?: ALL_SUBSCRIPTIONS_ID
+    ))
+
+    val subscriptions = subscriptionRepository.subscriptions
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
+
+    private val _googleRtt = MutableStateFlow<Long?>(null)
+    
