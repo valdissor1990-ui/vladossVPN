@@ -1,0 +1,33 @@
+val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
+    private val _latencyBreakdown = MutableStateFlow<LatencyBreakdown?>(null)
+    val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
+
+    private var pingJob: Job? = null
+    private var connectingWatchdogJob: Job? = null
+    private var selectionJob: Job? = null
+    @Volatile private var lastConnectClickMs: Long = 0L
+    private var vpnPermissionRequester: (() -> Unit)? = null
+    private var activeTraceId: String? = null
+    @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
+    @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
+
+    init {
+        connectionCoordinator.registerSelectionCancel { cancelSelectionJob("actor RequestDisconnect") }
+        updateAutoSwitcherProviderScope()
+        viewModelScope.launch {
+            connectionCoordinator.state.collect { state ->
+                when (state) {
+                    is ConnectionState.Disconnected, is ConnectionState.Disconnecting -> {
+                        cancelConnectingWatchdog()
+                        cancelSelectionJob("state=$state")
+                        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+                    }
+                    is ConnectionState.Connecting, is ConnectionState.Reconnecting -> {
+                        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
+                        armConnectingWatchdog()
+                    }
+                    is ConnectionState.Verifying -> {
+                        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.VERIFYING, isBusy = true, lastErrorMessage = null)
+                        armConnectingWatchdog()
+                    }
+                    is ConnectionS
