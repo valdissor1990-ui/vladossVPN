@@ -11,7 +11,7 @@
 
 ## Executive summary
 
-The highest-confidence issues are in the build supply chain and dependency lifecycle. The Gradle wrapper was upgraded to 8.14.6 and now pins the official distribution SHA-256. Release CI verifies the official Wrapper JAR SHA-256 and runs Gradle's wrapper-validation action. OkHttp was updated to 4.12.1 and AndroidX Security Crypto to stable 1.1.0. The updater now compares the downloaded APK's signing identity against the installed app before launching the platform installer. These changes are committed to the audit branch. A dedicated CI validation workflow has been added. Initial runs exposed bootstrap errors (wrapper validation ordering and an invalid standalone JAR URL); both were corrected. The latest completed security validation on commit 5eb3ffde passed wrapper validation, compilation of Direct/Play debug Kotlin variants, and unit tests. CodeQL Android SDK preparation fixes and a new dependency-report workflow have since been committed; their results are pending. The dependency-report workflow exports resolved runtime dependency graphs but does not itself constitute a vulnerability scan or SBOM.
+The highest-confidence issues are in the build supply chain and dependency lifecycle. The Gradle wrapper was upgraded to 8.14.6 and now pins the official distribution SHA-256. Release CI verifies the official Wrapper JAR SHA-256 and runs Gradle's wrapper-validation action. OkHttp was updated to 4.12.1 and AndroidX Security Crypto to stable 1.1.0. The updater now compares the downloaded APK's signing identity against the installed app before launching the platform installer. These changes are committed to the audit branch. The latest completed CI run set on `67c4e122` passed unit tests, CodeQL, PR build validation, dependency graph resolution/reporting, and security branch validation. The dependency-report workflow exports resolved runtime graphs but is not itself a vulnerability scan or SBOM. A Gradle dependency-submission workflow has now also been added; its run/result must be verified separately.
 
 The updater checks HTTP success, size, APK ZIP structure, package name, monotonically increasing versionCode, and now checks APK signer certificate fingerprints against the installed app's signing identity/declared single-signer lineage before launching the platform installer. Android's package manager remains the final enforcement layer. The new signing comparison has not yet been exercised in a build/device test.
 
@@ -69,7 +69,7 @@ This is a preliminary static audit, not an OWASP MASVS certification or a comple
 - **Severity:** Medium (process gap).
 - **Evidence:** The reviewed repository did not contain a Dependabot configuration or CodeQL workflow before this PR. This branch adds both. Existing release CI generates license reports, but license inventory is not equivalent to vulnerability scanning or SAST.
 - **Impact:** Vulnerable dependency updates and code-level security regressions may not be detected automatically.
-- **Recommendation:** Dependabot for Gradle and GitHub Actions, scheduled/push/PR CodeQL for Java/Kotlin, and a dedicated Android compile/unit-test workflow are configured in this branch. CodeQL and existing build workflows started for the current PR head. Initial dedicated validation attempts failed due to wrapper-validation ordering and a nonexistent standalone Wrapper JAR URL; both issues have been corrected by extracting the JAR from the checksum-verified Gradle distribution. The rerun must be checked. Repository settings must permit SARIF upload. Add a resolved dependency SBOM and OSV/SCA scan once the build/lockfile strategy is established.
+- **Recommendation:** Dependabot for Gradle and GitHub Actions, CodeQL for Java/Kotlin, Android compile/unit tests, resolved dependency reports, and a Gradle dependency-submission workflow are configured in this branch. At `67c4e122`, CodeQL, unit tests, PR build validation, dependency reporting, and security branch validation passed. The dependency-submission workflow is newly added and its result remains to be checked. GitHub dependency-graph/Dependabot alert availability depends on repository settings. A machine-readable SBOM and explicit OSV/SCA scan remain open.
 - **SDLC:** Pre-merge / CI.
 - **Status:** Configuration present; baseline compile/unit-test workflow passed on commit 5eb3ffde. CodeQL SDK setup fixes and Gradle dependency-report workflow committed; latest runs pending. SBOM and vulnerability scanning remain open.
 
@@ -119,7 +119,7 @@ These are positive controls, not proof that all threat scenarios are covered.
 
 ## Static checks still required
 
-1. Run Gradle dependency reports for `directReleaseRuntimeClasspath` and generate an SPDX or CycloneDX SBOM from the resolved graph.
+1. Generate an SPDX or CycloneDX SBOM from the resolved graph; the current dependency-report workflow only uploads text reports.
 2. Run OSV-Scanner or another SCA tool against resolved Gradle dependencies and native components.
 3. Review all logging call sites and export paths for secrets, including native libbox logs and crash reports.
 4. Review every exported Android component, FileProvider paths, network configuration, and flavor-specific merged manifest.
