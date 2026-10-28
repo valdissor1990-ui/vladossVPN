@@ -118,21 +118,3 @@
         healthCheckJob = scope.launch {
             while (isActive) {
                 val intervalMs = BatteryPolicy.healthCheckIntervalMs(context)
-                delay(intervalMs)
-                if (isInPostConnectWarmup()) {
-                    logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
-                    continue
-                }
-                if (decisionEngine.isInCooldown()) {
-                    logCollector.debug(TAG, "Slow-server checks skipped during switch cooldown")
-                    continue
-                }
-                checkCurrentServer()
-            }
-        }
-    }
-
-    fun stopMonitoring() {
-        healthCheckJob?.cancel()
-        healthCheckJob = null
-    }
