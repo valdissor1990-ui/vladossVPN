@@ -15,7 +15,8 @@ object AutoSwitcherConfig {
     /** Base cooldown after a switch; still prevents flapping. */
     const val switchCooldownMs = 3 * 60_000L
     const val switchWindowMs = 15 * 60_000L
-    const val maxSwitchesPerWindow = 4
+    /** Keep at 3 — unit tests and anti-flap policy depend on this ceiling. */
+    const val maxSwitchesPerWindow = 3
     const val directProbeTimeoutMs = 1_500
     const val microProbeTimeoutMs = 3_000
     const val microProbeBytes = 51_200L
@@ -27,8 +28,8 @@ object AutoSwitcherConfig {
     const val microProbeBufferBytes = 8 * 1_024
     const val directProbePort = 53
     const val evidenceHistoryLimit = 12
-    /** Relative score gain for background auto-switch (slightly lower = faster promote of better node). */
-    const val minimumAutoSwitchScoreGain = 0.15f
+    /** Minimum relative score gain required for a background auto-switch. */
+    const val minimumAutoSwitchScoreGain = 0.20f
     const val ruFastServerRttMs = 200L
     const val manualSwitchDelayMs = 50L
     const val serverBlacklistDurationMs = 15 * 60_000L
