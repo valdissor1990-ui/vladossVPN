@@ -1,0 +1,78 @@
+    suspend fun switchToNext(): ScoredServer? {
+        if (suppressIfFrozen("switchToNext")) return null
+        val ranked = _rankedServers.value.filterNot { isBlacklisted(it.config) }
+        if (ranked.isEmpty()) {
+            logCollector.warn(TAG, "switchToNext: no ranked servers")
+            return null
+        }
+        val current = _currentServer.value
+        val next = ranked.firstOrNull { !sameServer(current?.config, it.config) } ?: ranked.first()
+        if (!switching.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "switchToNext: switch already active")
+            return null
+        }
+        try {
+            _currentServer.value = next
+            baselineRtt = next.latencyMs
+            previousRtt = null
+            consecutiveErrors = 0
+            _switchEvents.value = "Переключение на ${next.config.name}"
+            decisionEngine.recordSuccessfulSwitch()
+            connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+            connectionCoordinator.send(ConnectionEvent.ServerSelected(next, connectionCoordinator.activeTraceId))
+            logCollector.info(TAG, "switchToNext -> ${next.config.name}")
+            return next
+        } finally {
+            switching.set(false)
+        }
+    }
+
+    fun forceSelect(server: ScoredServer): Boolean {
+        if (suppressIfFrozen("forceSelect", server.config.name)) return false
+        _currentServer.value = server
+        baselineRtt = server.latencyMs
+        previousRtt = null
+        consecutiveErrors = 0
+        logCollector.info(TAG, "forceSelect ${server.config.name}")
+        return true
+    }
+
+    fun rankInBackground(configs: List<ParsedConfig>) {
+        if (configs.isEmpty()) {
+            _rankedServers.value = emptyList()
+            return
+        }
+        rankingJob?.cancel()
+        val generation = providerScopeGeneration
+        rankingJob = scope.launch {
+            try {
+                val usable = filterUsableServers(configs).filter { isWithinProviderScope(it) }
+                if (usable.isEmpty()) {
+                    logCollector.warn(TAG, "No usable servers in selected provider scope; background ranking skipped")
+                    return@launch
+                }
+                val ranked = scoringEngine.rank(usable)
+                if (generation != providerScopeGeneration) return@launch
+                _rankedServers.value = ranked
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(ranked))
+                logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Background ranking failed", e)
+            }
+        }
+    }
+
+    private fun sameConfig(a: ParsedConfig, b: ParsedConfig): Boolean =
+        a.connectionKey() == b.connectionKey()
+
+    private fun sameServer(
+        current: ParsedConfig?,
+        candidate: ParsedConfig
+    ): Boolean = current != null && current.connectionKey() == candidate.connectionKey()
+
+    fun clearSwitchEvent() {
+        _switchEvents.value = null
+    }
+}
