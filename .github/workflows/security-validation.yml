@@ -36,9 +36,6 @@ jobs:
           go-version: '1.26.8'
           cache: false
 
-      - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@v4
-
       - name: Bootstrap and verify Gradle Wrapper JAR
         env:
           WRAPPER_JAR_SHA256: ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0
@@ -51,6 +48,9 @@ jobs:
               https://services.gradle.org/distributions/gradle-8.14.6-wrapper.jar
           fi
           echo "${WRAPPER_JAR_SHA256}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
 
       - name: Prepare Android SDK
         run: |
