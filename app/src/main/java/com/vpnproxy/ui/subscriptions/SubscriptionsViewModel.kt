@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.core.scanner.ServerScanner
+import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -16,6 +17,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SubscriptionsViewModel @Inject constructor(
     private val repository: SubscriptionRepository,
+    private val jsonConfigRepository: JsonConfigRepository,
     private val serverScanner: ServerScanner,
     private val logCollector: LogCollector
 ) : ViewModel() {
@@ -37,6 +39,7 @@ class SubscriptionsViewModel @Inject constructor(
 
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
+    val jsonConfigs = jsonConfigRepository.configs
     val scannedServers = serverScanner.scannedServers
     val isScanning = serverScanner.isScanning
 
@@ -66,11 +69,17 @@ class SubscriptionsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             val displayName = name.ifBlank { "JSON ${subscriptions.value.size + 1}" }
-            val count = repository.addFromJsonConfig(rawJson, displayName, tag)
+            val count = jsonConfigRepository.addFromJsonConfig(rawJson, displayName, tag)
             _message.value = when {
                 count == null -> "Не удалось разобрать JSON"
                 count == 0 -> "В JSON нет поддерживаемых серверов"
                 else -> "Добавлено серверов из JSON: $count"
+            }
+            if (count != null && count > 0) {
+                val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
+                runCatching {
+                    serverScanner.scanAfterSubscriptionUpdate(merged)
+                }
             }
         }
     }
@@ -93,7 +102,8 @@ class SubscriptionsViewModel @Inject constructor(
             _isRefreshing.value = true
             try {
                 repository.refreshAll()
-                val scanResults = serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+                val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
+                val scanResults = serverScanner.scanAfterSubscriptionUpdate(merged)
                 val tcpResponsiveCount = scanResults.count { it.successRate > 0.5f }
                 _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
                 logCollector.info(
