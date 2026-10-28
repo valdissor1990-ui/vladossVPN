@@ -1,0 +1,33 @@
+anAfterSubscriptionUpdate(refreshed)
+                            refreshedSubscription = true
+                        }
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (e: Exception) {
+                        logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
+                        emptyList()
+                    }
+                }
+                if (activeTraceId != traceId) return@launch
+                if (configs.isEmpty()) configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
+                configs = filterConfigsForSelectedSubscription(configs)
+                if (configs.isEmpty()) {
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
+                    return@launch
+                }
+                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    val allowedKeys = configs.map { it.connectionKey() }.toSet()
+                    val scanned = serverScanner.availableServers()
+                        .filter { it.config.connectionKey() in allowedKeys }
+                        .filterNot { autoSwitcher.isBlacklisted(it.config) }
+                    if (_uiState.value.isAutomaticMode) {
+                        val bestScanned = scanned.minByOrNull { it.latencyMs }
+                        if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
+                        else {
+                            val currentConfig = autoSwitcher.currentServer.value?.config
+                                ?.takeIf { current -> configs.any { it.connectionKey() == current.connectionKey() } }
+                                ?: configs.first()
+                            autoSwitcher.selectImmediate(currentConfig, configs)
+                        }
+                    } else {
+                        manuallySelectedServer?.takeIf { s -> configs.an
