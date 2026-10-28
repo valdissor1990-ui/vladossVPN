@@ -61,6 +61,34 @@ class JsonConfigImportRoutingTest {
     }
 
     @Test
+    fun parsesSingBoxVlessOutbound() {
+        val sample = """
+            {
+              "type": "vless",
+              "tag": "my-server",
+              "server": "singbox.example",
+              "server_port": 443,
+              "uuid": "33333333-3333-4333-8333-333333333333",
+              "tls": {
+                "enabled": true,
+                "server_name": "example.org",
+                "utls": {"enabled": true, "fingerprint": "chrome"}
+              },
+              "transport": {"type": "ws", "path": "/vpn", "headers": {"Host": "example.org"}}
+            }
+        """.trimIndent()
+
+        val parsed = parser.parse(sample, providerTag = "sing-box")
+
+        assertEquals(1, parsed.size)
+        assertEquals("singbox.example", parsed.single().address)
+        assertEquals("ws", parsed.single().transport)
+        assertEquals("/vpn", parsed.single().path)
+        assertEquals("example.org", parsed.single().sni)
+        assertEquals("sing-box", parsed.single().providerTag)
+    }
+
+    @Test
     fun rejectsMalformedJsonAndUnsupportedPayloads() {
         assertTrue(parser.parse("""{"protocol":""").isEmpty())
         assertTrue(parser.parse("""{"protocol":"unsupported","settings":{}}""").isEmpty())
