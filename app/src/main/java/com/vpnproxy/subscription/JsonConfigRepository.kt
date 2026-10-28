@@ -78,11 +78,21 @@ class JsonConfigRepository @Inject constructor(
         }
     }
 
-    private fun persist() {
-        try {
-            prefs.edit().putString(KEY_ENTRIES, json.encodeToString(entrySerializer, _entries.value)).apply()
+    /**
+     * Persist the proposed state synchronously so callers can distinguish a durable
+     * import/removal from a failed write. Never publish state that was not saved.
+     */
+    private fun persist(entries: List<JsonEntry>): Boolean {
+        return try {
+            val serialized = json.encodeToString(entrySerializer, entries)
+            val saved = prefs.edit().putString(KEY_ENTRIES, serialized).commit()
+            if (!saved) {
+                logCollector.error(TAG, "Failed to persist JSON entries: commit returned false")
+            }
+            saved
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to persist JSON entries", e)
+            false
         }
     }
 
@@ -113,8 +123,12 @@ class JsonConfigRepository @Inject constructor(
                     tag = tag.ifBlank { displayName },
                     rawJson = rawJson
                 )
-                _entries.value = _entries.value + entry
-                persist()
+                val updatedEntries = _entries.value + entry
+                if (!persist(updatedEntries)) {
+                    logCollector.warn(TAG, "JSON import rejected because persistence failed")
+                    return@withContext null
+                }
+                _entries.value = updatedEntries
                 reparseAll()
                 logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
                 parsed.size
@@ -125,14 +139,21 @@ class JsonConfigRepository @Inject constructor(
         }
 
     fun remove(id: String) {
-        _entries.value = _entries.value.filterNot { it.id == id }
-        persist()
+        val updatedEntries = _entries.value.filterNot { it.id == id }
+        if (!persist(updatedEntries)) {
+            logCollector.warn(TAG, "JSON entry removal not applied because persistence failed")
+            return
+        }
+        _entries.value = updatedEntries
         reparseAll()
     }
 
     fun clear() {
+        if (!persist(emptyList())) {
+            logCollector.warn(TAG, "JSON entries clear not applied because persistence failed")
+            return
+        }
         _entries.value = emptyList()
-        persist()
         _configs.value = emptyList()
     }
 
