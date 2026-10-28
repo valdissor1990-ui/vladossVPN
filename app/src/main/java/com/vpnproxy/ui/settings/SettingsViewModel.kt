@@ -7,8 +7,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.update.UpdateCheckWorker
+import com.vpnproxy.smartconnect.BatteryPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -40,6 +43,14 @@ class SettingsViewModel @Inject constructor(
     val checkUpdates: StateFlow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_CHECK_UPDATES] ?: true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    private val _batteryEconomyMode = MutableStateFlow(BatteryPolicy.isEconomyModeEnabled(context))
+    val batteryEconomyMode: StateFlow<Boolean> = _batteryEconomyMode.asStateFlow()
+
+    fun setBatteryEconomyMode(enabled: Boolean) {
+        BatteryPolicy.setEconomyModeEnabled(context, enabled)
+        _batteryEconomyMode.value = enabled
+    }
 
     fun setAutoStart(enabled: Boolean) {
         viewModelScope.launch {
