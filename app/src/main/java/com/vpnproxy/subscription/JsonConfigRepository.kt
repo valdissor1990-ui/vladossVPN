@@ -138,23 +138,27 @@ class JsonConfigRepository @Inject constructor(
             }
         }
 
-    fun remove(id: String) {
+    suspend fun remove(id: String): Boolean = withContext(Dispatchers.IO) {
         val updatedEntries = _entries.value.filterNot { it.id == id }
+        if (updatedEntries.size == _entries.value.size) return@withContext false
         if (!persist(updatedEntries)) {
             logCollector.warn(TAG, "JSON entry removal not applied because persistence failed")
-            return
+            return@withContext false
         }
         _entries.value = updatedEntries
         reparseAll()
+        true
     }
 
-    fun clear() {
+    suspend fun clear(): Boolean = withContext(Dispatchers.IO) {
+        if (_entries.value.isEmpty()) return@withContext true
         if (!persist(emptyList())) {
             logCollector.warn(TAG, "JSON entries clear not applied because persistence failed")
-            return
+            return@withContext false
         }
         _entries.value = emptyList()
         _configs.value = emptyList()
+        true
     }
 
     /** Merge subscription pool with local JSON servers (deduped). */
