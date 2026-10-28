@@ -89,6 +89,30 @@ class JsonConfigImportRoutingTest {
     }
 
     @Test
+    fun disabledSingBoxRealityDoesNotOverrideTls() {
+        val sample = """
+            {
+              "type": "vless",
+              "server": "tls.example",
+              "server_port": 443,
+              "uuid": "44444444-4444-4444-8444-444444444444",
+              "tls": {
+                "enabled": true,
+                "server_name": "example.org",
+                "reality": {"enabled": false, "public_key": "unused-key", "short_id": "unused"}
+              }
+            }
+        """.trimIndent()
+
+        val parsed = parser.parse(sample)
+
+        assertEquals(1, parsed.size)
+        assertEquals("tls", parsed.single().security)
+        assertEquals(null, parsed.single().publicKey)
+        assertEquals(null, parsed.single().shortId)
+    }
+
+    @Test
     fun rejectsMalformedJsonAndUnsupportedPayloads() {
         assertTrue(parser.parse("""{"protocol":""").isEmpty())
         assertTrue(parser.parse("""{"protocol":"unsupported","settings":{}}""").isEmpty())
