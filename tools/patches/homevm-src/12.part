@@ -1,0 +1,22 @@
+r = server
+        val traceId = TraceId.newId()
+        activeTraceId = traceId
+        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
+        viewModelScope.launch {
+            try {
+                lastServerStore.save(address = server.config.address, port = server.config.port, name = server.config.name, uuid = server.config.uuid)
+                _uiState.value = _uiState.value.copy(currentServerName = server.config.name, currentRtt = server.latencyMs)
+                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
+                if (connectionCoordinator.state.value is ConnectionState.Disconnected || connectionCoordinator.state.value is ConnectionState.Error) {
+                    connectionCoordinator.send(ConnectionEvent.UserConnect)
+                }
+                ensureServiceRunning()
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "onServerSelected failed", e)
+            }
+        }
+    }
+}

@@ -1,0 +1,47 @@
+isconnect")
+        VpnProxyService.clearError()
+        connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
+        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+    }
+
+    fun switchServer() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val next = autoSwitcher.switchToNext() ?: return@launch
+                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
+                ensureServiceRunning()
+            } catch (e: Exception) {
+                logCollector.error(TAG, "switchServer failed", e)
+            }
+        }
+    }
+
+    private fun ensureServiceRunning(action: String = VpnProxyService.ACTION_ENSURE_RUNNING) {
+        try {
+            val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
+            context.startForegroundService(intent)
+        } catch (_: Exception) {}
+    }
+
+    fun refreshSubscription() {
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
+                subscriptionRepository.refreshAll()
+                updateAutoSwitcherProviderScope()
+                if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+            } catch (e: Exception) {
+                logCollector.error(TAG, "refreshSubscription failed", e)
+            } finally {
+                _uiState.value = _uiState.value.copy(isRefreshingSubscription = false)
+            }
+        }
+    }
+
+    fun onServerSelected(server: ScoringEngine.ScoredServer) {
+        if (!autoSwitcher.forceSelect(server)) {
+            logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name}")
+            return
+        }
+        manuallySelectedServe

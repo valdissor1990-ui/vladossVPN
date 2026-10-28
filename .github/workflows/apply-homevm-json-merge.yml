@@ -10,12 +10,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/battery-optimization
-      - name: Decode HomeViewModel
+      - name: Concatenate HomeViewModel parts
         run: |
           set -euo pipefail
-          cat tools/patches/homevm-json/*.b64 | tr -d '\n' | base64 -d > app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+          cat tools/patches/homevm-src/*.part > app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
           SIZE=$(wc -c < app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt)
-          echo "decoded size=$SIZE"
+          echo "size=$SIZE"
           test "$SIZE" -gt 24000
           grep -q "jsonConfigRepository: JsonConfigRepository" app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
           grep -q "allConfigsIncluding" app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
@@ -24,9 +24,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
-          if git diff --cached --quiet; then
-            echo "No changes"
-          else
+          if git diff --cached --quiet; then echo "No changes"; else
             git commit -m "fix(home): merge local JSON servers into connect pool"
             git push
           fi
