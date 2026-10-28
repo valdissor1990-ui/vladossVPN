@@ -149,3 +149,28 @@ These are positive controls, not proof that all threat scenarios are covered.
 - `.github/workflows/sca-sbom.yml` generates an SPDX JSON SBOM with Syft via Anchore's SBOM action, scans the checkout (including the verified `libbox.aar`) with Grype, uploads SARIF to GitHub code scanning, and retains scan output as an artifact.
 - This workflow is best-effort for vulnerability findings (`fail-build: false`) so findings are surfaced rather than silently blocking builds before baseline review. Review severity, reachability, and applicability manually; scanner output is not proof of exploitability.
 - **Status:** workflow committed; first run/results pending. The generated SBOM may not enumerate native code-level components inside the bundled AAR as richly as an upstream build-provenance SBOM. Native binary provenance and vulnerability review remain open.
+
+
+## Follow-up CI results — 2026-10-28
+
+The following workflows completed successfully on commit `36555dbc6a2ab625c82159679883030be0d704d3`:
+
+- CodeQL Kotlin/Java analysis, including SARIF upload.
+- Android compile and unit tests for Direct and Play debug variants.
+- Pull Request Build Validation.
+- Security Branch Validation.
+- Gradle Dependency Graph submission after enabling the repository Dependency Graph setting.
+- Dependency Audit; runtime dependency reports and CycloneDX report generation completed.
+- SPDX SBOM generation and Grype scan.
+
+Grype 0.97.1 reported **0 vulnerability matches across 41 packages** using vulnerability database version `v6.1.10` built 2026-10-28. This is a scoped scanner result, not proof that the app or embedded native code is vulnerability-free. The SPDX SBOM artifact was generated and uploaded. CodeQL results were uploaded successfully; review individual alerts in GitHub Code Scanning before treating the findings triage as complete.
+
+## Remaining work / explicit closure criteria
+
+- **APK signing identity:** automated build/unit tests passed, but focused tests for signer mismatch rejection, Android API compatibility, and legitimate single-signer key rotation have not been added or run. Do not describe the signing-lineage logic as fully validated.
+- **Native libbox:** the pinned AAR hash and expected archive/class presence are verified. This does not constitute source-to-binary provenance verification, native code review, or complete native dependency vulnerability mapping.
+- **Dynamic Android/VPN validation:** no physical-device or emulator test evidence was produced for installer behavior, IPv4/IPv6/DNS leak behavior, reconnect, kill switch, or network transitions. These checks require a suitable Android runtime and test VPN endpoints and remain outside the completed static CI scope.
+- **Release verification:** no signed release artifact/source correspondence or production signing-key continuity test was performed.
+- **CodeQL triage:** analysis upload succeeded; the actual alert list must be reviewed in GitHub Code Scanning and each finding classified as confirmed, false positive, or accepted risk.
+
+**Disposition:** static CI validation is green on the commit above. The overall security audit is not fully closed until the remaining items above are either tested or explicitly accepted with documented risk. Keep this PR open pending review of CodeQL alerts and APK signer test coverage.
