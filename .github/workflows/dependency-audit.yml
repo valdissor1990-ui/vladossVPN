@@ -108,7 +108,10 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          "$RUNNER_TEMP/osv-scanner" scan source -L build/dependency-audit/cyclonedx-bom.json \
+          # OSV-Scanner v2 does not treat CycloneDX SBOM as a supported lockfile.
+          # Scan supported manifests/lockfiles in the checkout; Grype separately scans
+          # the repository and generated SBOM, including the pinned native AAR.
+          "$RUNNER_TEMP/osv-scanner" scan source -r . \
             --format json --output-file build/dependency-audit/osv-scan-results.json
           status=$?
           set -e
