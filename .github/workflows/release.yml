@@ -56,13 +56,19 @@ jobs:
           fi
           echo "SDK ready at $SDK"
 
-      - name: Bootstrap Gradle Wrapper JAR
+      - name: Bootstrap and verify Gradle Wrapper JAR
+        env:
+          WRAPPER_JAR_SHA256: ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0
         run: |
+          set -euo pipefail
           mkdir -p gradle/wrapper
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+            curl --fail --show-error --silent --location \
+              --proto '=https' --tlsv1.2 \
+              -o gradle/wrapper/gradle-wrapper.jar \
+              https://services.gradle.org/distributions/gradle-8.14.6-wrapper.jar
           fi
+          echo "${WRAPPER_JAR_SHA256}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check --status
           chmod +x gradlew || true
 
       - uses: actions/cache@v6
