@@ -45,11 +45,33 @@ class SubscriptionsViewModel @Inject constructor(
             _message.value = "URL не может быть пустым"
             return
         }
+        val trimmed = url.trim()
+        // JSON config paste (sing-box outbound / array) — not a URL.
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            addFromJsonConfig(trimmed, name, tag)
+            return
+        }
         viewModelScope.launch {
             val displayName = name.ifBlank { "Provider ${subscriptions.value.size + 1}" }
-            val ok = repository.addSubscription(url, displayName, tag)
+            val ok = repository.addSubscription(trimmed, displayName, tag)
             _message.value = if (ok) "Подписка добавлена" else "Ошибка добавления"
             if (ok) refreshAll()
+        }
+    }
+
+    fun addFromJsonConfig(rawJson: String, name: String, tag: String = "") {
+        if (rawJson.isBlank()) {
+            _message.value = "JSON не может быть пустым"
+            return
+        }
+        viewModelScope.launch {
+            val displayName = name.ifBlank { "JSON ${subscriptions.value.size + 1}" }
+            val count = repository.addFromJsonConfig(rawJson, displayName, tag)
+            _message.value = when {
+                count == null -> "Не удалось разобрать JSON"
+                count == 0 -> "В JSON нет поддерживаемых серверов"
+                else -> "Добавлено серверов из JSON: $count"
+            }
         }
     }
 
