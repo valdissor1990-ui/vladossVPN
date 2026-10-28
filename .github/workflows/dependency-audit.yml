@@ -84,6 +84,39 @@ jobs:
           ./gradlew :app:dependencyInsight --configuration directReleaseRuntimeClasspath \
             --dependency security-crypto --no-daemon > build/dependency-audit/security-crypto-insight.txt
 
+      - name: Generate CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          ./gradlew cyclonedxBom --no-daemon
+          test -s build/reports/cyclonedx/bom.json
+          cp build/reports/cyclonedx/bom.json build/dependency-audit/cyclonedx-bom.json
+
+      - name: Install checksum-verified OSV-Scanner
+        env:
+          OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+            -o "$RUNNER_TEMP/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          "$RUNNER_TEMP/osv-scanner" --version
+
+      - name: Scan SBOM against OSV vulnerability database
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          set +e
+          "$RUNNER_TEMP/osv-scanner" scan source -L build/dependency-audit/cyclonedx-bom.json \
+            --format json --output-file build/dependency-audit/osv-scan-results.json
+          status=$?
+          set -e
+          echo "$status" > build/dependency-audit/osv-scanner-exit-code.txt
+          if [ "$status" -ne 0 ]; then
+            echo "OSV-Scanner returned $status; inspect osv-scan-results.json and workflow logs. This step is report-only while the initial baseline is reviewed."
+          fi
+
       - name: Upload dependency reports
         uses: actions/upload-artifact@v4
         with:
