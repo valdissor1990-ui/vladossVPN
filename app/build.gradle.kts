@@ -76,6 +76,19 @@ android {
         }
     }
 
+    // Never produce a release variant signed with the publicly known debug key.
+    // Fail closed when a release task is requested without a configured release keystore.
+    val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+        taskName.contains("Release", ignoreCase = true) || taskName.equals("assemble", ignoreCase = true)
+    }
+    val releaseSigningConfig = signingConfigs.getByName("release")
+    if (releaseTaskRequested && releaseSigningConfig.storeFile == null) {
+        throw GradleException(
+            "Release build requested but no release keystore is configured. " +
+                "Set KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD."
+        )
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -84,10 +97,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-        buildConfigField("boolean", "LOG_DEBUG", "false")
-            signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
-                signingConfigs.getByName("release")
-            else signingConfigs.getByName("debug")
+            buildConfigField("boolean", "LOG_DEBUG", "false")
+            signingConfig = releaseSigningConfig
         }
         debug {
             isMinifyEnabled = false
