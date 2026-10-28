@@ -1,0 +1,35 @@
+name: Apply AutoSwitcher BatteryPolicy
+on:
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/battery-optimization
+          fetch-depth: 0
+      - name: Concatenate AutoSwitcher parts
+        run: |
+          set -euo pipefail
+          ls -la tools/patches/asw-src/
+          cat tools/patches/asw-src/*.part > app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          SIZE=$(wc -c < app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt)
+          echo "size=$SIZE"
+          test "$SIZE" -gt 35000
+          grep -q "BatteryPolicy.healthCheckIntervalMs" app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          grep -q "shouldRunMicroProbe" app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          grep -q "shouldAllowRankingSwitch" app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          grep -q "fun clearSwitchEvent" app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          tail -n 5 app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/smartconnect/AutoSwitcher.kt
+          if git diff --cached --quiet; then echo "No changes"; else
+            git commit -m "fix(autoswitcher): restore full file with BatteryPolicy wiring"
+            git push origin HEAD:feat/battery-optimization
+          fi
