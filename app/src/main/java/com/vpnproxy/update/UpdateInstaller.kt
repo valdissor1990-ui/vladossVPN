@@ -90,14 +90,13 @@ class UpdateInstaller @Inject constructor(
         return info.signatures?.map { certificateSha256(it.toByteArray()) }?.toSet().orEmpty()
     }
 
-    private fun hasCompatibleSigningIdentity(current: PackageInfo, archive: PackageInfo): Boolean {
-        val installedSigners = currentSignerDigests(current)
-        val archiveSigners = archiveSignerDigests(archive)
+    internal fun hasCompatibleSigningIdentity(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean {
         if (installedSigners.isEmpty() || archiveSigners.isEmpty()) return false
 
         // Single-signer updates may use a declared signing lineage; multi-signer
-        // packages must match exactly.
-        if (installedSigners.size == 1) return installedSigners.all { it in archiveSigners }
+        // packages must match exactly. archiveSigners is the installed signer
+        // plus the archive's declared signing-certificate history.
+        if (installedSigners.size == 1) return installedSigners.single() in archiveSigners
         return installedSigners == archiveSigners
     }
 
@@ -148,7 +147,7 @@ class UpdateInstaller @Inject constructor(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
             }
-            if (!hasCompatibleSigningIdentity(currentInfo, archiveInfo)) {
+            if (!hasCompatibleSigningIdentity(currentSignerDigests(currentInfo), archiveSignerDigests(archiveInfo))) {
                 logCollector.warn(TAG, "Install rejected: APK signing identity does not match installed publisher")
                 return false
             }
