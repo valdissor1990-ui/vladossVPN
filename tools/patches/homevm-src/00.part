@@ -1,0 +1,49 @@
+package com.vpnproxy.ui.home
+
+import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.util.Log
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.connection.ConnectionCoordinator
+import com.vpnproxy.core.connection.ConnectionEvent
+import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.connection.LastServerStore
+import com.vpnproxy.core.connection.TraceId
+import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.util.DebugFlags
+import com.vpnproxy.core.ping.LatencyBreakdown
+import com.vpnproxy.core.ping.LatencyCalculator
+import com.vpnproxy.core.ping.PingService
+import com.vpnproxy.core.scanner.ServerScanner
+import com.vpnproxy.core.ping.PingTargets
+import com.vpnproxy.core.tunnel.TrafficStatsCollector
+import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.service.VpnProxyService
+import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.ScoringEngine
+import com.vpnproxy.subscription.JsonConfigRepository
+import com.vpnproxy.subscription.SubscriptionRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import javax.inject.Inject
+
+@HiltViewModel
+class HomeViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val serverScanner: ServerScanner,
+    private val autoSwitcher: AutoSwitcher,
+    private val scoringEn
