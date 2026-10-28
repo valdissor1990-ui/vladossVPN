@@ -1,18 +1,45 @@
 package com.vpnproxy.smartconnect
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Pure constant / ordering checks — Context-dependent paths are covered in instrumented tests later.
- */
+/** Tests both battery policy precedence and the thresholds that constrain switching. */
 class BatteryPolicyTest {
 
     @Test
-    fun intervals_areOrderedForBattery() {
-        assertTrue(AutoSwitcherConfig.healthCheckIntervalMs < AutoSwitcherConfig.economyHealthCheckIntervalMs)
-        assertTrue(AutoSwitcherConfig.economyHealthCheckIntervalMs < AutoSwitcherConfig.batterySaverHealthCheckIntervalMs)
+    fun healthCheckInterval_prefersSystemSaverOverEconomyMode() {
+        assertEquals(
+            AutoSwitcherConfig.batterySaverHealthCheckIntervalMs,
+            BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = true, economyMode = true)
+        )
+        assertEquals(
+            AutoSwitcherConfig.batterySaverHealthCheckIntervalMs,
+            BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = true, economyMode = false)
+        )
+        assertEquals(
+            AutoSwitcherConfig.economyHealthCheckIntervalMs,
+            BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = false, economyMode = true)
+        )
+        assertEquals(
+            AutoSwitcherConfig.healthCheckIntervalMs,
+            BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = false, economyMode = false)
+        )
+    }
+
+    @Test
+    fun microProbe_isSkippedOnlyWhenSystemSaverPolicyRequiresIt() {
+        assertFalse(BatteryPolicy.shouldRunMicroProbe(systemBatterySaver = true))
+        assertTrue(BatteryPolicy.shouldRunMicroProbe(systemBatterySaver = false))
+    }
+
+    @Test
+    fun rankingSwitch_isSuppressedForEitherBatteryEconomyMode() {
+        assertFalse(BatteryPolicy.shouldAllowRankingSwitch(systemBatterySaver = true, economyMode = false))
+        assertFalse(BatteryPolicy.shouldAllowRankingSwitch(systemBatterySaver = false, economyMode = true))
+        assertFalse(BatteryPolicy.shouldAllowRankingSwitch(systemBatterySaver = true, economyMode = true))
+        assertTrue(BatteryPolicy.shouldAllowRankingSwitch(systemBatterySaver = false, economyMode = false))
     }
 
     @Test
@@ -25,7 +52,6 @@ class BatteryPolicyTest {
 
     @Test
     fun urlTestInterval_prefersBatteryFriendlyCadence() {
-        // "90s" is intentional once standbys land; avoid sub-minute radio chatter.
         assertEquals("90s", AutoSwitcherConfig.urlTestInterval)
     }
 }
