@@ -33,22 +33,34 @@ object BatteryPolicy {
      * Effective health-check delay:
      * system saver > in-app economy > normal.
      */
-    fun healthCheckIntervalMs(context: Context): Long {
-        return when {
-            isSystemBatterySaver(context) -> AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
-            isEconomyModeEnabled(context) -> AutoSwitcherConfig.economyHealthCheckIntervalMs
+    fun healthCheckIntervalMs(context: Context): Long =
+        healthCheckIntervalMs(
+            systemBatterySaver = isSystemBatterySaver(context),
+            economyMode = isEconomyModeEnabled(context)
+        )
+
+    /** Pure policy function so precedence is covered by fast unit tests. */
+    internal fun healthCheckIntervalMs(systemBatterySaver: Boolean, economyMode: Boolean): Long =
+        when {
+            systemBatterySaver -> AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
+            economyMode -> AutoSwitcherConfig.economyHealthCheckIntervalMs
             else -> AutoSwitcherConfig.healthCheckIntervalMs
         }
-    }
 
-    fun shouldRunMicroProbe(context: Context): Boolean {
-        if (!AutoSwitcherConfig.skipMicroProbeInBatterySaver) return true
-        return !isSystemBatterySaver(context)
-    }
+    fun shouldRunMicroProbe(context: Context): Boolean =
+        shouldRunMicroProbe(isSystemBatterySaver(context))
 
-    fun shouldAllowRankingSwitch(context: Context): Boolean {
-        if (!AutoSwitcherConfig.skipRankingSwitchInBatterySaver) return true
-        // Economy mode also suppresses pure ranking switches; hard-fail switches stay elsewhere.
-        return !isSystemBatterySaver(context) && !isEconomyModeEnabled(context)
-    }
+    internal fun shouldRunMicroProbe(systemBatterySaver: Boolean): Boolean =
+        !AutoSwitcherConfig.skipMicroProbeInBatterySaver || !systemBatterySaver
+
+    fun shouldAllowRankingSwitch(context: Context): Boolean =
+        shouldAllowRankingSwitch(
+            systemBatterySaver = isSystemBatterySaver(context),
+            economyMode = isEconomyModeEnabled(context)
+        )
+
+    /** Ranking switches are optional quality improvements; hard-failure recovery is separate. */
+    internal fun shouldAllowRankingSwitch(systemBatterySaver: Boolean, economyMode: Boolean): Boolean =
+        !AutoSwitcherConfig.skipRankingSwitchInBatterySaver ||
+            (!systemBatterySaver && !economyMode)
 }
