@@ -1,0 +1,93 @@
+name: Dependency Audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - security/static-appsec-audit-2026-10
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-report:
+    name: Resolve runtime dependency graphs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort | tail -1)
+          test -n "$CMDLINE"
+          set +o pipefail
+          yes | "$CMDLINE" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          set -o pipefail
+
+      - name: Bootstrap and verify Gradle Wrapper JAR
+        env:
+          WRAPPER_JAR_SHA256: ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0
+          GRADLE_DIST_SHA256: 7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
+        run: |
+          set -euo pipefail
+          mkdir -p gradle/wrapper
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+              -o "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              https://services.gradle.org/distributions/gradle-8.14.6-bin.zip
+            echo "${GRADLE_DIST_SHA256}  $RUNNER_TEMP/gradle-8.14.6-bin.zip" | sha256sum --check
+            unzip -p "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              gradle-8.14.6/lib/plugins/gradle-wrapper-main-8.14.6.jar \
+              > "$RUNNER_TEMP/gradle-wrapper-main.jar"
+            unzip -p "$RUNNER_TEMP/gradle-wrapper-main.jar" gradle-wrapper.jar \
+              > gradle/wrapper/gradle-wrapper.jar
+          fi
+          echo "${WRAPPER_JAR_SHA256}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
+          chmod +x gradlew
+
+      - name: Download and verify pinned libbox AAR
+        run: |
+          set -euo pipefail
+          chmod +x scripts/download_libbox.sh
+          ./scripts/download_libbox.sh
+
+      - name: Resolve runtime dependencies and save reports
+        run: |
+          set -euo pipefail
+          mkdir -p build/dependency-audit
+          ./gradlew :app:dependencies --configuration directReleaseRuntimeClasspath --no-daemon \
+            > build/dependency-audit/directReleaseRuntimeClasspath.txt
+          ./gradlew :app:dependencies --configuration playReleaseRuntimeClasspath --no-daemon \
+            > build/dependency-audit/playReleaseRuntimeClasspath.txt
+          ./gradlew :app:dependencyInsight --configuration directReleaseRuntimeClasspath \
+            --dependency okhttp --no-daemon > build/dependency-audit/okhttp-insight.txt
+          ./gradlew :app:dependencyInsight --configuration directReleaseRuntimeClasspath \
+            --dependency security-crypto --no-daemon > build/dependency-audit/security-crypto-insight.txt
+
+      - name: Upload dependency reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolved-gradle-dependency-reports
+          path: build/dependency-audit/
+          if-no-files-found: error
+          retention-days: 30
