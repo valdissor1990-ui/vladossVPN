@@ -354,6 +354,43 @@ class SubscriptionParser @Inject constructor(
 
     private fun extractFromJsonObject(obj: JsonObject, providerTag: String): ParsedConfig? {
         return try {
+            // sing-box outbound schema: { type, server, server_port, uuid, tls, transport }
+            if (obj["type"]?.jsonPrimitive?.content == "vless") {
+                val address = obj["server"]?.jsonPrimitive?.content ?: return null
+                val port = obj["server_port"]?.jsonPrimitive?.int ?: return null
+                val uuid = obj["uuid"]?.jsonPrimitive?.content ?: return null
+                val tls = obj["tls"]?.jsonObject
+                val reality = tls?.get("reality")?.jsonObject
+                val transportObject = obj["transport"]?.jsonObject
+                val transport = transportObject?.get("type")?.jsonPrimitive?.content ?: "tcp"
+                val headers = transportObject?.get("headers")?.jsonObject
+                val host = headers?.get("Host")?.jsonPrimitive?.content
+                    ?: headers?.get("host")?.jsonPrimitive?.content
+                val parsed = ParsedConfig(
+                    uuid = uuid,
+                    address = address,
+                    port = port,
+                    transport = transport,
+                    security = if (tls?.get("enabled")?.jsonPrimitive?.boolean == true) {
+                        if (reality != null) "reality" else "tls"
+                    } else "none",
+                    sni = tls?.get("server_name")?.jsonPrimitive?.content,
+                    path = transportObject?.get("path")?.jsonPrimitive?.content,
+                    host = host,
+                    mode = transportObject?.get("mode")?.jsonPrimitive?.content,
+                    fingerprint = tls?.get("utls")?.jsonObject?.get("fingerprint")?.jsonPrimitive?.content,
+                    publicKey = reality?.get("public_key")?.jsonPrimitive?.content,
+                    shortId = reality?.get("short_id")?.jsonPrimitive?.content,
+                    flow = obj["flow"]?.jsonPrimitive?.content,
+                    name = obj["tag"]?.jsonPrimitive?.content ?: "$address:$port",
+                    providerTag = providerTag,
+                    insecure = tls?.get("insecure")?.jsonPrimitive?.boolean ?: false,
+                    alpn = tls?.get("alpn")?.jsonArray?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList()
+                )
+                return parsed.takeIf { it.isValid() }
+            }
+
+            // Legacy V2Ray/Xray JSON schema.
             val protocol = obj["protocol"]?.jsonPrimitive?.content ?: return null
             if (protocol != "vless") return null
             val settings = obj["settings"]?.jsonObject ?: return null
