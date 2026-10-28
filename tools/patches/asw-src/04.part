@@ -1,0 +1,51 @@
+     */
+    private fun isRussian(config: ParsedConfig): Boolean {
+        val name = (config.name + " " + config.providerTag).lowercase()
+        if (Regex("(germany|deutschland|eu-|europe|nl-|nl |de-|fr-|uk-|us-|sg-|jp-)", RegexOption.IGNORE_CASE).containsMatchIn(name)) {
+            return false
+        }
+        return Regex("(^|[^a-z0-9])(ru|russia|рф|russian)([^a-z0-9]|$)", RegexOption.IGNORE_CASE).containsMatchIn(name)
+    }
+
+    fun rankInBackground(configs: List<ParsedConfig>) {
+        if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
+        rankingJob?.cancel()
+        val generation = providerScopeGeneration
+        val rankingTraceId = connectionCoordinator.activeTraceId
+        val usable = filterUsableServers(configs).filter { isWithinProviderScope(it) }
+        if (usable.isEmpty()) {
+            logCollector.warn(TAG, "No usable servers in selected provider scope; background ranking skipped")
+            return
+        }
+        rankingJob = scope.launch {
+            try {
+                // Prefer RU endpoints first, then the rest; ranking never blocks initial connection.
+                val ordered = usable.sortedByDescending { isRussian(it) }
+                val ranked = scoringEngine.rank(ordered)
+                if (generation != providerScopeGeneration) {
+                    logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
+                    return@launch
+                }
+                if (connectionCoordinator.activeTraceId != rankingTraceId) {
+                    logCollector.info(TAG, "Discarding stale background ranking for trace=$rankingTraceId; active=${connectionCoordinator.activeTraceId}")
+                    return@launch
+                }
+                _rankedServers.value = ranked
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(ranked))
+                logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
+
+                val current = _currentServer.value
+                val best = ranked.firstOrNull()
+                if (current != null &&
+                    connectionCoordinator.state.value is com.vpnproxy.core.connection.ConnectionState.Connected
+                ) {
+                    val measuredCurrent = ranked.firstOrNull { sameConfig(it.config, current.config) }
+                    when {
+                        best == null -> Unit
+                        measuredCurrent == null -> {
+                            logCollector.warn(
+                                TAG,
+                                "Background auto-switch suppressed: current server is absent from comparable ranking; awaiting health validation"
+                            )
+                        }
+                        sameConfig(current.config, best.config) -> {
