@@ -1,0 +1,32 @@
+name: Apply HomeViewModel JSON Merge
+on:
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/battery-optimization
+      - name: Decode HomeViewModel
+        run: |
+          set -euo pipefail
+          cat tools/patches/homevm-json/*.b64 | tr -d '\n' | base64 -d > app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+          SIZE=$(wc -c < app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt)
+          echo "decoded size=$SIZE"
+          test "$SIZE" -gt 24000
+          grep -q "jsonConfigRepository: JsonConfigRepository" app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+          grep -q "allConfigsIncluding" app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "fix(home): merge local JSON servers into connect pool"
+            git push
+          fi
