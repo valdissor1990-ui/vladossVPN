@@ -53,6 +53,10 @@ class SettingsViewModel @Inject constructor(
         .map { it.enabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    val dualPathSelectedCount: StateFlow<Int> = dualPathStore.settings
+        .map { it.packages.size }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
     fun setBatteryEconomyMode(enabled: Boolean) {
         BatteryPolicy.setEconomyModeEnabled(context, enabled)
         _batteryEconomyMode.value = enabled
@@ -65,7 +69,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setAutoStart(enabled: Boolean) {
-        // BootReceiver reads device-protected preferences before user unlock.
         val bootPrefsContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             context.createDeviceProtectedStorageContext() ?: context
         } else {
@@ -98,5 +101,4 @@ class SettingsViewModel @Inject constructor(
             }
         }
     }
-
 }
