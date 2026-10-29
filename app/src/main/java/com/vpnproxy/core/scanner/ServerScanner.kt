@@ -4,6 +4,7 @@ import android.content.Context
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.service.VpnProxyService
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -121,7 +122,7 @@ class ServerScanner @Inject constructor(
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
 
-                val probeConfigs = unique.filter { it.isValid() }
+                val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
                 if (probeConfigs.isNotEmpty()) {
                     try {
                         deepProbeEngine.pingProfiles(probeConfigs) { batch ->
