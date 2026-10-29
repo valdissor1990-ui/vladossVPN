@@ -222,7 +222,7 @@ class ServerScanner @Inject constructor(
         _isScanning.value = true
         try {
             activeScanJob = currentCoroutineContext()[Job]
-            val probeConfigs = unique.filter { it.isValid() }
+            val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
             val resultByKey = linkedMapOf<String, ScoredServer>()
             unique.forEach { config ->
                 resultByKey[scanKey(config)] = if (config.isValid())
