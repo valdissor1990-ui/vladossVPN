@@ -59,7 +59,7 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
+        private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
@@ -208,11 +208,11 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun armConnectingWatchdog() {
-        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob?.cancel()
         connectingWatchdogJob = viewModelScope.launch {
             delay(CONNECTING_UI_WATCHDOG_MS)
             val s = connectionCoordinator.state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
                 logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))

@@ -440,7 +440,11 @@ class VpnProxyService : VpnService() {
       }.getOrDefault(emptyList())
       val foreignParsed = if (dualPackages.isNotEmpty()) {
           val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
-          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+          val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+          fromRanked ?: ServerRegionClassifier.pickBestForeign(
+              runCatching { subscriptionRepository.getAllConfigs() }.getOrDefault(emptyList()),
+              preferredNot = parsed
+          )
       } else null
       if (foreignParsed != null) {
           logCollector.info(

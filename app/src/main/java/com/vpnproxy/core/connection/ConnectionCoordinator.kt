@@ -60,7 +60,7 @@ class ConnectionCoordinator @Inject constructor(
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
         private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
-        const val CONNECTING_TIMEOUT_MS = 60_000L
+        const val CONNECTING_TIMEOUT_MS = 90_000L
 
         fun trafficFatalMessage(summary: String?): String {
             val s = summary?.lowercase().orEmpty()
@@ -372,6 +372,15 @@ class ConnectionCoordinator @Inject constructor(
                 if (isFatalErrorLocked) {
                     logW("ServiceReady ignored — fatal lock is active")
                     return
+                }
+                when (current) {
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> Unit
+                    else -> {
+                        logW("ServiceReady ignored in state $current for ${event.serverName}")
+                        return
+                    }
                 }
                 retryCount = 0
                 val validationId = ++trafficValidationGeneration
