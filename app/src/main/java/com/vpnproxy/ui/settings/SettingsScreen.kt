@@ -16,7 +16,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,14 +29,15 @@ fun SettingsScreen(
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
     val batteryEconomyMode by viewModel.batteryEconomyMode.collectAsStateWithLifecycle()
     val dualPathEnabled by viewModel.dualPathEnabled.collectAsStateWithLifecycle()
+    val dualPathSelectedCount by viewModel.dualPathSelectedCount.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
     var showSplitTunnelScreen by remember { mutableStateOf(false) }
+    var showDualPathScreen by remember { mutableStateOf(false) }
     var showOpenSourceLicenses by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         updateViewModel.feedback.collect { feedback ->
@@ -52,6 +52,11 @@ fun SettingsScreen(
 
     if (showSplitTunnelScreen) {
         SplitTunnelScreen(onBack = { showSplitTunnelScreen = false })
+        return
+    }
+
+    if (showDualPathScreen) {
+        DualPathAppsScreen(onBack = { showDualPathScreen = false })
         return
     }
 
@@ -99,12 +104,21 @@ fun SettingsScreen(
                 }
                 TextButton(onClick = { showSplitTunnelScreen = true }) { Text("Настроить") }
             }
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showDualPathScreen = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("ИИ через зарубежный сервер", style = MaterialTheme.typography.bodyLarge)
-                    Text("ChatGPT, Claude, Gemini и другие ИИ — через не-RU сервер; остальное как обычно", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text("Зарубежный обход", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (!dualPathEnabled) "Выключен"
+                        else if (dualPathSelectedCount == 0) "Включён · приложения не выбраны"
+                        else "Включён · приложений: $dualPathSelectedCount",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
                 }
-                Switch(checked = dualPathEnabled, onCheckedChange = { viewModel.setDualPathEnabled(it) })
+                TextButton(onClick = { showDualPathScreen = true }) { Text("Выбрать") }
             }
 
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
@@ -177,7 +191,7 @@ fun SettingsScreen(
 
     UpdateDialog(
         state = updateState,
-        onDownload = { updateViewModel.download() },
+        onDownloadDownload = { updateViewModel.download() },
         onInstall = { updateViewModel.install() },
         onDismiss = { updateViewModel.dismiss() }
     )
