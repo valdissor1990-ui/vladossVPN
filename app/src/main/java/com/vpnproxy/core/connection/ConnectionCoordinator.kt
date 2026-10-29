@@ -441,7 +441,15 @@ class ConnectionCoordinator @Inject constructor(
         if (current !is ConnectionState.Connecting && current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected && current !is ConnectionState.Verifying) return false
 
-        var nextIndex = (fallbackIndex + 1).coerceAtLeast(0)
+        // The currently active endpoint is the one that just failed. Remove it
+        // before choosing the next candidate so a later failure cannot cycle back
+        // to an endpoint already tried in this fallback pass.
+        val failedKey = activeScoredServer?.config?.connectionKey()
+        if (failedKey != null) {
+            fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == failedKey }
+        }
+        fallbackIndex = -1
+        var nextIndex = 0
         while (nextIndex < fallbackCandidates.size) {
             val candidate = fallbackCandidates[nextIndex]
             if (!isWithinProviderScope(candidate)) {
