@@ -272,6 +272,15 @@ fun HomeScreen(
                     }
                 }
 
+                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OnDarkSecondary
+                    )
+                }
+
                 Spacer(Modifier.height(18.dp))
 
                 Card(

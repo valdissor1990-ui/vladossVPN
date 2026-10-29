@@ -103,6 +103,9 @@ class VpnProxyService : VpnService() {
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
 
     override fun onCreate() {
+        connectionCoordinator.setOnEndpointHardFailed { cfg ->
+            autoSwitcher.markServerFailed(cfg)
+        }
         super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
 

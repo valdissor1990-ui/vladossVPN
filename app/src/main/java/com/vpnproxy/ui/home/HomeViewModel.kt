@@ -25,6 +25,7 @@ import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
+import com.vpnproxy.core.dualpath.DualPathStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -54,7 +55,8 @@ class HomeViewModel @Inject constructor(
     private val logCollector: LogCollector,
     private val connectionCoordinator: ConnectionCoordinator,
     private val lastServerStore: LastServerStore,
-    private val jsonConfigRepository: JsonConfigRepository
+    private val jsonConfigRepository: JsonConfigRepository,
+    private val dualPathStore: DualPathStore
 ) : ViewModel() {
 
     companion object {
@@ -77,7 +79,9 @@ class HomeViewModel @Inject constructor(
         val isScanningServers: Boolean = false,
         val isAutomaticMode: Boolean = true,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
-        val lastErrorMessage: String? = null
+        val lastErrorMessage: String? = null,
+        val dualPathEnabled: Boolean = false,
+        val dualPathAppCount: Int = 0
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
@@ -191,6 +195,14 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             serverScanner.isScanning.collect { scanning ->
                 _uiState.value = _uiState.value.copy(isScanningServers = scanning)
+            }
+        }
+        viewModelScope.launch {
+            dualPathStore.settings.collect { s ->
+                _uiState.value = _uiState.value.copy(
+                    dualPathEnabled = s.enabled,
+                    dualPathAppCount = s.packages.size
+                )
             }
         }
     }
