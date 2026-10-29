@@ -165,13 +165,13 @@ class SubscriptionParser @Inject constructor(
     fun parseHysteria2Uri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
             val normalized = uri.replaceFirst("hy2://", "hysteria2://")
-            val parsed = URI(normalized)
+            val (parsed, rawFragment) = parseUriAndFragment(normalized)
             val password = parsed.rawUserInfo?.takeIf { it.isNotBlank() }?.let(::decodeUriComponent) ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
             val params = parseUriQuery(parsed.rawQuery)
             val sni = params["sni"] ?: params["peer"]
-            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
+            val name = rawFragment?.let(::decodeUriComponentSafely) ?: "$address:$port"
             val config = ParsedConfig(
                 uuid = password, address = address, port = port,
                 transport = "hysteria2", security = "tls", sni = sni,
@@ -194,7 +194,7 @@ class SubscriptionParser @Inject constructor(
 
     fun parseTuicUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
-            val parsed = URI(uri)
+            val (parsed, rawFragment) = parseUriAndFragment(uri)
             val rawUserInfo = parsed.rawUserInfo?.takeIf { it.isNotBlank() } ?: return null
             val rawUuid = rawUserInfo.substringBefore(":").takeIf { it.isNotBlank() } ?: return null
             val rawPassword = rawUserInfo.substringAfter(":", missingDelimiterValue = "")
@@ -204,7 +204,7 @@ class SubscriptionParser @Inject constructor(
             val port = parsed.port.takeIf { it > 0 } ?: 443
             val params = parseUriQuery(parsed.rawQuery)
             val sni = params["sni"] ?: params["peer"]
-            val name = decodeUriComponent(parsed.rawFragment ?: "$address:$port")
+            val name = rawFragment?.let(::decodeUriComponentSafely) ?: "$address:$port"
             val config = ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = "tuic", security = "tls", sni = sni,
@@ -238,6 +238,22 @@ class SubscriptionParser @Inject constructor(
                 val value = if (separator >= 0) part.substring(separator + 1) else ""
                 decodeUriComponent(key) to decodeUriComponent(value)
             }
+
+    /**
+     * Parse the URI without its display-name fragment. java.net.URI rejects raw
+     * Unicode (including flag emoji) in some fragments, although the fragment is
+     * only a user-visible profile name and is not part of the connection endpoint.
+     */
+    private fun parseUriAndFragment(rawUri: String): Pair<URI, String?> {
+        val fragmentIndex = rawUri.indexOf('#')
+        val uriPart = if (fragmentIndex >= 0) rawUri.substring(0, fragmentIndex) else rawUri
+        val rawFragment = if (fragmentIndex >= 0) rawUri.substring(fragmentIndex + 1) else null
+        return URI(uriPart) to rawFragment
+    }
+
+    /** A malformed percent escape in a display name must not discard the server. */
+    private fun decodeUriComponentSafely(value: String): String =
+        runCatching { decodeUriComponent(value) }.getOrDefault(value)
 
     private fun decodeUriComponent(value: String): String =
         URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
@@ -292,7 +308,7 @@ class SubscriptionParser @Inject constructor(
 
     fun parseVlessUri(uri: String, providerTag: String = ""): ParsedConfig? {
         return try {
-            val parsed = URI(uri)
+            val (parsed, rawFragment) = parseUriAndFragment(uri)
             val uuid = parsed.rawUserInfo?.takeIf { it.isNotBlank() }?.let(::decodeUriComponent) ?: return null
             val address = parsed.host ?: return null
             val port = parsed.port.takeIf { it > 0 } ?: 443
@@ -309,7 +325,7 @@ class SubscriptionParser @Inject constructor(
             val rawMode = params["mode"]
             val mode = if (transport == "xhttp") rawMode?.takeIf { it.isNotBlank() } ?: "auto" else rawMode
             val flow = if (transport == "xhttp") "" else rawFlow
-            val name = parsed.rawFragment?.let(::decodeUriComponent) ?: "$address:$port"
+            val name = rawFragment?.let(::decodeUriComponentSafely) ?: "$address:$port"
             val config = ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = transport, security = security,
