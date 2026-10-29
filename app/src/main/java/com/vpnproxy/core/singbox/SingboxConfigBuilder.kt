@@ -44,13 +44,13 @@ object SingboxConfigBuilder {
 
     /**
      * @param foreignConfig optional second outbound for AI / selected apps (non-RU exit)
-     * @param foreignProcessNames Android package names routed to foreign outbound
+     * @param foreignPackageNames Android package names routed to foreign outbound
      */
     fun buildVpn(
         config: ParsedConfig,
         options: DiagnosticOptions = DiagnosticOptions(),
         foreignConfig: ParsedConfig? = null,
-        foreignProcessNames: List<String> = emptyList()
+        foreignPackageNames: List<String> = emptyList()
     ): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
@@ -110,7 +110,7 @@ object SingboxConfigBuilder {
         })
         put("outbounds", buildJsonArray {
             add(buildOutbound(config, "proxy"))
-            if (foreignConfig != null && foreignProcessNames.isNotEmpty()) {
+            if (foreignConfig != null && foreignPackageNames.isNotEmpty()) {
                 add(buildOutbound(foreignConfig, "proxy-foreign"))
             }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
@@ -124,10 +124,10 @@ object SingboxConfigBuilder {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
                 })
-                if (foreignConfig != null && foreignProcessNames.isNotEmpty()) {
+                if (foreignConfig != null && foreignPackageNames.isNotEmpty()) {
                     add(buildJsonObject {
-                        put("process_name", buildJsonArray {
-                            foreignProcessNames.forEach { pkg ->
+                        put("package_name", buildJsonArray {
+                            foreignPackageNames.forEach { pkg ->
                                 add(kotlinx.serialization.json.JsonPrimitive(pkg))
                             }
                         })
