@@ -42,6 +42,21 @@ class BootReceiver : BroadcastReceiver() {
 
         if (!isBootAction) return
 
+        // Respect the user-facing auto-start switch. Keep this in device-protected
+        // preferences so LOCKED_BOOT_COMPLETED can read it before unlock.
+        val prefsContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            context.createDeviceProtectedStorageContext() ?: context
+        } else {
+            context
+        }
+        val autoStartEnabled = prefsContext
+            .getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+            .getBoolean("auto_start", false)
+        if (!autoStartEnabled) {
+            logCollector.info("BootReceiver", "Auto-start disabled in settings; skipping $action")
+            return
+        }
+
         logCollector.info("BootReceiver", "Boot event received: $action")
 
         val configs = try {
