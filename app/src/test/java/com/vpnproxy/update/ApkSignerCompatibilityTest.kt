@@ -32,6 +32,11 @@ class ApkSignerCompatibilityTest {
     }
 
     @Test
+    fun rejectsInstalledSingleSignerWhenArchiveUsesMultipleCurrentSigners() {
+        assertFalse(signerSetsCompatible(setOf("a"), setOf("a", "b"), archiveHasMultipleSigners = true))
+    }
+
+    @Test
     fun requiresExactMatchForMultipleSigners() {
         assertTrue(signerSetsCompatible(setOf("a", "b"), setOf("a", "b")))
         assertFalse(signerSetsCompatible(setOf("a", "b"), setOf("a", "b", "c")))

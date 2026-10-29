@@ -93,16 +93,17 @@ class UpdateInstaller @Inject constructor(
     private fun archiveSignerDigests(info: PackageInfo): Set<String> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val signingInfo = info.signingInfo ?: return emptySet()
-            val history = signingInfo.signingCertificateHistory
-            val certificates = history?.takeIf { it.isNotEmpty() }
-                ?: signingInfo.apkContentsSigners
+            val certificates = if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners
+            } else {
+                signingInfo.signingCertificateHistory?.takeIf { it.isNotEmpty() }
+                    ?: signingInfo.apkContentsSigners
+            }
             return certificates.map { certificateSha256(it.toByteArray()) }.toSet()
         }
         return info.signatures?.map { certificateSha256(it.toByteArray()) }?.toSet().orEmpty()
     }
 
-    private fun hasCompatibleSigningIdentity(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean =
-        signerSetsCompatible(installedSigners, archiveSigners)
 
     private fun grantUriToResolvers(intent: Intent, uri: Uri) {
         val flag = Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -185,7 +186,13 @@ class UpdateInstaller @Inject constructor(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
             }
-            if (!hasCompatibleSigningIdentity(currentSignerDigests(currentInfo), archiveSignerDigests(archiveInfo))) {
+            val archiveHasMultipleSigners = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                archiveInfo.signingInfo?.hasMultipleSigners() == true
+            if (!signerSetsCompatible(
+                    currentSignerDigests(currentInfo),
+                    archiveSignerDigests(archiveInfo),
+                    archiveHasMultipleSigners
+                )) {
                 logCollector.warn(TAG, "Install rejected: APK signing identity does not match installed publisher")
                 return false
             }
@@ -267,8 +274,13 @@ class UpdateInstaller @Inject constructor(
  * Pure signer policy so mismatch and key-rotation behavior can be regression-tested
  * without constructing Android PackageInfo objects.
  */
-internal fun signerSetsCompatible(installedSigners: Set<String>, archiveSigners: Set<String>): Boolean {
+internal fun signerSetsCompatible(
+    installedSigners: Set<String>,
+    archiveSigners: Set<String>,
+    archiveHasMultipleSigners: Boolean = false
+): Boolean {
     if (installedSigners.isEmpty() || archiveSigners.isEmpty()) return false
+    if (archiveHasMultipleSigners) return installedSigners == archiveSigners
     if (installedSigners.size == 1) return installedSigners.single() in archiveSigners
     return installedSigners == archiveSigners
 }
