@@ -49,7 +49,7 @@ internal object ExtraUriParsers {
             val raw = uri.removePrefix("ss://")
             val hashIdx = raw.indexOf('#')
             val name = if (hashIdx >= 0) {
-                URLDecoder.decode(raw.substring(hashIdx + 1), Charsets.UTF_8.name())
+                decodeFragmentSafely(raw.substring(hashIdx + 1))
             } else "SS"
             val body = if (hashIdx >= 0) raw.substring(0, hashIdx) else raw
             val method: String
