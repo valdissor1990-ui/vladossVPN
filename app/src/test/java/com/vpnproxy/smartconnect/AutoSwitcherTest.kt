@@ -29,7 +29,8 @@ class AutoSwitcherTest {
 
         assertEquals(NetworkFaultKind.SERVER_DEGRADATION, classifyProbeFault(direct, vpn))
         assertFalse(shouldSwitchAfterEvidence(1, 0, directPathHealthy = true))
-        assertTrue(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
+        assertFalse(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
+        assertTrue(shouldSwitchAfterEvidence(3, 0, directPathHealthy = true))
     }
 
     @Test
