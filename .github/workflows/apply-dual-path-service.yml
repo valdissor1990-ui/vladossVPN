@@ -1,6 +1,10 @@
 name: Apply dual-path VpnProxyService patch
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/dual-path-ai-foreign]
+    paths:
+      - '.github/workflows/apply-dual-path-service.yml'
 jobs:
   patch:
     runs-on: ubuntu-24.04
@@ -10,10 +14,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: feat/dual-path-ai-foreign
-      - name: Patch VpnProxyService
+          fetch-depth: 0
+      - name: Restore service from main and apply dual-path
         run: |
           set -euo pipefail
           FILE=app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
+          # Always start from known-good main content (branch copy may be truncated)
+          git show origin/main:"$FILE" > "$FILE"
           python3 <<'PY'
           from pathlib import Path
           p = Path("app/src/main/java/com/vpnproxy/service/VpnProxyService.kt")
@@ -29,7 +36,7 @@ jobs:
                   "    @Inject lateinit var autoSwitcher: AutoSwitcher\n    @Inject lateinit var dualPathStore: DualPathStore\n",
               )
           old = '                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)'
-          new = '''                // Dual-path: AI apps -> foreign (non-RU) outbound when available
+          new = '''                // Dual-path: selected apps -> foreign (non-RU) outbound when available
                 val dualPackages = runCatching {
                     dualPathStore.installedPackagesForRules()
                 }.getOrDefault(emptyList())
@@ -43,7 +50,7 @@ jobs:
                         "DUAL-PATH enabled foreign=${foreignParsed.name} apps=${dualPackages.size} packages=$dualPackages"
                     )
                 } else if (dualPackages.isNotEmpty()) {
-                    logCollector.warn(TAG, "DUAL-PATH: no foreign server in ranked list; AI apps use default proxy")
+                    logCollector.warn(TAG, "DUAL-PATH: no foreign server in ranked list; selected apps use default proxy")
                 }
                 val configJson = SingboxConfigBuilder.buildVpn(
                     parsed,
@@ -52,15 +59,21 @@ jobs:
                     foreignProcessNames = if (foreignParsed != null) dualPackages else emptyList()
                 )'''
           if old not in t:
-              raise SystemExit("buildVpn call site not found")
-          t = t.replace(old, new, 1)
+              raise SystemExit("buildVpn call site not found after restore from main")
+          if "DUAL-PATH" not in t:
+              t = t.replace(old, new, 1)
           p.write_text(t)
-          print("patched ok")
+          assert "dualPathStore" in t and "DUAL-PATH" in t
+          print("patched ok", len(t))
           PY
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
-          git commit -m "feat(dual-path): wire foreign outbound selection in VpnProxyService" || echo "no change"
-          git push origin feat/dual-path-ai-foreign
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m "feat(dual-path): wire foreign outbound selection in VpnProxyService"
+            git push origin feat/dual-path-ai-foreign
+          fi
