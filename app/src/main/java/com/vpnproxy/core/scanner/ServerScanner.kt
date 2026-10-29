@@ -91,7 +91,7 @@ class ServerScanner @Inject constructor(
             // result. Reuse it after process restarts and APK updates; background scans
             // refresh measurements later instead of blocking every connection attempt.
             val savedAt = scanCache.getLong("saved_at", 0L)
-            val cachedKeys = _scannedServers.value.map(::scanKey).toSet()
+            val cachedKeys = _scannedServers.value.map { server -> scanKey(server.config) }.toSet()
             val cacheFresh = savedAt > 0L &&
                 System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
             if (!force && cacheFresh && cachedKeys == requestedKeys &&
