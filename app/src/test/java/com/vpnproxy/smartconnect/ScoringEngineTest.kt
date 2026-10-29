@@ -36,6 +36,21 @@ class ScoringEngineTest {
     }
 
     @Test
+    fun recentSuccessesAllowRecoveredServerToRegainRank() {
+        val engine = ScoringEngine(null)
+        val profile = config("recovered")
+
+        engine.computeScore(listOf(HealthChecker.LatencyResult(profile, Long.MAX_VALUE, false)))
+        engine.computeScore(listOf(HealthChecker.LatencyResult(profile, 100L, true)))
+        repeat(25) {
+            engine.computeScore(listOf(HealthChecker.LatencyResult(profile, 100L, true)))
+        }
+
+        val ranked = engine.computeScore(listOf(HealthChecker.LatencyResult(profile, 100L, true)))
+        assertTrue("Recent successful probes should outweigh one old failure", ranked.single().successRate > 0.9f)
+    }
+
+    @Test
     fun speedMeasurementsAreMatchedByFullProfileIdentity() {
         val engine = ScoringEngine(null)
         val tcp = config("tcp", "tcp")

@@ -56,9 +56,59 @@ class ConnectionCoordinatorTest {
 
     @Before
     fun setUp() {
-        coordinator = ConnectionCoordinator(LogCollector(), TrafficValidator(LogCollector()))
+        coordinator = ConnectionCoordinator(LogCollector(), TrafficValidator(LogCollector()), ScoringEngine(null))
         // actor loop starts asynchronously
         Thread.sleep(50)
+    }
+
+    @Test
+    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+
+        // A result without the current ServiceReady generation is stale/untrusted.
+        coordinator.send(
+            ConnectionEvent.TrafficValidationResult(
+                serverName = "test-server",
+                success = true,
+                validationId = -1L
+            )
+        )
+        Thread.sleep(150)
+
+        assertFalse(coordinator.state.value is ConnectionState.Connected)
+        assertTrue(coordinator.state.value is ConnectionState.Connecting)
+    }
+
+    @Test
+    fun fallbackPreservesMeasuredRankingInsteadOfPrioritizingRegionName() {
+        val current = sampleServer()
+        fun candidate(name: String, score: Float, host: String) =
+            current.copy(config = current.config.copy(name = name, address = host), score = score)
+        val fastGlobal = candidate("fast-global", 0.95f, "fast.example.org")
+        val slowerRussia = candidate("🇷🇺 Россия", 0.20f, "slow.example.org")
+
+        sendAndWait(ConnectionEvent.ServerSelected(current)) {
+            coordinator.hasSelectedServer()
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(current, fastGlobal, slowerRussia)))
+        Thread.sleep(100)
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.currentServerName() == "fast-global" &&
+                coordinator.state.value is ConnectionState.Reconnecting
+        }
+        // A second failure must advance to the next untried profile, not cycle back.
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.currentServerName() == "🇷🇺 Россия" &&
+                coordinator.state.value is ConnectionState.Reconnecting
+        }
     }
 
     @Test
