@@ -98,6 +98,7 @@ class ConnectionCoordinator @Inject constructor(
 
     @Volatile private var allowedProviderTag: String? = null
     @Volatile private var providerScopeBlocked: Boolean = false
+    @Volatile private var manualSelectionMode: Boolean = false
 
     @Volatile var isFatalErrorLocked: Boolean = false
         private set
@@ -119,6 +120,16 @@ class ConnectionCoordinator @Inject constructor(
         fallbackIndex = -1
         val scopeLabel = if (blocked) "BLOCKED" else (normalized ?: "ALL")
         logCollector.info(TAG, "Provider scope changed: $scopeLabel; fallback candidates $before -> ${fallbackCandidates.size}")
+    }
+
+    fun setManualSelectionMode(enabled: Boolean) {
+        manualSelectionMode = enabled
+        if (enabled) {
+            fallbackCandidates = emptyList()
+            fallbackIndex = -1
+            fallbackAttempts = 0
+        }
+        logCollector.info(TAG, "Manual selection mode=${if (enabled) "ON" else "OFF"}")
     }
 
     private fun isWithinProviderScope(server: ScoringEngine.ScoredServer): Boolean =
@@ -440,6 +451,10 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
+        if (manualSelectionMode) {
+            logW("Automatic fallback suppressed in manual server-selection mode after $reason")
+            return false
+        }
         if (isFatalErrorLocked || !reason.canFallbackToNextServer() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting && current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected && current !is ConnectionState.Verifying) return false
