@@ -24,6 +24,27 @@ class SubscriptionParserUnicodeFragmentTest {
         assertEquals("xhttp", config.transport)
     }
 
+
+    @Test
+    fun unsupportedShadowsocksCipher_isSkippedBeforeCoreStartup() {
+        val configs = parser.parse(
+            "ss://chacha20-poly1305:password@192.0.2.1:8388#unsupported"
+        )
+
+        assertEquals(0, configs.size)
+    }
+
+    @Test
+    fun rawShadowsocksUserInfoWithSupportedCipher_isParsed() {
+        val configs = parser.parse(
+            "ss://chacha20-ietf-poly1305:password@192.0.2.1:8388#supported"
+        )
+
+        assertEquals(1, configs.size)
+        assertEquals("chacha20-ietf-poly1305", configs.single().security)
+        assertEquals("supported", configs.single().name)
+    }
+
     @Test
     fun malformedPercentEscapeInDisplayName_doesNotDiscardConfig() {
         val config = parser.parseVlessUri(
