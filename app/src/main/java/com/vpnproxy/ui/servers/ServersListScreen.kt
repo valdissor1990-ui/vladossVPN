@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
@@ -116,14 +117,12 @@ class ServersListViewModel @Inject constructor(
 
     private fun updateServerRows() {
         val scanned = currentScanResults.associateBy { serverScanner.configKey(it.config) }
-        _servers.value = currentConfigs
-            .distinctBy { serverScanner.configKey(it) }
-            .map { config ->
+        _servers.value = serverScanner.sortForCurrentNetwork(
+            currentConfigs.distinctBy { serverScanner.configKey(it) }.map { config ->
                 val key = serverScanner.configKey(config)
                 scanned[key] ?: ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f)
-            }.sortedWith(compareBy<ScoredServer>({
-            when { it.successRate > 0.5f -> 0; it.successRate == 0f -> 1; else -> 2 }
-        }, { it.latencyMs }))
+            }
+        )
     }
 
     fun rescanServers() {
@@ -273,7 +272,7 @@ fun ServerListContent(
                     color = Color(0xFFD5E6FF).copy(alpha = 0.8f)
                 )
                 Text(
-                    "Профилей: ${servers.size}. TCP-проверка не подтверждает работу VPN.",
+                    "Пинг проверяется через VPN-профиль. Без ответа — н/д.",
                     fontSize = 11.sp,
                     color = Color(0xFFD5E6FF).copy(alpha = 0.72f)
                 )
@@ -419,16 +418,14 @@ fun ServerListContent(
                             items = russianServers,
                             key = { "ru-${viewModel.configKey(it.config)}" }
                         ) { scoredServer ->
-                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "—"
+                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "н/д"
                             val scoreValue = scoreLabel.toDoubleOrNull()
                             val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
                             GlassServerCard(
                                 server = scoredServer,
                                 scoreLabel = scoreLabel,
                                 scoreColor = scoreColor,
-                                isOnline = scoredServer.successRate > 0.5f,
-                                onClick = { onServerSelected(scoredServer) },
-                                onDetailsClick = { detailsServer = scoredServer }
+                                onClick = { onServerSelected(scoredServer) }
                             )
                         }
                     }
@@ -457,9 +454,7 @@ fun ServerListContent(
                                 server = scoredServer,
                                 scoreLabel = scoreLabel,
                                 scoreColor = scoreColor,
-                                isOnline = scoredServer.successRate > 0.5f,
-                                onClick = { onServerSelected(scoredServer) },
-                                onDetailsClick = { detailsServer = scoredServer }
+                                onClick = { onServerSelected(scoredServer) }
                             )
                         }
                     }
@@ -583,103 +578,67 @@ private fun GlassServerCard(
     server: ScoredServer,
     scoreLabel: String,
     scoreColor: Color,
-    isOnline: Boolean,
-    onClick: () -> Unit,
-    onDetailsClick: () -> Unit
+    onClick: () -> Unit
 ) {
     val config = server.config
     val flag = extractFlagForGlassCard(config.name)
     val title = config.name.replace(flag, "").trim().ifBlank { config.name }
-    val transport = when (config.transport.lowercase()) {
-        "hysteria2", "hy2" -> "HY2"
+    val protocol = when (config.transport.lowercase()) {
+        "hy2", "hysteria2" -> "Hysteria2"
+        "ss", "shadowsocks" -> "Shadowsocks"
+        "vless" -> "VLESS"
+        "vmess" -> "VMess"
+        "trojan" -> "Trojan"
         "tuic" -> "TUIC"
-        else -> config.transport.uppercase().ifBlank { "VLESS" }
+        "socks", "socks5" -> "SOCKS"
+        else -> "VLESS"
     }
 
-    Column(
+    Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .wrapContentWidth(Alignment.CenterHorizontally)
+            .fillMaxWidth(0.94f)
+            .clip(RoundedCornerShape(12.dp))
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFFB7D7FF).copy(alpha = 0.24f), Color(0xFF8EDCFF).copy(alpha = 0.13f))
+                    listOf(Color(0xFFB7D7FF).copy(alpha = 0.20f), Color(0xFF8EDCFF).copy(alpha = 0.11f))
                 )
             )
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (flag.isNotBlank()) {
-                Text(flag, fontSize = 18.sp)
-                Spacer(Modifier.width(4.dp))
-            }
+        if (flag.isNotBlank()) {
+            Text(flag, fontSize = 16.sp)
+            Spacer(Modifier.width(4.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 color = Color.White,
-                fontSize = 13.sp,
+                fontSize = 12.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 maxLines = 2,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
-        }
-        Spacer(Modifier.height(5.dp))
-        Text(
-            text = "${config.address}:${config.port}",
-            color = Color(0xFFE2EEFF),
-            fontSize = 10.sp,
-            maxLines = 2,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            fontFamily = FontFamily.Monospace
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(6.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(if (isOnline) Color(0xFF39E98A) else Color(0xFFFF7777))
-            )
-            Spacer(Modifier.width(4.dp))
             Text(
-                if (isOnline) "TCP доступен" else "TCP не проверен",
+                text = protocol,
+                color = Color(0xFFDDE7FF).copy(alpha = 0.82f),
                 fontSize = 9.sp,
-                color = Color(0xFFDDE7FF).copy(alpha = 0.9f),
-                modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
-        Spacer(Modifier.height(5.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(Color.White.copy(alpha = 0.13f))
-                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(7.dp))
-                    .padding(horizontal = 5.dp, vertical = 3.dp)
-            ) {
-                Text(transport, color = Color.White, fontSize = 9.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-            }
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (scoreLabel == "—") "TCP —" else "TCP ${scoreLabel} ms",
-                color = scoreColor,
-                fontSize = 11.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-            )
-        }
-        TextButton(
-            onClick = onDetailsClick,
-            modifier = Modifier.align(Alignment.End),
-            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)
-        ) {
-            Text("Детали", fontSize = 10.sp, color = Color(0xFFE6F3FF))
-        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (scoreLabel == "н/д" || scoreLabel == "—") "н/д" else "$scoreLabel мс",
+            color = scoreColor,
+            fontSize = 11.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+        )
     }
 }
-
 private fun compositeScoreColor(score: Double): Color = when {
     score < 100.0 -> Color(0xFF43A047)
     score <= 300.0 -> Color(0xFFF9A825)

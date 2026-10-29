@@ -9,9 +9,15 @@ import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
@@ -42,6 +48,22 @@ class DeepProbeEngine @Inject constructor(
         private const val CONNECT_TIMEOUT_MS = 2_000L
         private const val READ_TIMEOUT_MS = 4_000L
 
+        fun summarizeProfileLatency(config: ParsedConfig, samples: List<Long>): ProfilePingResult {
+            val valid = samples.filter { it > 0L }.sorted()
+            val success = valid.size >= 2
+            val middle = valid.size / 2
+            val median = when {
+                !success -> Long.MAX_VALUE
+                valid.size % 2 == 0 -> (valid[middle - 1] + valid[middle]) / 2L
+                else -> valid[middle]
+            }
+            return ProfilePingResult(
+                config = config,
+                latencyMs = median,
+                success = success,
+                successfulSamples = valid.size
+            )
+        }
         fun scoreMetrics(metrics: List<ProbeMetrics>): List<ProbeMetrics> {
             if (metrics.isEmpty()) return emptyList()
             val latency = metrics.map { it.medianLatencyMs.toDouble() }
@@ -106,6 +128,101 @@ class DeepProbeEngine @Inject constructor(
         if (running.compareAndSet(true, false)) {
             runCatching { SingboxProxyClient.stop(context) }
             logCollector.info(TAG, "DeepProbe cancelled — temporary core stopped")
+        }
+    }
+
+    data class ProfilePingResult(
+        val config: ParsedConfig,
+        val latencyMs: Long,
+        val success: Boolean,
+        val successfulSamples: Int
+    )
+
+    /**
+     * Measures HTTP latency through each profile's own Sing-box outbound.
+     * It does not use the currently active VPN route and refuses to run while the VPN is active.
+     * One temporary core hosts isolated loopback inbounds; results are published in small batches.
+     */
+    suspend fun pingProfiles(
+        configs: List<ParsedConfig>,
+        stopAfterSuccessfulBatch: Boolean = false,
+        onBatch: (List<ProfilePingResult>) -> Unit = {}
+    ): List<ProfilePingResult> = withContext(Dispatchers.IO) {
+        if (configs.isEmpty()) return@withContext emptyList()
+        if (!running.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "Profile ping already running — skip")
+            return@withContext configs.map { ProfilePingResult(it, Long.MAX_VALUE, false, 0) }
+        }
+        try {
+            check(!VpnProxyService.isRunning.value) {
+                "Проверка отдельных профилей доступна после отключения VPN"
+            }
+            ensureActive()
+            val ports = allocatePorts(configs.size)
+            val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
+            ensureActive()
+            check(!VpnProxyService.isRunning.value) {
+                "VPN стал активен до начала проверки профилей"
+            }
+            check(running.get() && isActive) { "Profile ping cancelled" }
+            val started = SingboxProxyClient.start(context, configJson)
+            check(started) { "Sing-box failed to start for profile ping" }
+
+            try {
+                val output = mutableListOf<ProfilePingResult>()
+                val semaphore = Semaphore(8)
+                for (indices in configs.indices.toList().chunked(8)) {
+                    ensureActive()
+                    if (!running.get()) throw CancellationException("Profile ping cancelled")
+                    val batch = coroutineScope {
+                        indices.map { index ->
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    val client = OkHttpClient.Builder()
+                                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
+                                        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                                        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                                        .callTimeout(3, TimeUnit.SECONDS)
+                                        .retryOnConnectionFailure(false)
+                                        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+                                        .build()
+                                    val samples = mutableListOf<Long>()
+                                    for (attempt in 0 until 3) {
+                                        if (samples.size >= 2 || samples.size + (3 - attempt) < 2) break
+                                        ensureActive()
+                                        if (!running.get()) throw CancellationException("Profile ping cancelled")
+                                        try {
+                                            val request = Request.Builder().url(LATENCY_URL).head().build()
+                                            val elapsed = runInterruptible(Dispatchers.IO) {
+                                                val start = System.nanoTime()
+                                                client.newCall(request).execute().use { response ->
+                                                    if (response.code !in 200..399) error("HTTP ${response.code}")
+                                                    ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                                }
+                                            }
+                                            samples += elapsed
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            // A failed request is not a numeric ping sample.
+                                        }
+                                    }
+                                    summarizeProfileLatency(configs[index], samples)
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                    output += batch
+                    onBatch(batch)
+                    if (stopAfterSuccessfulBatch && batch.any { it.success }) break
+                }
+                return@withContext output
+            } finally {
+                SingboxProxyClient.stop(context)
+                logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
+            }
+        } finally {
+            running.set(false)
         }
     }
 
