@@ -42,6 +42,19 @@ class SubscriptionParserUnicodeFragmentTest {
     }
 
     @Test
+    fun trojanAndSocksUrisWithUnicodeFragments_areParsed() {
+        val trojan = parser.parse(
+            "trojan://secret@192.0.2.30:443?sni=example.com#🇷🇺 Россия"
+        )
+        val socks = parser.parse(
+            "socks://user:secret@192.0.2.31:1080#🇷🇺 Россия"
+        )
+
+        assertEquals("🇷🇺 Россия", trojan.single().name)
+        assertEquals("🇷🇺 Россия", socks.single().name)
+    }
+
+    @Test
     fun unsupportedShadowsocksCipher_isSkippedBeforeCoreStartup() {
         val configs = parser.parse(
             "ss://chacha20-poly1305:password@192.0.2.1:8388#unsupported"
