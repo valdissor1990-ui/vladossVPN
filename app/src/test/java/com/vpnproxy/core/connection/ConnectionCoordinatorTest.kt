@@ -85,6 +85,28 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun fallbackPreservesMeasuredRankingInsteadOfPrioritizingRegionName() {
+        val current = sampleServer()
+        fun candidate(name: String, score: Float) =
+            current.copy(config = current.config.copy(name = name), score = score)
+        val fastGlobal = candidate("fast-global", 0.95f)
+        val slowerRussia = candidate("🇷🇺 Россия", 0.20f)
+
+        sendAndWait(ConnectionEvent.ServerSelected(current)) {
+            coordinator.hasSelectedServer()
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(current, fastGlobal, slowerRussia)))
+        Thread.sleep(100)
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.currentServerName() == "fast-global" &&
+                coordinator.state.value is ConnectionState.Reconnecting
+        }
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
