@@ -45,7 +45,7 @@ class BatteryPolicyTest {
     @Test
     fun continuityThresholds_remainSane() {
         assertEquals(3, AutoSwitcherConfig.maxSwitchesPerWindow)
-        assertEquals(0.20f, AutoSwitcherConfig.minimumAutoSwitchScoreGain)
+        assertEquals(0.25f, AutoSwitcherConfig.minimumAutoSwitchScoreGain)
         assertTrue(AutoSwitcherConfig.serverBlacklistEscalatedMs > AutoSwitcherConfig.serverBlacklistDurationMs)
         assertTrue(AutoSwitcherConfig.postConnectWarmupMs >= 45_000L)
     }
