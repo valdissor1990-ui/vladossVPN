@@ -175,8 +175,10 @@ class ServersListViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            val count = repository.refreshAll()
-            serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+            repository.refreshAll()
+            // This screen must show exhaustive measurements, not the staged quick scan
+            // that intentionally stops after the first successful batch for connection setup.
+            serverScanner.scanAll(repository.getAllConfigs())
         }
         viewModelScope.launch {
             runCatching {
