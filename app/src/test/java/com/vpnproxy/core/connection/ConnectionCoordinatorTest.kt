@@ -87,10 +87,10 @@ class ConnectionCoordinatorTest {
     @Test
     fun fallbackPreservesMeasuredRankingInsteadOfPrioritizingRegionName() {
         val current = sampleServer()
-        fun candidate(name: String, score: Float) =
-            current.copy(config = current.config.copy(name = name), score = score)
-        val fastGlobal = candidate("fast-global", 0.95f)
-        val slowerRussia = candidate("🇷🇺 Россия", 0.20f)
+        fun candidate(name: String, score: Float, host: String) =
+            current.copy(config = current.config.copy(name = name, address = host), score = score)
+        val fastGlobal = candidate("fast-global", 0.95f, "fast.example.org")
+        val slowerRussia = candidate("🇷🇺 Россия", 0.20f, "slow.example.org")
 
         sendAndWait(ConnectionEvent.ServerSelected(current)) {
             coordinator.hasSelectedServer()
