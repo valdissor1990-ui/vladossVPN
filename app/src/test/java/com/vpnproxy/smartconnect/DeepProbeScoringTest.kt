@@ -20,6 +20,10 @@ class DeepProbeScoringTest {
         assertEquals(3, healthy.successfulSamples)
         assertEquals(60L, healthy.latencyMs)
 
+        val twoResponses = DeepProbeEngine.summarizeProfileLatency(config, listOf(40L, 60L))
+        assertTrue(twoResponses.success)
+        assertEquals(50L, twoResponses.latencyMs)
+
         val oneResponse = DeepProbeEngine.summarizeProfileLatency(config, listOf(42L))
         assertTrue(!oneResponse.success)
         assertEquals(Long.MAX_VALUE, oneResponse.latencyMs)
