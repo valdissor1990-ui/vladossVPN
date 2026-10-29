@@ -413,9 +413,10 @@ class HomeViewModel @Inject constructor(
                         if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
                         else {
                             val currentConfig = autoSwitcher.currentServer.value?.config
-                                ?.takeIf { current -> configs.any {
+                                ?.takeIf { current -> !autoSwitcher.isBlacklisted(current) && configs.any {
                                     it.providerTag == current.providerTag && it.connectionKey() == current.connectionKey()
                                 } }
+                                ?: configs.firstOrNull { !autoSwitcher.isBlacklisted(it) }
                                 ?: configs.first()
                             autoSwitcher.selectImmediate(currentConfig, configs)
                         }
