@@ -57,6 +57,25 @@ class SubscriptionRepository @Inject constructor(
         val FALLBACK_CHAIN = listOf(PRIMARY_URL, MIRROR_URL_GITHUB)
         const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
         const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
+
+        const val IGARECK_URL =
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+        const val IGARECK_NAME = "WhiteList Mobile (igareck)"
+        const val IGARECK_ID = "builtin-igareck-wl-mobile"
+
+        const val WHITE_LITE_URL =
+            "https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_LITE.txt"
+        const val WHITE_LITE_NAME = "WHITE_LITE (FLAT447)"
+        const val WHITE_LITE_ID = "builtin-flat447-white-lite"
+
+        data class BuiltInSpec(val id: String, val url: String, val name: String)
+
+        val BUILT_IN_SUBSCRIPTIONS: List<BuiltInSpec> = listOf(
+            BuiltInSpec(DEFAULT_SUBSCRIPTION_ID, DEFAULT_SUBSCRIPTION_URL, DEFAULT_SUBSCRIPTION_NAME),
+            BuiltInSpec(IGARECK_ID, IGARECK_URL, IGARECK_NAME),
+            BuiltInSpec(WHITE_LITE_ID, WHITE_LITE_URL, WHITE_LITE_NAME)
+        )
+        val BUILT_IN_IDS: Set<String> = BUILT_IN_SUBSCRIPTIONS.map { it.id }.toSet()
     }
 
     @Serializable
@@ -108,7 +127,7 @@ class SubscriptionRepository @Inject constructor(
 
     init {
         loadFromPrefs()
-        ensureDefaultSubscription()
+        ensureBuiltInSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
@@ -140,19 +159,28 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    private fun ensureDefaultSubscription() {
-        val hasDefault = _subscriptions.value.any { it.url == DEFAULT_SUBSCRIPTION_URL }
-        if (!hasDefault) {
-            val sub = ProviderSubscription(
-                id = DEFAULT_SUBSCRIPTION_ID,
-                url = DEFAULT_SUBSCRIPTION_URL,
-                name = DEFAULT_SUBSCRIPTION_NAME,
-                tag = DEFAULT_SUBSCRIPTION_NAME,
+    /**
+     * Adds missing built-in sources while preserving existing subscription settings.
+     * A matching URL already saved by the user is not duplicated.
+     */
+    private fun ensureBuiltInSubscriptions() {
+        val current = _subscriptions.value.toMutableList()
+        var changed = false
+        for (spec in BUILT_IN_SUBSCRIPTIONS) {
+            if (current.any { it.id == spec.id || it.url == spec.url }) continue
+            current += ProviderSubscription(
+                id = spec.id,
+                url = spec.url,
+                name = spec.name,
+                tag = spec.name,
                 enabled = true
             )
-            _subscriptions.value = _subscriptions.value + sub
+            changed = true
+            logCollector.info(TAG, "Built-in subscription added: " + spec.name)
+        }
+        if (changed) {
+            _subscriptions.value = current
             saveToPrefs()
-            logCollector.info(TAG, "Default subscription added: $DEFAULT_SUBSCRIPTION_URL")
         }
     }
 
@@ -180,11 +208,19 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun removeSubscription(id: String) {
-        if (id == DEFAULT_SUBSCRIPTION_ID) {
-            logCollector.warn(TAG, "Cannot remove built-in subscription")
+        if (id in BUILT_IN_IDS) {
+            logCollector.warn(TAG, "Cannot remove built-in subscription: " + id)
             return
         }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
+        saveToPrefs()
+    }
+
+    /** Built-in sources can be disabled without deleting their saved entry. */
+    fun setSubscriptionEnabled(id: String, enabled: Boolean) {
+        _subscriptions.value = _subscriptions.value.map {
+            if (it.id == id) it.copy(enabled = enabled) else it
+        }
         saveToPrefs()
     }
 
