@@ -103,10 +103,12 @@ class VpnProxyService : VpnService() {
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
 
     override fun onCreate() {
+        // AndroidEntryPoint performs Hilt field injection in the generated superclass
+        // lifecycle. Never dereference @Inject lateinit fields before super.onCreate().
+        super.onCreate()
         connectionCoordinator.setOnEndpointHardFailed { cfg ->
             autoSwitcher.markServerFailed(cfg)
         }
-        super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
 
         if (uncaughtHandlerInstalled.compareAndSet(false, true)) {
