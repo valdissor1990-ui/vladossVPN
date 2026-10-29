@@ -589,11 +589,8 @@ private fun GlassServerCard(
         "vmess" -> "VMess"
         "trojan" -> "Trojan"
         "tuic" -> "TUIC"
-        "socks" -> "SOCKS"
-        "http" -> "HTTP"
-        "anytls" -> "AnyTLS"
-        "wireguard" -> "WireGuard"
-        else -> config.transport.uppercase().ifBlank { "VPN" }
+        "socks", "socks5" -> "SOCKS"
+        else -> "VLESS"
     }
 
     Row(
