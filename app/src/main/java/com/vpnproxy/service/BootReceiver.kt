@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
+import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -27,6 +28,7 @@ class BootReceiver : BroadcastReceiver() {
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
     @Inject lateinit var lastServerStore: LastServerStore
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+    @Inject lateinit var jsonConfigRepository: JsonConfigRepository
     @Inject lateinit var autoSwitcher: AutoSwitcher
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -40,11 +42,26 @@ class BootReceiver : BroadcastReceiver() {
 
         if (!isBootAction) return
 
+        // Respect the user-facing auto-start switch. Keep this in device-protected
+        // preferences so LOCKED_BOOT_COMPLETED can read it before unlock.
+        val prefsContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            context.createDeviceProtectedStorageContext() ?: context
+        } else {
+            context
+        }
+        val autoStartEnabled = prefsContext
+            .getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+            .getBoolean("auto_start", false)
+        if (!autoStartEnabled) {
+            logCollector.info("BootReceiver", "Auto-start disabled in settings; skipping $action")
+            return
+        }
+
         logCollector.info("BootReceiver", "Boot event received: $action")
 
         val configs = try {
-            val live = subscriptionRepository.getAllConfigs()
-            if (live.isNotEmpty()) live else subscriptionRepository.getCachedConfigs()
+            val live = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
+            if (live.isNotEmpty()) live else jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
         } catch (t: Throwable) {
             logCollector.warn("BootReceiver", "Failed to load configs: ${t.message}")
             emptyList()

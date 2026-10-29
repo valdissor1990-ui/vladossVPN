@@ -1,0 +1,31 @@
+tate.Connected -> {
+                        val diagnosticOptions = DiagnosticSettings.load(context)
+                        autoSwitcher.setDiagnosticFreeze(DebugFlags.diagnosticEnabled() && diagnosticOptions.freezeAutoSwitcherAfterConnected)
+                        cancelConnectingWatchdog()
+                        autoSwitcher.currentServer.value?.config?.let { server ->
+                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
+                        }
+                        pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
+                            pendingRankingConfigs = emptyList()
+                            autoSwitcher.rankInBackground(configs)
+                        }
+                        VpnProxyService.clearError()
+                        val prev = _uiState.value.connectionState
+                        val sessionStart = if (prev != ConnectionUiState.CONNECTED) System.currentTimeMillis() else _uiState.value.sessionStartedAt
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = ConnectionUiState.CONNECTED,
+                            isBusy = false,
+                            currentServerName = state.serverName.ifBlank { _uiState.value.currentServerName },
+                            sessionStartedAt = sessionStart
+                        )
+                    }
+                    is ConnectionState.Error -> {
+                        cancelConnectingWatchdog()
+                        cancelSelectionJob("Error")
+                        pendingRankingConfigs = emptyList()
+                        _uiState.value = _uiState.value.copy(
+                            connectionState = ConnectionUiState.ERROR,
+                            isBusy = false,
+                            sessionStartedAt = null,
+                            lastErrorMessage = state.message.takeIf { it.isNotBlank() }
+                

@@ -1,0 +1,39 @@
+inator.setProviderScope(providerTag, blocked = blocked)
+    }
+
+    private fun refreshAutomaticScopeCandidates() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val configs = filterConfigsForSelectedSubscription(jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()))
+                if (configs.isEmpty()) {
+                    connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+                    autoSwitcher.rankInBackground(emptyList())
+                    return@launch
+                }
+                if (!serverScanner.isScanCurrent(configs)) serverScanner.scanAll(configs, force = true)
+                val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
+                val candidates = serverScanner.availableServers()
+                    .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
+                    .filterNot { autoSwitcher.isBlacklisted(it.config) }
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
+                autoSwitcher.rankInBackground(configs)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                logCollector.error(TAG, "Failed to refresh fallback candidates", e)
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+            }
+        }
+    }
+
+    fun setAutomaticMode(enabled: Boolean) {
+        modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
+        _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
+        updateAutoSwitcherProviderScope()
+        if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+    }
+
+    private fun connect() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastConnectClickMs < 900L) {
+           

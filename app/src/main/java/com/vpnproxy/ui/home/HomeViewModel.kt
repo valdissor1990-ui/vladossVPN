@@ -23,6 +23,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
+import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -33,6 +34,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,7 +53,8 @@ class HomeViewModel @Inject constructor(
     private val pingService: PingService,
     private val logCollector: LogCollector,
     private val connectionCoordinator: ConnectionCoordinator,
-    private val lastServerStore: LastServerStore
+    private val lastServerStore: LastServerStore,
+    private val jsonConfigRepository: JsonConfigRepository
 ) : ViewModel() {
 
     companion object {
@@ -172,8 +176,16 @@ class HomeViewModel @Inject constructor(
         }
         startPinging()
         viewModelScope.launch {
-            subscriptionRepository.allConfigs.collect { configs ->
-                _uiState.value = _uiState.value.copy(serverCount = configs.distinctBy { it.connectionKey() }.size)
+            // React to both subscription refreshes and local JSON imports.
+            combine(
+                subscriptionRepository.allConfigs,
+                jsonConfigRepository.configs
+            ) { subscriptionConfigs, _ ->
+                jsonConfigRepository.allConfigsIncluding(subscriptionConfigs)
+            }.collect { merged ->
+                _uiState.value = _uiState.value.copy(
+                    serverCount = merged.distinctBy { it.connectionKey() }.size
+                )
             }
         }
         viewModelScope.launch {
@@ -286,7 +298,7 @@ class HomeViewModel @Inject constructor(
     private fun refreshAutomaticScopeCandidates() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val configs = filterConfigsForSelectedSubscription(subscriptionRepository.getAllConfigs())
+                val configs = filterConfigsForSelectedSubscription(jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()))
                 if (configs.isEmpty()) {
                     connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
                     autoSwitcher.rankInBackground(emptyList())
@@ -347,13 +359,13 @@ class HomeViewModel @Inject constructor(
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val hasNetwork = cm.activeNetwork != null
-                var configs = subscriptionRepository.getAllConfigs()
+                var configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
                 if (activeTraceId != traceId) return@launch
                 var refreshedSubscription = false
                 if (hasNetwork) {
                     configs = try {
                         subscriptionRepository.refreshAll()
-                        subscriptionRepository.getAllConfigs().also { refreshed ->
+                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
                             serverScanner.scanAfterSubscriptionUpdate(refreshed)
                             refreshedSubscription = true
                         }
@@ -365,7 +377,7 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 if (activeTraceId != traceId) return@launch
-                if (configs.isEmpty()) configs = subscriptionRepository.getCachedConfigs()
+                if (configs.isEmpty()) configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                 configs = filterConfigsForSelectedSubscription(configs)
                 if (configs.isEmpty()) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))

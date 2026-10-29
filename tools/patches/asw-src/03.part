@@ -1,0 +1,100 @@
+            transitionTo(AutoSwitchState.MONITORING, "battery policy skips micro-probe")
+            return
+        }
+        try {
+            val result = healthMonitor.probeMicroSpeed()
+            val bytesRead = result.bytesRead
+            val speedMbps = result.speedMbps
+            logCollector.info(TAG, "Micro-probe downloaded $bytesRead bytes in ${result.elapsedMs}ms ($speedMbps Mbps)")
+            if (bytesRead < AutoSwitcherConfig.microProbeBytes || speedMbps < AutoSwitcherConfig.microProbeMinMbps) {
+                val last = decisionEngine.latestEvidence()
+                if (last != null && decisionEngine.shouldSwitch(
+                        last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+                    )
+                ) {
+                    performSlowServerSwitch("micro-probe speed=$speedMbps Mbps, bytes=$bytesRead")
+                } else {
+                    transitionTo(AutoSwitchState.MONITORING, "micro-probe low speed but direct path is not proven healthy")
+                }
+            } else {
+                transitionTo(AutoSwitchState.MONITORING, "micro-probe recovered; transient glitch")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Micro-probe timed out/failed", e)
+            val last = decisionEngine.latestEvidence()
+            if (last != null && decisionEngine.shouldSwitch(
+                    last.directSuccess && last.directLatencyMs < AutoSwitcherConfig.directFastRttMs
+                )
+            ) {
+                performSlowServerSwitch("micro-probe failed after independent server confirmations: ${e.message}")
+            } else {
+                transitionTo(AutoSwitchState.MONITORING, "micro-probe failed without sufficient direct-path evidence")
+            }
+        }
+    }
+
+    private suspend fun performSlowServerSwitch(reason: String) {
+        if (suppressIfFrozen("fallback", reason)) {
+            transitionTo(AutoSwitchState.MONITORING, "diagnostic freeze")
+            return
+        }
+        if (isInPostConnectWarmup()) {
+            logCollector.info(TAG, "Slow-server switch ignored during warmup: $reason")
+            transitionTo(AutoSwitchState.MONITORING, "warmup")
+            return
+        }
+        transitionTo(AutoSwitchState.SWITCHING, reason)
+        val now = System.currentTimeMillis()
+        if (!decisionEngine.canAttemptSwitch(now)) {
+            transitionTo(AutoSwitchState.MONITORING, "switch limit reached; suppressing further automatic switches")
+            vpnService?.showUnstableNetworkNotification()
+            return
+        }
+        val switched = switchToBest() != null
+        if (switched) {
+            val switchedAt = System.currentTimeMillis()
+            val switchLimitReached = decisionEngine.recordSuccessfulSwitch(switchedAt)
+            if (switchLimitReached) {
+                vpnService?.showUnstableNetworkNotification()
+                logCollector.warn(TAG, "Automatic switch-window limit reached")
+            }
+            transitionTo(AutoSwitchState.MONITORING, "switched after: $reason")
+        } else {
+            transitionTo(AutoSwitchState.MONITORING, "no better server found after: $reason")
+        }
+    }
+
+    private suspend fun switchToBest(): ScoredServer? {
+        val candidates = _rankedServers.value.filterNot { isBlacklisted(it.config) }
+        if (candidates.isEmpty()) {
+            logCollector.warn(TAG, "switchToBest: empty ranked list")
+            return null
+        }
+        val best = candidates.first()
+        val current = _currentServer.value
+        if (current != null && sameConfig(current.config, best.config)) {
+            logCollector.info(TAG, "switchToBest: already on best server")
+            return null
+        }
+        if (!switching.compareAndSet(false, true)) return null
+        try {
+            _currentServer.value = best
+            baselineRtt = best.latencyMs
+            previousRtt = null
+            consecutiveErrors = 0
+            _switchEvents.value = "Автопереключение на ${best.config.name}"
+            connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
+            connectionCoordinator.send(ConnectionEvent.ServerSelected(best, connectionCoordinator.activeTraceId))
+            logCollector.info(TAG, "switchToBest -> ${best.config.name}")
+            return best
+        } finally {
+            switching.set(false)
+        }
+    }
+
+    /**
+     * Heuristic: treat profile as RU-oriented when:
+     * - providerTag / name contains RU / Russia / РФ / RU tokens → true
+     * - Germany / EU markers → never RU

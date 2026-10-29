@@ -3,7 +3,6 @@ package com.vpnproxy.smartconnect
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.PowerManager
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -238,13 +237,7 @@ class AutoSwitcher @Inject constructor(
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
             while (isActive) {
-                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                val batterySaver = powerManager?.isPowerSaveMode == true
-                val intervalMs = if (batterySaver) {
-                    AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
-                } else {
-                    AutoSwitcherConfig.healthCheckIntervalMs
-                }
+                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context)
                 delay(intervalMs)
                 if (isInPostConnectWarmup()) {
                     logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
@@ -363,6 +356,11 @@ class AutoSwitcher @Inject constructor(
         classifyProbeFault(direct, vpn, AutoSwitcherConfig.suspectRttMs, AutoSwitcherConfig.directFastRttMs)
 
     private suspend fun runMicroProbe() {
+        if (!BatteryPolicy.shouldRunMicroProbe(context)) {
+            logCollector.info(TAG, "Micro-probe skipped under battery saver policy")
+            transitionTo(AutoSwitchState.MONITORING, "battery policy skips micro-probe")
+            return
+        }
         try {
             val result = healthMonitor.probeMicroSpeed()
             val bytesRead = result.bytesRead
@@ -611,6 +609,9 @@ class AutoSwitcher @Inject constructor(
                         }
                         decisionEngine.isInCooldown() -> {
                             logCollector.debug(TAG, "Ranking-driven switch suppressed during cooldown")
+                        }
+                        !BatteryPolicy.shouldAllowRankingSwitch(context) -> {
+                            logCollector.info(TAG, "Ranking-driven switch suppressed by battery policy")
                         }
                         !decisionEngine.shouldSwitchForRanking(measuredCurrent.score, best.score) -> {
                             logCollector.info(

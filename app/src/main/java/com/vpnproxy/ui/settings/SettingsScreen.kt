@@ -28,6 +28,7 @@ fun SettingsScreen(
     val autoStart by viewModel.autoStart.collectAsStateWithLifecycle()
     val killSwitch by viewModel.killSwitch.collectAsStateWithLifecycle()
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
+    val batteryEconomyMode by viewModel.batteryEconomyMode.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
@@ -106,6 +107,14 @@ fun SettingsScreen(
                 }
                 Switch(checked = autoStart, onCheckedChange = { viewModel.setAutoStart(it) })
             }
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Экономия батареи", style = MaterialTheme.typography.bodyLarge)
+                    Text("Реже проверять серверы и отключить переключения по рейтингу", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                Switch(checked = batteryEconomyMode, onCheckedChange = { viewModel.setBatteryEconomyMode(it) })
+            }
+
             Text("ОБНОВЛЕНИЯ ПРИЛОЖЕНИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {

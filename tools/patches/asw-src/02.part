@@ -1,0 +1,120 @@
+                delay(intervalMs)
+                if (isInPostConnectWarmup()) {
+                    logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
+                    continue
+                }
+                if (decisionEngine.isInCooldown()) {
+                    logCollector.debug(TAG, "Slow-server checks skipped during switch cooldown")
+                    continue
+                }
+                checkCurrentServer()
+            }
+        }
+    }
+
+    fun stopMonitoring() {
+        healthCheckJob?.cancel()
+        healthCheckJob = null
+    }
+
+    private suspend fun checkCurrentServer() {
+        val current = _currentServer.value ?: return
+        if (switching.get()) return
+        if (isBlacklisted(current.config)) {
+            logCollector.info(TAG, "Current server is blacklisted; monitoring pause for ${current.config.name}")
+            return
+        }
+
+        try {
+            val result = healthMonitor.checkSelectedServer(current.config) ?: return
+            val jitter = healthMonitor.calculateJitter(previousRtt, result.latencyMs)
+            previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
+
+            if (!result.success || result.latencyMs == Long.MAX_VALUE) {
+                consecutiveErrors++
+                logCollector.warn(
+                    TAG,
+                    "Health check failed for ${current.config.name}",
+                    mapOf("errors" to consecutiveErrors)
+                )
+                if (consecutiveErrors >= AutoSwitcherConfig.maxConsecutiveErrors) {
+                    logCollector.warn(TAG, "Repeated health-check failures; require direct-vs-VPN validation before any switch")
+                }
+                if (state == AutoSwitchState.MONITORING) {
+                    transitionTo(AutoSwitchState.SUSPECT, "health check failed; errors=$consecutiveErrors")
+                    validateSlowServer(current.config, Long.MAX_VALUE, jitter)
+                }
+                return
+            }
+
+            consecutiveErrors = 0
+            val baselineDegraded = baselineRtt > 0 && result.latencyMs > baselineRtt * AutoSwitcherConfig.rttDegradationFactor
+            if (baselineDegraded || result.latencyMs > AutoSwitcherConfig.suspectRttMs || jitter > AutoSwitcherConfig.suspectJitterMs) {
+                if (state == AutoSwitchState.MONITORING) {
+                    val reason = "RTT=${result.latencyMs}ms, baseline=${baselineRtt}ms, jitter=${jitter}ms"
+                    transitionTo(AutoSwitchState.SUSPECT, reason)
+                    validateSlowServer(current.config, result.latencyMs, jitter)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logCollector.error(TAG, "Health check error", e)
+            consecutiveErrors++
+        }
+    }
+
+    private suspend fun validateSlowServer(config: ParsedConfig, measuredRtt: Long, jitterMs: Long) {
+        if (decisionEngine.isInCooldown() || switching.get()) {
+            transitionTo(AutoSwitchState.MONITORING, "cooldown or switch already active")
+            return
+        }
+        transitionTo(AutoSwitchState.VALIDATING, "active direct-vs-VPN socket validation")
+        val direct = healthMonitor.probeSocket("1.1.1.1", AutoSwitcherConfig.directProbePort, protectFromVpn = true) { socket ->
+            val service = vpnService
+            val protected = service?.protect(socket) == true
+            logCollector.info(TAG, "Direct probe protect(socket) invoked: serviceAvailable=${service != null}, result=$protected, target=1.1.1.1:${AutoSwitcherConfig.directProbePort}")
+            protected
+        }
+        val vpn = healthMonitor.probeSocket(config.address, config.port, protectFromVpn = false) { false }
+        decisionEngine.recordEvidence(direct, vpn, jitterMs)
+
+        val classification = decisionEngine.classify(direct, vpn)
+        decisionEngine.record(classification)
+        logCollector.info(
+            TAG,
+            "Slow-server validation: direct=${direct.latencyMs}ms success=${direct.success}; " +
+                "vpn=${vpn.latencyMs}ms success=${vpn.success}; initialRTT=${measuredRtt}ms jitter=${jitterMs}ms; " +
+                "classification=$classification serverEvidence=${decisionEngine.consecutiveServerEvidence} networkEvidence=${decisionEngine.consecutiveNetworkEvidence}"
+        )
+        when (classification) {
+            NetworkFaultKind.NETWORK_DEGRADATION -> {
+                val networkConfirmations = decisionEngine.consecutiveNetworkEvidence
+                val networkStatus = if (networkConfirmations >= AutoSwitcherConfig.networkDegradationConfirmations) {
+                    "underlying network degradation confirmed $networkConfirmations times; automatic server switching suppressed"
+                } else {
+                    "underlying network degradation suspected ($networkConfirmations/${AutoSwitcherConfig.networkDegradationConfirmations}); automatic server switching suppressed"
+                }
+                transitionTo(AutoSwitchState.MONITORING, networkStatus)
+            }
+            NetworkFaultKind.SERVER_DEGRADATION -> {
+                val serverConfirmations = decisionEngine.consecutiveServerEvidence
+                if (serverConfirmations < AutoSwitcherConfig.serverDegradationConfirmations) {
+                    transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $serverConfirmations/${AutoSwitcherConfig.serverDegradationConfirmations}; awaiting independent confirmation")
+                } else {
+                    transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed twice; checking transport")
+                    runMicroProbe()
+                }
+            }
+            NetworkFaultKind.NONE -> {
+                transitionTo(AutoSwitchState.MONITORING, "validation did not confirm degradation")
+            }
+        }
+    }
+
+    internal fun classifyFault(direct: ProbeResult, vpn: ProbeResult): NetworkFaultKind =
+        classifyProbeFault(direct, vpn, AutoSwitcherConfig.suspectRttMs, AutoSwitcherConfig.directFastRttMs)
+
+    private suspend fun runMicroProbe() {
+        if (!BatteryPolicy.shouldRunMicroProbe(context)) {
+            logCollector.info(TAG, "Micro-probe skipped under battery saver policy")

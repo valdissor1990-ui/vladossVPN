@@ -1,0 +1,49 @@
+   if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
+            }
+        }
+    }
+
+    private fun cancelConnectingWatchdog() {
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = null
+    }
+
+    private fun startPinging() {
+        if (pingJob?.isActive == true) return
+        pingJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val breakdown = withContext(Dispatchers.IO) {
+                        val region = PingTargets.detectRegion(context)
+                        val targets = PingTargets.forRegion(region)
+                        val multi = pingService.pingAll(targets = targets, region = region)
+                        LatencyCalculator.compute(multi.results)
+                    }
+                    _latencyBreakdown.value = breakdown
+                    _googleRtt.value = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (_: Throwable) {
+                    _googleRtt.value = null
+                    _latencyBreakdown.value = null
+                }
+                delay(30_000)
+            }
+        }
+    }
+
+    fun setVpnPermissionRequester(requester: () -> Unit) { vpnPermissionRequester = requester }
+
+    fun cancelServerScan() {
+        if (_uiState.value.isScanningServers) {
+            serverScanner.cancelScan()
+            logCollector.info(TAG, "Server scan cancellation requested from home button")
+        }
+    }
+
+    fun toggleConnection() {
+        when (_uiState.value.connectionState) {
+            ConnectionUiState.CONNECTED, ConnectionUiState
