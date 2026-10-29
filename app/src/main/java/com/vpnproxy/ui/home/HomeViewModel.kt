@@ -252,10 +252,12 @@ class HomeViewModel @Inject constructor(
     fun setVpnPermissionRequester(requester: () -> Unit) { vpnPermissionRequester = requester }
 
     fun cancelServerScan() {
-        if (_uiState.value.isScanningServers) {
-            serverScanner.cancelScan()
-            logCollector.info(TAG, "Server scan cancellation requested from home button")
-        }
+        // Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).
+        logCollector.info(TAG, "Server scan stop requested from home button")
+        serverScanner.cancelScan()
+        // Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.
+        cancelSelectionJob("user stop scan")
+        _uiState.value = _uiState.value.copy(isScanningServers = false)
     }
 
     fun toggleConnection() {

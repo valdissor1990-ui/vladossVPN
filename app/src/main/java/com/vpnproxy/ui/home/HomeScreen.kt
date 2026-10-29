@@ -171,11 +171,16 @@ fun HomeScreen(
 
                 GlowPowerButton(
                     state = uiState.connectionState,
+                    // Always allow the main button while scanning so stop works even if isBusy lags.
                     enabled = !uiState.isBusy || uiState.isScanningServers,
                     isScanning = uiState.isScanningServers,
                     onClick = {
-                        if (uiState.isScanningServers) viewModel.cancelServerScan()
-                        else viewModel.toggleConnection()
+                        if (uiState.isScanningServers) {
+                            Log.i("HomeScreen", "HomeScreen: stop scan from main button")
+                            viewModel.cancelServerScan()
+                        } else {
+                            viewModel.toggleConnection()
+                        }
                     }
                 )
 

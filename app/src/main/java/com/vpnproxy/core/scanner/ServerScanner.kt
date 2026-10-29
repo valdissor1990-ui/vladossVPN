@@ -21,6 +21,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -60,6 +61,8 @@ class ServerScanner @Inject constructor(
 
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
     @Volatile private var backgroundJob: Job? = null
+    /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
+    @Volatile private var activeScanJob: Job? = null
     private val scanGeneration = AtomicLong(0L)
     private val scanCache by lazy { context.getSharedPreferences("server_scan_cache_v1", Context.MODE_PRIVATE) }
     private val scanCacheMaxAgeMs = 7L * 24 * 60 * 60 * 1000
@@ -104,6 +107,8 @@ class ServerScanner @Inject constructor(
 
             _isScanning.value = true
             try {
+                // Track this scan's job so cancelScan() can abort awaitAll promptly.
+                activeScanJob = currentCoroutineContext()[Job]
                 val semaphore = Semaphore(CONCURRENCY)
                 val russianConfigs = unique.filter(::isRussianServer)
                 val otherConfigs = unique.filterNot(::isRussianServer)
@@ -141,15 +146,26 @@ class ServerScanner @Inject constructor(
                 )
                 results
             } finally {
+                activeScanJob = null
                 _isScanning.value = false
             }
         }
 
-    /** Cancels publication of the active scan without cancelling its parent lifecycle job or VPN. */
+    /**
+     * Cancels the active scan as soon as possible.
+     * Bumps generation so probes short-circuit, clears isScanning for immediate UI feedback,
+     * and cancels the tracked scan job without stopping the VPN service.
+     */
     fun cancelScan() {
-        if (_isScanning.value) {
-            scanGeneration.incrementAndGet()
-            logCollector.info(TAG, "Server scan cancellation requested; in-flight TCP probes will drain")
+        val wasScanning = _isScanning.value
+        scanGeneration.incrementAndGet()
+        _isScanning.value = false
+        activeScanJob?.cancel()
+        activeScanJob = null
+        if (wasScanning) {
+            logCollector.info(TAG, "Server scan cancellation requested; probes short-circuit and UI cleared")
+        } else {
+            logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
         }
     }
 
