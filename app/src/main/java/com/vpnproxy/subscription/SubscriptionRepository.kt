@@ -49,6 +49,8 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
+
+        /** Primary built-in (whitelist-oriented free pool). */
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
@@ -57,6 +59,32 @@ class SubscriptionRepository @Inject constructor(
         val FALLBACK_CHAIN = listOf(PRIMARY_URL, MIRROR_URL_GITHUB)
         const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
         const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
+
+        /** Built-in: igareck Reality / white-list mobile (~40–50 nodes, auto-checked upstream). */
+        const val IGARECK_URL =
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+        const val IGARECK_NAME = "WhiteList Mobile (igareck)"
+        const val IGARECK_ID = "builtin-igareck-wl-mobile"
+
+        /** Built-in: FLAT447 WHITE_LITE compact free pool. */
+        const val WHITE_LITE_URL =
+            "https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_LITE.txt"
+        const val WHITE_LITE_NAME = "WHITE_LITE (FLAT447)"
+        const val WHITE_LITE_ID = "builtin-flat447-white-lite"
+
+        data class BuiltInSpec(
+            val id: String,
+            val url: String,
+            val name: String
+        )
+
+        val BUILT_IN_SUBSCRIPTIONS: List<BuiltInSpec> = listOf(
+            BuiltInSpec(DEFAULT_SUBSCRIPTION_ID, DEFAULT_SUBSCRIPTION_URL, DEFAULT_SUBSCRIPTION_NAME),
+            BuiltInSpec(IGARECK_ID, IGARECK_URL, IGARECK_NAME),
+            BuiltInSpec(WHITE_LITE_ID, WHITE_LITE_URL, WHITE_LITE_NAME)
+        )
+
+        val BUILT_IN_IDS: Set<String> = BUILT_IN_SUBSCRIPTIONS.map { it.id }.toSet()
     }
 
     @Serializable
@@ -108,7 +136,7 @@ class SubscriptionRepository @Inject constructor(
 
     init {
         loadFromPrefs()
-        ensureDefaultSubscription()
+        ensureBuiltInSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
@@ -140,19 +168,30 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    private fun ensureDefaultSubscription() {
-        val hasDefault = _subscriptions.value.any { it.url == DEFAULT_SUBSCRIPTION_URL }
-        if (!hasDefault) {
-            val sub = ProviderSubscription(
-                id = DEFAULT_SUBSCRIPTION_ID,
-                url = DEFAULT_SUBSCRIPTION_URL,
-                name = DEFAULT_SUBSCRIPTION_NAME,
-                tag = DEFAULT_SUBSCRIPTION_NAME,
+    /**
+     * Ensures every built-in provider is present (by id). Existing user toggles (enabled)
+     * are preserved; only missing entries are appended.
+     */
+    private fun ensureBuiltInSubscriptions() {
+        val current = _subscriptions.value.toMutableList()
+        var changed = false
+        for (spec in BUILT_IN_SUBSCRIPTIONS) {
+            if (current.any { it.id == spec.id }) continue
+            // Also skip if user already added the same URL under a custom id.
+            if (current.any { it.url == spec.url }) continue
+            current += ProviderSubscription(
+                id = spec.id,
+                url = spec.url,
+                name = spec.name,
+                tag = spec.name,
                 enabled = true
             )
-            _subscriptions.value = _subscriptions.value + sub
+            changed = true
+            logCollector.info(TAG, "Built-in subscription added: ${spec.name}")
+        }
+        if (changed) {
+            _subscriptions.value = current
             saveToPrefs()
-            logCollector.info(TAG, "Default subscription added: $DEFAULT_SUBSCRIPTION_URL")
         }
     }
 
@@ -180,11 +219,19 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun removeSubscription(id: String) {
-        if (id == DEFAULT_SUBSCRIPTION_ID) {
-            logCollector.warn(TAG, "Cannot remove built-in subscription")
+        if (id in BUILT_IN_IDS) {
+            logCollector.warn(TAG, "Cannot remove built-in subscription: $id")
             return
         }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
+        saveToPrefs()
+    }
+
+    /** User may disable a built-in source without deleting it. */
+    fun setSubscriptionEnabled(id: String, enabled: Boolean) {
+        _subscriptions.value = _subscriptions.value.map {
+            if (it.id == id) it.copy(enabled = enabled) else it
+        }
         saveToPrefs()
     }
 
@@ -221,8 +268,6 @@ class SubscriptionRepository @Inject constructor(
                 }
             }
 
-            // Preserve attribution per provider while removing duplicate profiles within each
-            // provider. Global scanning/counts use connectionKey() without providerTag.
             val providerUniqueConfigs = allConfigsList.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -384,7 +429,6 @@ class SubscriptionRepository @Inject constructor(
         } catch (_: Exception) { }
     }
 
-    /** Configs deduplicated per provider, preserving provider attribution for subscription UI. */
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
@@ -415,8 +459,8 @@ class SubscriptionRepository @Inject constructor(
         val obfsType: String? = null,
         val obfsPassword: String? = null,
         val pinSHA256: String? = null,
-        val congestionControl: String = "bbr",
-        val extra: String? = null
+        val congestionControl: String? = null,
+        val extra: Map<String, String> = emptyMap()
     ) {
         fun toParsedConfig() = ParsedConfig(
             uuid = uuid, address = address, port = port, transport = transport, security = security,
