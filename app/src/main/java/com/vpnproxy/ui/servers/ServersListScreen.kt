@@ -596,8 +596,8 @@ private fun GlassServerCard(
 
     Row(
         modifier = Modifier
-            .fillMaxWidth(0.94f)
             .wrapContentWidth(Alignment.CenterHorizontally)
+            .fillMaxWidth(0.94f)
             .clip(RoundedCornerShape(12.dp))
             .background(
                 Brush.linearGradient(
