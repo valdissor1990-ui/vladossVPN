@@ -75,12 +75,17 @@ class UpdateManager @Inject constructor(
     fun installReady() {
         val ready = _state.value as? State.Ready ?: return
         if (!installer.canInstallPackages()) {
+            logCollector.warn("UpdateManager", "Install blocked: unknown-sources permission not granted")
+            // Keep Ready so user can retry after returning from settings.
             installer.openInstallPermissionSettings()
             return
         }
         if (!installer.install(ready.file)) {
-            _state.value = State.Error("Не удалось запустить установщик. APK сохранён в кэше; проверьте разрешение на установку и версию приложения.")
+            _state.value = State.Error(
+                "Не удалось открыть установщик APK. Разрешите установку из этого источника в настройках Android и повторите."
+            )
         }
+        // On success the system installer UI takes over; keep Ready so a failed system dismiss can retry.
     }
 
     fun reset() { _state.value = State.Idle }
