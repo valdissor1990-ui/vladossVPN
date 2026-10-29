@@ -291,6 +291,8 @@ class HomeViewModel @Inject constructor(
         val selectedSubscription = if (scopedSelection) subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId } else null
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
+        autoSwitcher.setManualSelectionMode(!state.isAutomaticMode)
+        connectionCoordinator.setManualSelectionMode(!state.isAutomaticMode)
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
         connectionCoordinator.setProviderScope(providerTag, blocked = blocked)
     }
@@ -384,16 +386,21 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    val allowedKeys = configs.map { it.connectionKey() }.toSet()
+                    // connectionKey intentionally excludes provider attribution. Match both
+                    // fields so a shared endpoint from another subscription cannot leak into
+                    // the selected subscription's candidate list.
+                    val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
                     val scanned = serverScanner.availableServers()
-                        .filter { it.config.connectionKey() in allowedKeys }
+                        .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
                         .filterNot { autoSwitcher.isBlacklisted(it.config) }
                     if (_uiState.value.isAutomaticMode) {
                         val bestScanned = scanned.minByOrNull { it.latencyMs }
                         if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
                         else {
                             val currentConfig = autoSwitcher.currentServer.value?.config
-                                ?.takeIf { current -> configs.any { it.connectionKey() == current.connectionKey() } }
+                                ?.takeIf { current -> configs.any {
+                                    it.providerTag == current.providerTag && it.connectionKey() == current.connectionKey()
+                                } }
                                 ?: configs.first()
                             autoSwitcher.selectImmediate(currentConfig, configs)
                         }
