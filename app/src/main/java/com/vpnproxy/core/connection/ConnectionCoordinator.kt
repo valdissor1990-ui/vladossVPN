@@ -53,7 +53,8 @@ sealed class ConnectionEvent {
 @Singleton
 class ConnectionCoordinator @Inject constructor(
     private val logCollector: LogCollector,
-    private val trafficValidator: TrafficValidator
+    private val trafficValidator: TrafficValidator,
+    private val scoringEngine: ScoringEngine
 ) {
     companion object {
         private const val TAG = "ConnectionCoordinator"
@@ -404,6 +405,12 @@ class ConnectionCoordinator @Inject constructor(
                 } else {
                     val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
                     logW("Traffic validation failed for ${event.serverName}; detail=$detail")
+                    // Feed confirmed data-plane failures back into Smart Connect so
+                    // unreliable free-pool nodes rank lower on the next selection.
+                    val failedConfig = activeScoredServer?.config
+                    if (failedConfig != null && "proxy_port_not_ready" !in detail && "unreachable" !in detail.lowercase()) {
+                        scoringEngine.recordHardFailure(failedConfig, weight = 2)
+                    }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
                     // Failures are endpoint-specific: never let failures on one free node
                     // accumulate into a global fatal threshold while healthy candidates remain.
