@@ -2,6 +2,7 @@ package com.vpnproxy.core.connection
 
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,7 +61,7 @@ class ConnectionCoordinator @Inject constructor(
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
         private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
-        const val CONNECTING_TIMEOUT_MS = 60_000L
+        const val CONNECTING_TIMEOUT_MS = 90_000L
 
         fun trafficFatalMessage(summary: String?): String {
             val s = summary?.lowercase().orEmpty()
@@ -109,6 +110,9 @@ class ConnectionCoordinator @Inject constructor(
     @Volatile private var selectionCancel: (() -> Unit)? = null
 
     fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }
+
+    @Volatile private var onEndpointHardFailed: ((ParsedConfig) -> Unit)? = null
+    fun setOnEndpointHardFailed(listener: ((ParsedConfig) -> Unit)?) { onEndpointHardFailed = listener }
 
     fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
         val normalized = providerTag?.takeIf { it.isNotBlank() }
@@ -373,6 +377,15 @@ class ConnectionCoordinator @Inject constructor(
                     logW("ServiceReady ignored — fatal lock is active")
                     return
                 }
+                when (current) {
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> Unit
+                    else -> {
+                        logW("ServiceReady ignored in state $current for ${event.serverName}")
+                        return
+                    }
+                }
                 retryCount = 0
                 val validationId = ++trafficValidationGeneration
                 pendingServerName = event.serverName
@@ -426,6 +439,7 @@ class ConnectionCoordinator @Inject constructor(
                         detail.contains("DNS_ERROR", ignoreCase = true)
                     if (failedConfig != null && !failureLooksLocalOrDns) {
                         scoringEngine.recordHardFailure(failedConfig, weight = 2)
+                        runCatching { onEndpointHardFailed?.invoke(failedConfig) }
                     }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
                     // Failures are endpoint-specific: never let failures on one free node

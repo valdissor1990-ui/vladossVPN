@@ -103,6 +103,9 @@ class VpnProxyService : VpnService() {
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
 
     override fun onCreate() {
+        connectionCoordinator.setOnEndpointHardFailed { cfg ->
+            autoSwitcher.markServerFailed(cfg)
+        }
         super.onCreate()
         Log.d("VpnService", "===== onCreate started =====")
 
@@ -440,7 +443,11 @@ class VpnProxyService : VpnService() {
       }.getOrDefault(emptyList())
       val foreignParsed = if (dualPackages.isNotEmpty()) {
           val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
-          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+          val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+          fromRanked ?: ServerRegionClassifier.pickBestForeign(
+              runCatching { subscriptionRepository.getAllConfigs() }.getOrDefault(emptyList()),
+              preferredNot = parsed
+          )
       } else null
       if (foreignParsed != null) {
           logCollector.info(

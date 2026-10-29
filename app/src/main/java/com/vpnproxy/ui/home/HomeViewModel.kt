@@ -25,6 +25,7 @@ import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
+import com.vpnproxy.core.dualpath.DualPathStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -54,12 +55,13 @@ class HomeViewModel @Inject constructor(
     private val logCollector: LogCollector,
     private val connectionCoordinator: ConnectionCoordinator,
     private val lastServerStore: LastServerStore,
-    private val jsonConfigRepository: JsonConfigRepository
+    private val jsonConfigRepository: JsonConfigRepository,
+    private val dualPathStore: DualPathStore
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val CONNECTING_UI_WATCHDOG_MS = 60_000L
+        private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
@@ -77,7 +79,9 @@ class HomeViewModel @Inject constructor(
         val isScanningServers: Boolean = false,
         val isAutomaticMode: Boolean = true,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
-        val lastErrorMessage: String? = null
+        val lastErrorMessage: String? = null,
+        val dualPathEnabled: Boolean = false,
+        val dualPathAppCount: Int = 0
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
@@ -193,6 +197,14 @@ class HomeViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(isScanningServers = scanning)
             }
         }
+        viewModelScope.launch {
+            dualPathStore.settings.collect { s ->
+                _uiState.value = _uiState.value.copy(
+                    dualPathEnabled = s.enabled,
+                    dualPathAppCount = s.packages.size
+                )
+            }
+        }
     }
 
     private fun tmsg(message: String): String =
@@ -208,11 +220,11 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun armConnectingWatchdog() {
-        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob?.cancel()
         connectingWatchdogJob = viewModelScope.launch {
             delay(CONNECTING_UI_WATCHDOG_MS)
             val s = connectionCoordinator.state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
                 logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
@@ -252,10 +264,12 @@ class HomeViewModel @Inject constructor(
     fun setVpnPermissionRequester(requester: () -> Unit) { vpnPermissionRequester = requester }
 
     fun cancelServerScan() {
-        if (_uiState.value.isScanningServers) {
-            serverScanner.cancelScan()
-            logCollector.info(TAG, "Server scan cancellation requested from home button")
-        }
+        // Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).
+        logCollector.info(TAG, "Server scan stop requested from home button")
+        serverScanner.cancelScan()
+        // Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.
+        cancelSelectionJob("user stop scan")
+        _uiState.value = _uiState.value.copy(isScanningServers = false)
     }
 
     fun toggleConnection() {
