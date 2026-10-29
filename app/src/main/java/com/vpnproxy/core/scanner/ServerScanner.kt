@@ -123,11 +123,13 @@ class ServerScanner @Inject constructor(
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
 
                 val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
+                var probedCount = 0
                 if (probeConfigs.isNotEmpty()) {
                     try {
                         deepProbeEngine.pingProfiles(probeConfigs) { batch ->
                             if (scanGeneration.get() == generation) {
                                 batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                                probedCount += batch.size
                                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                             }
                         }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
@@ -142,10 +144,11 @@ class ServerScanner @Inject constructor(
                     logCollector.info(TAG, "Discarded cancelled scan results")
                     return@withLock _scannedServers.value
                 }
-                scannedConfigKeys = requestedKeys
+                val complete = probedCount >= probeConfigs.size
+                scannedConfigKeys = if (complete) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
-                persistScanResults(results)
+                if (complete) persistScanResults(results) else scanCache().edit().putLong("saved_at", 0L).apply()
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
                 logCollector.info(
