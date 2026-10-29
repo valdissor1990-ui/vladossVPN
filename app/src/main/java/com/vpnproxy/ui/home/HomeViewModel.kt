@@ -275,9 +275,12 @@ class HomeViewModel @Inject constructor(
 
     fun toggleConnection() {
         when (_uiState.value.connectionState) {
-            ConnectionUiState.CONNECTED, ConnectionUiState.UNSTABLE -> disconnect()
-            ConnectionUiState.DISCONNECTED, ConnectionUiState.ERROR -> connect()
-            ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> { }
+            ConnectionUiState.CONNECTED,
+            ConnectionUiState.UNSTABLE,
+            ConnectionUiState.CONNECTING,
+            ConnectionUiState.VERIFYING -> disconnect()
+            ConnectionUiState.DISCONNECTED,
+            ConnectionUiState.ERROR -> connect()
         }
     }
 
@@ -453,19 +456,23 @@ class HomeViewModel @Inject constructor(
     fun disconnect() {
         cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
+        serverScanner.cancelScan()
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+        // RequestDisconnect changes the actor state, but the force-stop action also
+        // tears down the native core/TUN immediately instead of relying on idle timeout.
+        ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
     }
 
     fun forceDisconnect() {
         cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
+        serverScanner.cancelScan()
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
-        ensureServiceRunning(action = VpnProxyService.ACTION_REQUEST_DISCONNECT)
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+        ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
     }
 
     fun switchServer() {

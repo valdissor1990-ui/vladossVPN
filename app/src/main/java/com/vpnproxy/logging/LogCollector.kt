@@ -29,6 +29,8 @@ class LogCollector @Inject constructor() {
 
     private val buffer = ConcurrentLinkedDeque<LogEntry>()
     private val bufferLock = Any()
+    /** Serializes append and clear so an in-flight append cannot resurrect deleted history. */
+    private val persistenceLock = Any()
     private var entryCount = 0
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
@@ -40,21 +42,23 @@ class LogCollector @Inject constructor() {
 
 
     fun add(entry: LogEntry) {
-        // ConcurrentLinkedDeque.size() is O(n); maintain a count under a small lock
-        // instead of traversing the whole queue on every log line.
-        val entries = synchronized(bufferLock) {
-            buffer.addLast(entry)
-            entryCount++
-            while (entryCount > MAX_ENTRIES) {
-                if (buffer.pollFirst() != null) entryCount-- else break
+        synchronized(persistenceLock) {
+            // ConcurrentLinkedDeque.size() is O(n); maintain a count under a small lock
+            // instead of traversing the whole queue on every log line.
+            val entries = synchronized(bufferLock) {
+                buffer.addLast(entry)
+                entryCount++
+                while (entryCount > MAX_ENTRIES) {
+                    if (buffer.pollFirst() != null) entryCount-- else break
+                }
+                // Reuse one snapshot for both StateFlows.
+                buffer.toList()
             }
-            // Reuse one snapshot for both StateFlows.
-            buffer.toList()
+            _logs.value = entries
+            // The default unfiltered view can reuse the same snapshot without scanning it.
+            applyFilters(entries)
+            persistEntry(entry)
         }
-        _logs.value = entries
-        // The default unfiltered view can reuse the same snapshot without scanning it.
-        applyFilters(entries)
-        persistEntry(entry)
     }
 
     /** Append + flush each entry. Failures never escape into a caller/JNI callback. */
@@ -121,14 +125,28 @@ class LogCollector @Inject constructor() {
         }
     }
 
-    /** Clears only the visible/in-memory buffer; persistent diagnostic history is retained. */
+    /**
+     * Clears the visible buffer and all persisted diagnostic history. Appends are serialized
+     * with this operation so an entry already being processed cannot recreate deleted files.
+     */
     fun clear() {
-        synchronized(bufferLock) {
-            buffer.clear()
-            entryCount = 0
+        synchronized(persistenceLock) {
+            synchronized(bufferLock) {
+                buffer.clear()
+                entryCount = 0
+            }
+            _logs.value = emptyList()
+            _filteredLogs.value = emptyList()
+
+            val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+            val undeleted = logDirectory?.listFiles()
+                ?.filter { it.isFile }
+                ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
+                .orEmpty()
+            undeleted.forEach { file ->
+                Log.w(TAG, "Could not delete persisted log file ${file.name}")
+            }
         }
-        _logs.value = emptyList()
-        _filteredLogs.value = emptyList()
     }
 
     fun getAllEntries(): List<LogEntry> = snapshot()

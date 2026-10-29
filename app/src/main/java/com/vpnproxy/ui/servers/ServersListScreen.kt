@@ -68,6 +68,7 @@ import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingRegion
 import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.scanner.ServerScanner
+import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -80,6 +81,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -175,8 +177,17 @@ class ServersListViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            val count = repository.refreshAll()
-            serverScanner.scanAfterSubscriptionUpdate(repository.getAllConfigs())
+            repository.refreshAll()
+            val configs = repository.getAllConfigs()
+            // Profile probing uses a temporary Sing-box core and cannot run safely beside
+            // the active VPN core. Wait for a real disconnect instead of leaving the list
+            // permanently populated with unprobed "н/д" placeholders.
+            while (VpnProxyService.isRunning.value) {
+                VpnProxyService.isRunning.first { running -> !running }
+            }
+            // The server list requires exhaustive results; the staged scan is only for
+            // quick connection selection and intentionally stops after a successful batch.
+            serverScanner.scanAll(configs)
         }
         viewModelScope.launch {
             runCatching {
