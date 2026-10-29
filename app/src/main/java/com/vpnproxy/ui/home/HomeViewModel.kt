@@ -133,6 +133,7 @@ class HomeViewModel @Inject constructor(
                         cancelConnectingWatchdog()
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
+                            serverScanner.recordSuccessfulConnection(server)
                         }
                         pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
                             pendingRankingConfigs = emptyList()
@@ -408,7 +409,7 @@ class HomeViewModel @Inject constructor(
                         .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
                         .filterNot { autoSwitcher.isBlacklisted(it.config) }
                     if (_uiState.value.isAutomaticMode) {
-                        val bestScanned = scanned.minByOrNull { it.latencyMs }
+                        val bestScanned = serverScanner.bestAvailableServer(scanned)
                         if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
                         else {
                             val currentConfig = autoSwitcher.currentServer.value?.config
@@ -421,7 +422,7 @@ class HomeViewModel @Inject constructor(
                     } else {
                         manuallySelectedServer?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
                             ?: run {
-                                val bestScanned = scanned.minByOrNull { it.latencyMs }
+                                val bestScanned = serverScanner.bestAvailableServer(scanned)
                                 if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
                                 else autoSwitcher.selectImmediate(configs.first(), configs)
                             }
