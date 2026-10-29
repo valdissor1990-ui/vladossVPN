@@ -1,0 +1,93 @@
+name: Apply stop-scan home button fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/stop-scan-home-button]
+    paths:
+      - '.github/workflows/apply-stop-scan-home.yml'
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/stop-scan-home-button
+          fetch-depth: 0
+      - name: Patch ServerScanner and HomeViewModel
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/src/main/java/com/vpnproxy/core/scanner/ServerScanner.kt')
+          t = p.read_text()
+          if 'activeScanJob?.cancel()' not in t:
+              t = t.replace(
+                  'import kotlinx.coroutines.isActive',
+                  'import kotlinx.coroutines.currentCoroutineContext\nimport kotlinx.coroutines.isActive',
+                  1,
+              )
+              t = t.replace(
+                  '    @Volatile private var backgroundJob: Job? = null',
+                  '    @Volatile private var backgroundJob: Job? = null\n    /** Job for the in-flight scanAll body so the home button can cancel it immediately. */\n    @Volatile private var activeScanJob: Job? = null',
+                  1,
+              )
+              old_cancel = '''    /** Cancels publication of the active scan without cancelling its parent lifecycle job or VPN. */\n    fun cancelScan() {\n        if (_isScanning.value) {\n            scanGeneration.incrementAndGet()\n            logCollector.info(TAG, "Server scan cancellation requested; in-flight TCP probes will drain")\n        }\n    }'''
+              new_cancel = '''    /**\n     * Cancels the active scan as soon as possible.\n     * Bumps generation so probes short-circuit, clears isScanning for immediate UI feedback,\n     * and cancels the tracked scan job without stopping the VPN service.\n     */\n    fun cancelScan() {\n        val wasScanning = _isScanning.value\n        scanGeneration.incrementAndGet()\n        _isScanning.value = false\n        activeScanJob?.cancel()\n        activeScanJob = null\n        if (wasScanning) {\n            logCollector.info(TAG, "Server scan cancellation requested; probes short-circuit and UI cleared")\n        } else {\n            logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")\n        }\n    }'''
+              if old_cancel not in t:
+                  raise SystemExit('cancelScan block not found')
+              t = t.replace(old_cancel, new_cancel, 1)
+              old_try = '''            _isScanning.value = true\n            try {\n                val semaphore = Semaphore(CONCURRENCY)'''
+              new_try = '''            _isScanning.value = true\n            try {\n                // Track this scan's job so cancelScan() can abort awaitAll promptly.\n                activeScanJob = currentCoroutineContext()[Job]\n                val semaphore = Semaphore(CONCURRENCY)'''
+              if old_try not in t:
+                  raise SystemExit('scan try block not found')
+              t = t.replace(old_try, new_try, 1)
+              old_finally = '''            } finally {\n                _isScanning.value = false\n            }\n        }'''
+              new_finally = '''            } finally {\n                activeScanJob = null\n                _isScanning.value = false\n            }\n        }'''
+              if old_finally not in t:
+                  raise SystemExit('finally block not found')
+              t = t.replace(old_finally, new_finally, 1)
+              p.write_text(t)
+              print('ServerScanner patched')
+          else:
+              print('ServerScanner already patched')
+
+          h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
+          ht = h.read_text()
+          old_cs = '''    fun cancelServerScan() {\n        if (_uiState.value.isScanningServers) {\n            serverScanner.cancelScan()\n            logCollector.info(TAG, "Server scan cancellation requested from home button")\n        }\n    }'''
+          new_cs = '''    fun cancelServerScan() {\n        // Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).\n        logCollector.info(TAG, "Server scan stop requested from home button")\n        serverScanner.cancelScan()\n        // Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.\n        cancelSelectionJob("user stop scan")\n        _uiState.value = _uiState.value.copy(isScanningServers = false)\n    }'''
+          if old_cs not in ht:
+              if 'Server scan stop requested from home button' in ht:
+                  print('HomeViewModel already patched')
+              else:
+                  raise SystemExit('cancelServerScan block not found')
+          else:
+              h.write_text(ht.replace(old_cs, new_cs, 1))
+              print('HomeViewModel patched')
+
+          # HomeScreen: keep button enabled and prioritize stop-scan
+          hs = Path('app/src/main/java/com/vpnproxy/ui/home/HomeScreen.kt')
+          hst = hs.read_text()
+          old_btn = '''                GlowPowerButton(\n                    state = uiState.connectionState,\n                    enabled = !uiState.isBusy || uiState.isScanningServers,\n                    isScanning = uiState.isScanningServers,\n                    onClick = {\n                        if (uiState.isScanningServers) viewModel.cancelServerScan()\n                        else viewModel.toggleConnection()\n                    }\n                )'''
+          new_btn = '''                GlowPowerButton(\n                    state = uiState.connectionState,\n                    // Always allow the main button while scanning so stop works even if isBusy lags.\n                    enabled = !uiState.isBusy || uiState.isScanningServers,\n                    isScanning = uiState.isScanningServers,\n                    onClick = {\n                        if (uiState.isScanningServers) {\n                            Log.i("HomeScreen", "HomeScreen: stop scan from main button")\n                            viewModel.cancelServerScan()\n                        } else {\n                            viewModel.toggleConnection()\n                        }\n                    }\n                )'''
+          if old_btn in hst:
+              hs.write_text(hst.replace(old_btn, new_btn, 1))
+              print('HomeScreen patched')
+          else:
+              print('HomeScreen button block not exact; skip or already ok')
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/core/scanner/ServerScanner.kt \
+                  app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt \
+                  app/src/main/java/com/vpnproxy/ui/home/HomeScreen.kt
+          if git diff --staged --quiet; then
+            echo nochange
+          else
+            git commit -m "fix(scan): stop server scan from main home button"
+            git push origin fix/stop-scan-home-button
+          fi
