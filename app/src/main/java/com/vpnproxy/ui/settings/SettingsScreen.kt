@@ -29,6 +29,7 @@ fun SettingsScreen(
     val killSwitch by viewModel.killSwitch.collectAsStateWithLifecycle()
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
     val batteryEconomyMode by viewModel.batteryEconomyMode.collectAsStateWithLifecycle()
+    val dualPathEnabled by viewModel.dualPathEnabled.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
@@ -97,6 +98,13 @@ fun SettingsScreen(
                     Text("Выбрать приложения для туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 TextButton(onClick = { showSplitTunnelScreen = true }) { Text("Настроить") }
+            }
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("ИИ через зарубежный сервер", style = MaterialTheme.typography.bodyLarge)
+                    Text("ChatGPT, Claude, Gemini и другие ИИ — через не-RU сервер; остальное как обычно", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                Switch(checked = dualPathEnabled, onCheckedChange = { viewModel.setDualPathEnabled(it) })
             }
 
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
