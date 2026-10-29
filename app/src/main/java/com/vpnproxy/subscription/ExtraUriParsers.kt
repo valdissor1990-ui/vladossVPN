@@ -28,6 +28,18 @@ internal object ExtraUriParsers {
         "xchacha20-ietf-poly1305"
     )
 
+    private fun parseUriAndFragment(rawUri: String): Pair<URI, String?> {
+        val fragmentIndex = rawUri.indexOf('#')
+        val uriPart = if (fragmentIndex >= 0) rawUri.substring(0, fragmentIndex) else rawUri
+        val rawFragment = if (fragmentIndex >= 0) rawUri.substring(fragmentIndex + 1) else null
+        return URI(uriPart) to rawFragment
+    }
+
+    private fun decodeFragmentSafely(value: String): String =
+        runCatching {
+            URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8.name())
+        }.getOrDefault(value)
+
     fun parseShadowsocks(
         uri: String,
         providerTag: String,
@@ -167,7 +179,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val parsed = URI(uri)
+            val (parsed, rawFragment) = parseUriAndFragment(uri)
             val password = parsed.userInfo ?: return null
             val host = parsed.host ?: return null
             val port = if (parsed.port > 0) parsed.port else 443
@@ -177,7 +189,7 @@ internal object ExtraUriParsers {
                 else URLDecoder.decode(it.substring(0, i), "UTF-8") to
                     URLDecoder.decode(it.substring(i + 1), "UTF-8")
             }
-            val name = parsed.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "Trojan $host"
+            val name = rawFragment?.let(::decodeFragmentSafely) ?: "Trojan $host"
             SubscriptionParser.ParsedConfig(
                 uuid = password,
                 address = host,
@@ -210,13 +222,13 @@ internal object ExtraUriParsers {
     ): SubscriptionParser.ParsedConfig? {
         return try {
             val normalized = uri.replaceFirst("socks5://", "socks://")
-            val parsed = URI(normalized)
+            val (parsed, rawFragment) = parseUriAndFragment(normalized)
             val host = parsed.host ?: return null
             val port = if (parsed.port > 0) parsed.port else 1080
             val userInfo = parsed.userInfo
             val user = userInfo?.substringBefore(':')
             val pass = userInfo?.substringAfter(':', missingDelimiterValue = "")
-            val name = parsed.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "SOCKS $host"
+            val name = rawFragment?.let(::decodeFragmentSafely) ?: "SOCKS $host"
             SubscriptionParser.ParsedConfig(
                 uuid = user ?: "",
                 address = host,
