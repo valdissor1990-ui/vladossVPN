@@ -1,0 +1,66 @@
+name: Apply dual-path VpnProxyService patch
+on:
+  workflow_dispatch:
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/dual-path-ai-foreign
+      - name: Patch VpnProxyService
+        run: |
+          set -euo pipefail
+          FILE=app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/vpnproxy/service/VpnProxyService.kt")
+          t = p.read_text()
+          if "DualPathStore" not in t:
+              t = t.replace(
+                  "import com.vpnproxy.core.singbox.DiagnosticOptions\n",
+                  "import com.vpnproxy.core.singbox.DiagnosticOptions\nimport com.vpnproxy.core.dualpath.DualPathStore\nimport com.vpnproxy.core.dualpath.ServerRegionClassifier\n",
+              )
+          if "dualPathStore" not in t:
+              t = t.replace(
+                  "    @Inject lateinit var autoSwitcher: AutoSwitcher\n",
+                  "    @Inject lateinit var autoSwitcher: AutoSwitcher\n    @Inject lateinit var dualPathStore: DualPathStore\n",
+              )
+          old = '                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)'
+          new = '''                // Dual-path: AI apps -> foreign (non-RU) outbound when available
+                val dualPackages = runCatching {
+                    dualPathStore.installedPackagesForRules()
+                }.getOrDefault(emptyList())
+                val foreignParsed = if (dualPackages.isNotEmpty()) {
+                    val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
+                    ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+                } else null
+                if (foreignParsed != null) {
+                    logCollector.info(
+                        TAG,
+                        "DUAL-PATH enabled foreign=${foreignParsed.name} apps=${dualPackages.size} packages=$dualPackages"
+                    )
+                } else if (dualPackages.isNotEmpty()) {
+                    logCollector.warn(TAG, "DUAL-PATH: no foreign server in ranked list; AI apps use default proxy")
+                }
+                val configJson = SingboxConfigBuilder.buildVpn(
+                    parsed,
+                    diagnosticOptions,
+                    foreignConfig = foreignParsed,
+                    foreignProcessNames = if (foreignParsed != null) dualPackages else emptyList()
+                )'''
+          if old not in t:
+              raise SystemExit("buildVpn call site not found")
+          t = t.replace(old, new, 1)
+          p.write_text(t)
+          print("patched ok")
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/service/VpnProxyService.kt
+          git commit -m "feat(dual-path): wire foreign outbound selection in VpnProxyService" || echo "no change"
+          git push origin feat/dual-path-ai-foreign
