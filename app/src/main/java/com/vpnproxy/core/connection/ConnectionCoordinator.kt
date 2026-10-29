@@ -451,6 +451,7 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
                 fallbackIndex = -1
+                trafficValidationGeneration++ // invalidate the failed endpoint's still-running probe
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
