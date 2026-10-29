@@ -9,6 +9,11 @@ import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
@@ -106,6 +111,100 @@ class DeepProbeEngine @Inject constructor(
         if (running.compareAndSet(true, false)) {
             runCatching { SingboxProxyClient.stop(context) }
             logCollector.info(TAG, "DeepProbe cancelled — temporary core stopped")
+        }
+    }
+
+    data class ProfilePingResult(
+        val config: ParsedConfig,
+        val latencyMs: Long,
+        val success: Boolean,
+        val successfulSamples: Int
+    )
+
+    /**
+     * Measures HTTP latency through each profile's own Sing-box outbound.
+     * It does not use the currently active VPN route and refuses to run while the VPN is active.
+     * One temporary core hosts isolated loopback inbounds; results are published in small batches.
+     */
+    suspend fun pingProfiles(
+        configs: List<ParsedConfig>,
+        onBatch: (List<ProfilePingResult>) -> Unit = {}
+    ): List<ProfilePingResult> = withContext(Dispatchers.IO) {
+        if (configs.isEmpty()) return@withContext emptyList()
+        if (!running.compareAndSet(false, true)) {
+            logCollector.warn(TAG, "Profile ping already running — skip")
+            return@withContext configs.map { ProfilePingResult(it, Long.MAX_VALUE, false, 0) }
+        }
+        try {
+            check(!VpnProxyService.isRunning.value) {
+                "Проверка отдельных профилей доступна после отключения VPN"
+            }
+            ensureActive()
+            val ports = allocatePorts(configs.size)
+            val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
+            ensureActive()
+            check(!VpnProxyService.isRunning.value) {
+                "VPN стал активен до начала проверки профилей"
+            }
+            check(running.get() && isActive) { "Profile ping cancelled" }
+            val started = SingboxProxyClient.start(context, configJson)
+            check(started) { "Sing-box failed to start for profile ping" }
+
+            try {
+                val output = mutableListOf<ProfilePingResult>()
+                val semaphore = Semaphore(8)
+                configs.indices.toList().chunked(8).forEach { indices ->
+                    ensureActive()
+                    if (!running.get()) throw CancellationException("Profile ping cancelled")
+                    val batch = coroutineScope {
+                        indices.map { index ->
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    val client = OkHttpClient.Builder()
+                                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
+                                        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                                        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                                        .callTimeout(5, TimeUnit.SECONDS)
+                                        .retryOnConnectionFailure(false)
+                                        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+                                        .build()
+                                    val samples = mutableListOf<Long>()
+                                    repeat(3) {
+                                        ensureActive()
+                                        if (!running.get()) throw CancellationException("Profile ping cancelled")
+                                        try {
+                                            val request = Request.Builder().url(LATENCY_URL).head().build()
+                                            val elapsed = runInterruptible(Dispatchers.IO) {
+                                                val start = System.nanoTime()
+                                                client.newCall(request).execute().use { response ->
+                                                    if (response.code !in 200..399) error("HTTP ${response.code}")
+                                                    ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                                }
+                                            }
+                                            samples += elapsed
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            // A failed request is not a numeric ping sample.
+                                        }
+                                    }
+                                    val success = samples.size >= 2
+                                    val latency = if (success) samples.sorted()[samples.size / 2] else Long.MAX_VALUE
+                                    ProfilePingResult(configs[index], latency, success, samples.size)
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                    output += batch
+                    onBatch(batch)
+                }
+                return@withContext output
+            } finally {
+                SingboxProxyClient.stop(context)
+                logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
+            }
+        } finally {
+            running.set(false)
         }
     }
 
