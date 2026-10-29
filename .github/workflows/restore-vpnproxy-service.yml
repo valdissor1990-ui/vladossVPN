@@ -1,1 +1,9 @@
-TEMP
+# removed - use apply-dual-path-service.yml instead
+name: noop-removed
+on:
+  workflow_dispatch:
+jobs:
+  noop:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo removed
