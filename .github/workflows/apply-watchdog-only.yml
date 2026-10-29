@@ -1,6 +1,9 @@
 name: soft-watchdog-patch
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/stop-scan-home-button]
+    paths: ['.github/workflows/apply-watchdog-only.yml']
 jobs:
   apply:
     runs-on: ubuntu-24.04
@@ -26,7 +29,7 @@ jobs:
           "if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {",
           )
           h.write_text(t)
-          print("hvm", "90_000L" in t, "cancel()" in t)
+          print("hvm", "90_000L" in t)
 
           c = Path("app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt")
           t = c.read_text()
@@ -55,4 +58,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "fix: UI watchdog re-arm and ServiceReady state guard" || echo nochange
-          git push origin fix/stop-scan-home-button
+          git push origin HEAD:fix/stop-scan-home-button
