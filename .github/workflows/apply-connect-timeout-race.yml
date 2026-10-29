@@ -1,0 +1,8 @@
+name: Apply connect-timeout-race fixes
+on:
+  workflow_dispatch:
+jobs:
+  note:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo use full embed next
