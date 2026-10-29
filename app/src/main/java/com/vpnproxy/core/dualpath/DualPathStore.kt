@@ -16,7 +16,7 @@ import javax.inject.Singleton
 private val Context.dualPathDataStore by preferencesDataStore(name = "vpnproxy_dual_path")
 
 data class DualPathSettings(
-    /** Master switch: when false, no process_name foreign routing is applied. */
+    /** Master switch: when false, no package_name foreign routing is applied. */
     val enabled: Boolean = true,
     /** User-selected package names routed to the foreign outbound. Empty by default. */
     val packages: Set<String> = emptySet()
