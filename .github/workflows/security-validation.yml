@@ -1,0 +1,88 @@
+name: Security Branch Validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-validation:
+    name: Android compile and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go for native license audit inputs
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.8'
+          cache: false
+
+      - name: Bootstrap and verify Gradle Wrapper JAR
+        env:
+          WRAPPER_JAR_SHA256: ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0
+          GRADLE_DIST_SHA256: 7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
+        run: |
+          set -euo pipefail
+          mkdir -p gradle/wrapper
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            curl --fail --show-error --silent --location \
+              --proto '=https' --tlsv1.2 \
+              -o "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              https://services.gradle.org/distributions/gradle-8.14.6-bin.zip
+            echo "${GRADLE_DIST_SHA256}  $RUNNER_TEMP/gradle-8.14.6-bin.zip" | sha256sum --check
+            unzip -p "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              gradle-8.14.6/lib/plugins/gradle-wrapper-main-8.14.6.jar \
+              > "$RUNNER_TEMP/gradle-wrapper-main.jar"
+            unzip -p "$RUNNER_TEMP/gradle-wrapper-main.jar" gradle-wrapper.jar \
+              > gradle/wrapper/gradle-wrapper.jar
+          fi
+          echo "${WRAPPER_JAR_SHA256}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
+          chmod +x gradlew || true
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Prepare Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1 || true)
+          if [ -n "$CMDLINE" ]; then
+            yes | "$CMDLINE" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" "platform-tools" || true
+          fi
+
+      - name: Download and verify pinned libbox AAR
+        run: |
+          set -euo pipefail
+          chmod +x scripts/download_libbox.sh
+          ./scripts/download_libbox.sh
+          unzip -p app/libs/libbox.aar classes.jar > "$RUNNER_TEMP/libbox-classes.jar"
+          jar tf "$RUNNER_TEMP/libbox-classes.jar" | grep -q '^io/nekohasekai/libbox/PlatformInterface.class$'
+          jar tf "$RUNNER_TEMP/libbox-classes.jar" | grep -q '^go/Seq.class$'
+
+      - name: Compile direct and Play debug variants
+        run: ./gradlew :app:compileDirectDebugKotlin :app:compilePlayDebugKotlin --no-daemon --stacktrace
+
+      - name: Run unit tests for direct and Play debug variants
+        run: ./gradlew :app:testDirectDebugUnitTest :app:testPlayDebugUnitTest --no-daemon --stacktrace

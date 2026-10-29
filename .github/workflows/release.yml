@@ -10,8 +10,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.785"
-  APP_VERSION_CODE: "10785"
+  APP_VERSION_NAME: "1.0.786"
+  APP_VERSION_CODE: "10786"
 
 jobs:
   build-and-release:
@@ -56,14 +56,29 @@ jobs:
           fi
           echo "SDK ready at $SDK"
 
-      - name: Bootstrap Gradle Wrapper JAR
+      - name: Bootstrap and verify Gradle Wrapper JAR
+        env:
+          WRAPPER_JAR_SHA256: ad16bca46cb71bb5887c546860d93992aeee35c1fdaf4a242b0a612375d937e0
+          GRADLE_DIST_SHA256: 7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
         run: |
+          set -euo pipefail
           mkdir -p gradle/wrapper
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+            curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+              -o "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              https://services.gradle.org/distributions/gradle-8.14.6-bin.zip
+            echo "${GRADLE_DIST_SHA256}  $RUNNER_TEMP/gradle-8.14.6-bin.zip" | sha256sum --check
+            unzip -p "$RUNNER_TEMP/gradle-8.14.6-bin.zip" \
+              gradle-8.14.6/lib/plugins/gradle-wrapper-main-8.14.6.jar \
+              > "$RUNNER_TEMP/gradle-wrapper-main.jar"
+            unzip -p "$RUNNER_TEMP/gradle-wrapper-main.jar" gradle-wrapper.jar \
+              > gradle/wrapper/gradle-wrapper.jar
           fi
+          echo "${WRAPPER_JAR_SHA256}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
           chmod +x gradlew || true
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
 
       - uses: actions/cache@v6
         with:

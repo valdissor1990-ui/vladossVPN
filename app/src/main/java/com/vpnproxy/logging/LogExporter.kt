@@ -87,7 +87,7 @@ class LogExporter @Inject constructor(
             .joinToString("\n") { line -> SensitiveMasker.mask(line) }
             .trimEnd()
         val nativeFile = File(context.filesDir, "logs/libbox.log")
-        val nativeText = if (nativeFile.isFile) {
+        val nativeFileText = if (nativeFile.isFile) {
             runCatching { nativeFile.readText(Charsets.UTF_8) }.getOrElse {
                 "[native log read failed: ${it.javaClass.simpleName}: ${it.message}]"
             }.lineSequence().filter { it.isNotBlank() }
@@ -96,6 +96,13 @@ class LogExporter @Inject constructor(
                     SensitiveMasker.mask(tagged)
                 }
         } else ""
+        // The native callback currently writes through LogCollector/logcat on some
+        // libbox builds rather than to filesDir/logs/libbox.log. Preserve those
+        // lines in the dedicated native section instead of reporting zero native logs.
+        val nativeFromAppLog = appText.lineSequence()
+            .filter { it.contains("[LIBBOX]", ignoreCase = true) || it.contains(" | LIBBOX |", ignoreCase = true) }
+            .joinToString("\n")
+        val nativeText = nativeFileText.takeIf { it.isNotBlank() } ?: nativeFromAppLog
         return Sources(
             appText = appText,
             nativeText = nativeText.trimEnd(),

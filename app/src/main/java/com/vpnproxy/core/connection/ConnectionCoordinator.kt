@@ -37,7 +37,13 @@ sealed class ConnectionEvent {
     data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
-    data class TrafficValidationResult(val serverName: String, val success: Boolean, val failureSummary: String? = null) : ConnectionEvent()
+    data class TrafficValidationResult(
+        val serverName: String,
+        val success: Boolean,
+        val failureSummary: String? = null,
+        /** Correlates the result with the exact ServiceReady validation attempt. */
+        val validationId: Long = -1L
+    ) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
     data class ShowError(val message: String) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
@@ -47,12 +53,12 @@ sealed class ConnectionEvent {
 @Singleton
 class ConnectionCoordinator @Inject constructor(
     private val logCollector: LogCollector,
-    private val trafficValidator: TrafficValidator
+    private val trafficValidator: TrafficValidator,
+    private val scoringEngine: ScoringEngine
 ) {
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
-        private const val MAX_TRAFFIC_VALIDATION_FAILURES = 3
         private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
         const val CONNECTING_TIMEOUT_MS = 60_000L
 
@@ -86,7 +92,8 @@ class ConnectionCoordinator @Inject constructor(
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
     private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
-    private var trafficFailures: Int = 0
+    /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
+    private var trafficValidationGeneration: Long = 0L
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
 
     @Volatile private var allowedProviderTag: String? = null
@@ -191,7 +198,6 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 if (event.userInitiated) {
                     isFatalErrorLocked = false
-                    trafficFailures = 0
                     logI("Manual connect requested — fatal lock cleared")
                 }
                 activeTraceId = event.traceId
@@ -235,13 +241,14 @@ class ConnectionCoordinator @Inject constructor(
             }
             is ConnectionEvent.SetFallbackCandidates -> {
                 val incoming = event.servers.size
+                // Keep Smart Connect's measured score order. Sorting by region here
+                // silently overrode latency/reliability ranking and could send fallback
+                // through many poor endpoints before trying a healthier one.
                 fallbackCandidates = event.servers
                     .filter { isWithinProviderScope(it) }
                     .distinctBy { it.config.connectionKey() }
-                    .sortedBy { if (isRussianServer(it)) 0 else 1 }
                 fallbackIndex = -1
                 fallbackAttempts = 0
-                trafficFailures = 0
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
             is ConnectionEvent.ServerSelected -> {
@@ -259,6 +266,7 @@ class ConnectionCoordinator @Inject constructor(
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
                 }
+                trafficValidationGeneration++ // invalidate any in-flight probe for the previous selection
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
                 hasServerSelected = true
@@ -346,17 +354,22 @@ class ConnectionCoordinator @Inject constructor(
                 setState(ConnectionState.Disconnected, reason = "ForceDisconnected:$why")
             }
             is ConnectionEvent.ServiceReady -> {
+                if (event.serverName != pendingServerName) {
+                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")
+                    return
+                }
                 if (isFatalErrorLocked) {
                     logW("ServiceReady ignored — fatal lock is active")
                     return
                 }
                 retryCount = 0
+                val validationId = ++trafficValidationGeneration
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
                 if (com.vpnproxy.util.DebugFlags.SKIP_TRAFFIC_VALIDATION && com.vpnproxy.util.DebugFlags.diagnosticEnabled()) {
                     logW("Debug diagnostic mode: skipping connection-blocking traffic validation")
-                    send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true))
+                    send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true, validationId = validationId))
                     return
                 }
                 scope.launch {
@@ -374,32 +387,39 @@ class ConnectionCoordinator @Inject constructor(
                         ConnectionEvent.TrafficValidationResult(
                             serverName = event.serverName,
                             success = report.success,
-                            failureSummary = summary
+                            failureSummary = summary,
+                            validationId = validationId
                         )
                     )
                 }
             }
             is ConnectionEvent.TrafficValidationResult -> {
+                if (event.validationId != trafficValidationGeneration || event.serverName != pendingServerName || current !is ConnectionState.Verifying) {
+                    logW("Ignoring stale traffic validation result: server=${event.serverName} active=$pendingServerName validationId=${event.validationId} currentGeneration=$trafficValidationGeneration state=$current")
+                    return
+                }
                 if (isFatalErrorLocked) {
                     logW("TrafficValidationResult ignored — fatal lock")
                     return
                 }
                 if (event.success) {
-                    trafficFailures = 0
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
-                    trafficFailures++
                     val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
-                    logW("Traffic validation failed ($trafficFailures/$MAX_TRAFFIC_VALIDATION_FAILURES) for ${event.serverName}; detail=$detail")
+                    logW("Traffic validation failed for ${event.serverName}; detail=$detail")
+                    // Feed confirmed data-plane failures back into Smart Connect so
+                    // unreliable free-pool nodes rank lower on the next selection.
+                    val failedConfig = activeScoredServer?.config
+                    val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
+                        detail.contains("unreachable", ignoreCase = true) ||
+                        detail.contains("DNS_ERROR", ignoreCase = true)
+                    if (failedConfig != null && !failureLooksLocalOrDns) {
+                        scoringEngine.recordHardFailure(failedConfig, weight = 2)
+                    }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
-                    if (trafficFailures >= MAX_TRAFFIC_VALIDATION_FAILURES) {
-                        if (!tryFallback(reason, current)) {
-                            retryCount = 0
-                            isFatalErrorLocked = true
-                            cancelSelectionJob()
-                            setState(ConnectionState.Error(trafficFatalMessage(event.failureSummary)), reason = "trafficFatal")
-                        }
-                    } else if (!tryFallback(reason, current)) {
+                    // Failures are endpoint-specific: never let failures on one free node
+                    // accumulate into a global fatal threshold while healthy candidates remain.
+                    if (!tryFallback(reason, current)) {
                         handleFailure(reason, current)
                     }
                 }
@@ -419,18 +439,20 @@ class ConnectionCoordinator @Inject constructor(
         }
     }
 
-    private fun isRussianServer(server: ScoringEngine.ScoredServer): Boolean {
-        val name = server.config.name.lowercase()
-        return name.contains("russia") || name.contains("ru ") || name.contains("🇷🇺") ||
-            name.contains("москва") || name.contains("moscow") || name.contains("ru-")
-    }
-
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
         if (isFatalErrorLocked || !reason.canFallbackToNextServer() || fallbackCandidates.isEmpty()) return false
         if (current !is ConnectionState.Connecting && current !is ConnectionState.Reconnecting &&
             current !is ConnectionState.Connected && current !is ConnectionState.Verifying) return false
 
-        var nextIndex = (fallbackIndex + 1).coerceAtLeast(0)
+        // The currently active endpoint is the one that just failed. Remove it
+        // before choosing the next candidate so a later failure cannot cycle back
+        // to an endpoint already tried in this fallback pass.
+        val failedKey = activeScoredServer?.config?.connectionKey()
+        if (failedKey != null) {
+            fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == failedKey }
+        }
+        fallbackIndex = -1
+        var nextIndex = 0
         while (nextIndex < fallbackCandidates.size) {
             val candidate = fallbackCandidates[nextIndex]
             if (!isWithinProviderScope(candidate)) {
@@ -443,6 +465,7 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
                 fallbackIndex = -1
+                trafficValidationGeneration++ // invalidate the failed endpoint's still-running probe
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
