@@ -340,14 +340,14 @@ class ServerScanner @Inject constructor(
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private fun restoreCachedResults(configs: List<ParsedConfig>) {
-        val savedAt = scanCache.getLong("saved_at", 0L)
+        val savedAt = scanCache().getLong("saved_at", 0L)
         if (savedAt <= 0L || System.currentTimeMillis() - savedAt > scanCacheMaxAgeMs) return
         val restored = configs.mapNotNull { config ->
             val key = cacheKey(config)
             if (!scanCache().contains("server_${key}_latency")) return@mapNotNull null
             ScoredServer(
                 config = config,
-                latencyMs = scanCache.getLong("server_${key}_latency", Long.MAX_VALUE),
+                latencyMs = scanCache().getLong("server_${key}_latency", Long.MAX_VALUE),
                 speedMbps = scanCache.getFloat("server_${key}_speed", 0f),
                 successRate = scanCache.getFloat("server_${key}_success", 0f),
                 score = scanCache.getFloat("server_${key}_score", 0f)
@@ -360,7 +360,7 @@ class ServerScanner @Inject constructor(
     }
 
     private fun persistScanResults(results: List<ScoredServer>) {
-        val editor = scanCache.edit()
+        val editor = scanCache().edit()
         scanCache().all.keys.filter { it.startsWith("server_") }.forEach { key -> editor.remove(key) }
         results.forEach { server ->
             val key = cacheKey(server.config)
