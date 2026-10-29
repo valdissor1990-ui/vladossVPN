@@ -196,12 +196,14 @@ class SingBoxCore(
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
-        stopSuspended()
+        // startSuspended owns the port wait below. Avoid waiting once inside
+        // stopSuspended and then immediately waiting again for the same listener.
+        stopSuspended(waitForPort = false)
 
         var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
             logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; force-close and retry once")
-            stopSuspended()
+            stopSuspended(waitForPort = false)
             portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         }
         if (!portFreed) {
@@ -276,7 +278,7 @@ class SingBoxCore(
         }
     }
 
-    private suspend fun stopSuspended() {
+    private suspend fun stopSuspended(waitForPort: Boolean = true) {
         val server = currentServer
         currentServer = null
         activeConfig = null
@@ -292,10 +294,12 @@ class SingBoxCore(
         }
         runCatching { platform.closeTun() }
             .onFailure { logCollector?.warn(TAG, "closeTun failed: ${it.message}") }
-        val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
-        logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} freed=${portFreed} after stop")
-        if (!portFreed) {
-            logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after 5s, next start may fail")
+        if (waitForPort) {
+            val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+            logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} freed=${portFreed} after stop")
+            if (!portFreed) {
+                logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after ${PORT_RELEASE_TIMEOUT_MS}ms, next start may fail")
+            }
         }
         lastStopAtMs = System.currentTimeMillis()
         logCollector?.info(TAG, "Core lifecycle: stop completed at ${lastStopAtMs}")

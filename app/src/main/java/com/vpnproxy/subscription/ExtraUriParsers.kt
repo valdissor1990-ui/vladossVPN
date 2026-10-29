@@ -13,6 +13,33 @@ import java.net.URLDecoder
 internal object ExtraUriParsers {
     private const val TAG = "ExtraUriParsers"
 
+    // Keep this list aligned with cipher methods accepted by the bundled libbox.
+    // In particular, "chacha20-poly1305" is not the same declared method as
+    // "chacha20-ietf-poly1305" and currently fails during libbox initialization.
+    private val supportedShadowsocksMethods = setOf(
+        "2022-blake3-aes-128-gcm",
+        "2022-blake3-aes-256-gcm",
+        "2022-blake3-chacha20-poly1305",
+        "none",
+        "aes-128-gcm",
+        "aes-192-gcm",
+        "aes-256-gcm",
+        "chacha20-ietf-poly1305",
+        "xchacha20-ietf-poly1305"
+    )
+
+    private fun parseUriAndFragment(rawUri: String): Pair<URI, String?> {
+        val fragmentIndex = rawUri.indexOf('#')
+        val uriPart = if (fragmentIndex >= 0) rawUri.substring(0, fragmentIndex) else rawUri
+        val rawFragment = if (fragmentIndex >= 0) rawUri.substring(fragmentIndex + 1) else null
+        return URI(uriPart) to rawFragment
+    }
+
+    private fun decodeFragmentSafely(value: String): String =
+        runCatching {
+            URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8.name())
+        }.getOrDefault(value)
+
     fun parseShadowsocks(
         uri: String,
         providerTag: String,
@@ -22,7 +49,7 @@ internal object ExtraUriParsers {
             val raw = uri.removePrefix("ss://")
             val hashIdx = raw.indexOf('#')
             val name = if (hashIdx >= 0) {
-                URLDecoder.decode(raw.substring(hashIdx + 1), Charsets.UTF_8.name())
+                decodeFragmentSafely(raw.substring(hashIdx + 1))
             } else "SS"
             val body = if (hashIdx >= 0) raw.substring(0, hashIdx) else raw
             val method: String
@@ -31,15 +58,22 @@ internal object ExtraUriParsers {
             val port: Int
             val atIdx = body.lastIndexOf('@')
             if (atIdx >= 0) {
-                val userInfo = String(
-                    Base64.decode(
-                        body.substring(0, atIdx),
-                        Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP
+                val encodedUserInfo = body.substring(0, atIdx)
+                val decodedUserInfo = runCatching {
+                    String(
+                        Base64.decode(
+                            encodedUserInfo,
+                            Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP
+                        ),
+                        Charsets.UTF_8
                     )
-                )
+                }.getOrNull()?.takeIf { it.contains(':') }
+                val userInfo = decodedUserInfo ?: runCatching {
+                    URLDecoder.decode(encodedUserInfo.replace("+", "%2B"), Charsets.UTF_8.name())
+                }.getOrNull() ?: return null
                 val colon = userInfo.indexOf(':')
                 if (colon <= 0) return null
-                method = userInfo.substring(0, colon)
+                method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = body.substring(atIdx + 1)
                 val hp = hostPort.split(':')
@@ -55,13 +89,21 @@ internal object ExtraUriParsers {
                 val userInfo = decoded.substring(0, at)
                 val colon = userInfo.indexOf(':')
                 if (colon <= 0) return null
-                method = userInfo.substring(0, colon)
+                method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = decoded.substring(at + 1)
                 val hp = hostPort.split(':')
                 if (hp.size < 2) return null
                 host = hp[0]
                 port = hp[1].toIntOrNull() ?: return null
+            }
+            if (method !in supportedShadowsocksMethods) {
+                logCollector.warn(
+                    TAG,
+                    "Skipping Shadowsocks profile with unsupported cipher",
+                    mapOf("method" to method, "server" to host, "reason" to "unsupported_by_bundled_libbox")
+                )
+                return null
             }
             SubscriptionParser.ParsedConfig(
                 uuid = password,
@@ -137,7 +179,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val parsed = URI(uri)
+            val (parsed, rawFragment) = parseUriAndFragment(uri)
             val password = parsed.userInfo ?: return null
             val host = parsed.host ?: return null
             val port = if (parsed.port > 0) parsed.port else 443
@@ -147,7 +189,7 @@ internal object ExtraUriParsers {
                 else URLDecoder.decode(it.substring(0, i), "UTF-8") to
                     URLDecoder.decode(it.substring(i + 1), "UTF-8")
             }
-            val name = parsed.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "Trojan $host"
+            val name = rawFragment?.let(::decodeFragmentSafely) ?: "Trojan $host"
             SubscriptionParser.ParsedConfig(
                 uuid = password,
                 address = host,
@@ -180,13 +222,13 @@ internal object ExtraUriParsers {
     ): SubscriptionParser.ParsedConfig? {
         return try {
             val normalized = uri.replaceFirst("socks5://", "socks://")
-            val parsed = URI(normalized)
+            val (parsed, rawFragment) = parseUriAndFragment(normalized)
             val host = parsed.host ?: return null
             val port = if (parsed.port > 0) parsed.port else 1080
             val userInfo = parsed.userInfo
             val user = userInfo?.substringBefore(':')
             val pass = userInfo?.substringAfter(':', missingDelimiterValue = "")
-            val name = parsed.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "SOCKS $host"
+            val name = rawFragment?.let(::decodeFragmentSafely) ?: "SOCKS $host"
             SubscriptionParser.ParsedConfig(
                 uuid = user ?: "",
                 address = host,

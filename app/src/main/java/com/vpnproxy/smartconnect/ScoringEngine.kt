@@ -33,6 +33,11 @@ class ScoringEngine @Inject constructor(
         fun rate(): Float = if (attempts == 0L) 0f else successes.toFloat() / attempts.toFloat()
     }
 
+    companion object {
+        /** Bound history so an old bad period cannot penalize a recovered endpoint forever. */
+        private const val MAX_HISTORY_ATTEMPTS = 20L
+    }
+
     private val historyPreferences by lazy {
         context?.getSharedPreferences("server_scoring_history_v1", Context.MODE_PRIVATE)
     }
@@ -56,6 +61,13 @@ class ScoringEngine @Inject constructor(
         val key = config.connectionKey()
         val next = history.computeIfAbsent(key) { loadHistory(config) }
         val snapshot = synchronized(next) {
+            // Exponential aging in attempt space: once the window is full, halve
+            // the old evidence before adding the new result. This gives recent
+            // probes more influence and lets recovered servers regain rank.
+            while (next.attempts >= MAX_HISTORY_ATTEMPTS) {
+                next.successes /= 2L
+                next.attempts /= 2L
+            }
             next.attempts++
             if (success) next.successes++
             next.successes to next.attempts
