@@ -3,10 +3,8 @@ package com.vpnproxy.core.scanner
 import android.content.Context
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionState
-import com.vpnproxy.core.ping.PingExecutor
-import com.vpnproxy.core.ping.PingProtocol
-import com.vpnproxy.core.ping.PingRegion
-import com.vpnproxy.core.ping.PingTarget
+import com.vpnproxy.service.VpnProxyService
+import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
@@ -38,7 +36,7 @@ import javax.inject.Singleton
 
 @Singleton
 class ServerScanner @Inject constructor(
-    private val pingExecutor: PingExecutor,
+    private val deepProbeEngine: DeepProbeEngine,
     private val subscriptionRepository: SubscriptionRepository,
     private val connectionCoordinator: ConnectionCoordinator,
     private val autoSwitcher: AutoSwitcher,
@@ -64,7 +62,8 @@ class ServerScanner @Inject constructor(
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
     private val scanGeneration = AtomicLong(0L)
-    private val scanCache by lazy { context.getSharedPreferences("server_scan_cache_v1", Context.MODE_PRIVATE) }
+    private fun scanCache() = context.getSharedPreferences("server_scan_cache_v2_${autoSwitcher.currentNetworkBucket()}", Context.MODE_PRIVATE)
+    private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
     private val scanCacheMaxAgeMs = 7L * 24 * 60 * 60 * 1000
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
@@ -72,8 +71,10 @@ class ServerScanner @Inject constructor(
             val generation = scanGeneration.get()
             // Keep identical endpoints attributable to their provider. A scan cached for
             // provider A must never be reused as the scan result for provider B.
-            val unique = (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
-                .distinctBy(::scanKey)
+            val unique = orderConfigsForCurrentNetwork(
+                (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer))
+                    .distinctBy(::scanKey)
+            )
             val requestedKeys = unique.map(::scanKey).toSet()
             if (!force && requestedKeys.isNotEmpty() &&
                 requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size
@@ -84,7 +85,7 @@ class ServerScanner @Inject constructor(
             if (unique.isEmpty()) {
                 scannedConfigKeys = emptySet()
                 _scannedServers.value = emptyList()
-                scanCache.edit().clear().apply()
+                scanCache().edit().clear().apply()
                 return@withLock emptyList()
             }
 
@@ -93,7 +94,7 @@ class ServerScanner @Inject constructor(
             // A complete cache younger than the configured TTL is a valid immediate
             // result. Reuse it after process restarts and APK updates; background scans
             // refresh measurements later instead of blocking every connection attempt.
-            val savedAt = scanCache.getLong("saved_at", 0L)
+            val savedAt = scanCache().getLong("saved_at", 0L)
             val cachedKeys = _scannedServers.value.map { server -> scanKey(server.config) }.toSet()
             val cacheFresh = savedAt > 0L &&
                 System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
@@ -105,32 +106,44 @@ class ServerScanner @Inject constructor(
                 return@withLock _scannedServers.value
             }
 
+            // A temporary proxy-only core cannot safely replace the active VPN core.
+            // Keep the last known results while connected; scan again after disconnect.
+            if (VpnProxyService.isRunning.value) {
+                logCollector.info(TAG, "Profile scan deferred while VPN is active; retaining last known results")
+                return@withLock _scannedServers.value
+            }
+
             _isScanning.value = true
             try {
-                // Track this scan's job so cancelScan() can abort awaitAll promptly.
                 activeScanJob = currentCoroutineContext()[Job]
-                val semaphore = Semaphore(CONCURRENCY)
-                val russianConfigs = unique.filter(::isRussianServer)
-                val otherConfigs = unique.filterNot(::isRussianServer)
-                val results = coroutineScope {
-                    // Probe every RU entry first; only then scan the remaining subscription entries.
-                    val russianResults = russianConfigs.map { config ->
-                        async(Dispatchers.IO) {
-                            semaphore.withPermit { probe(config, generation) }
+                val resultByKey = linkedMapOf<String, ScoredServer>()
+                unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
+                _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+
+                val probeConfigs = unique.filter { it.isValid() }
+                if (probeConfigs.isNotEmpty()) {
+                    deepProbeEngine.pingProfiles(probeConfigs) { batch ->
+                        if (scanGeneration.get() == generation) {
+                            batch.forEach { ping ->
+                                val latency = ping.latencyMs.takeIf { ping.success } ?: Long.MAX_VALUE
+                                resultByKey[scanKey(ping.config)] = ScoredServer(
+                                    config = ping.config, latencyMs = latency, speedMbps = 0f,
+                                    successRate = if (ping.success) 1f else 0f,
+                                    score = if (ping.success) 1f / latency.coerceAtLeast(1L).toFloat() else 0f
+                                )
+                            }
+                            _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                         }
-                    }.awaitAll()
-                    val otherResults = otherConfigs.map { config ->
-                        async(Dispatchers.IO) {
-                            semaphore.withPermit { probe(config, generation) }
-                        }
-                    }.awaitAll()
-                    russianResults + otherResults
-                }.sortedWith(
-                    compareBy<ScoredServer>(
-                        { if (it.successRate > 0.5f) 0 else 1 },
-                        { it.latencyMs }
-                    )
-                )
+                    }.forEach { ping ->
+                        val latency = ping.latencyMs.takeIf { ping.success } ?: Long.MAX_VALUE
+                        resultByKey[scanKey(ping.config)] = ScoredServer(
+                            config = ping.config, latencyMs = latency, speedMbps = 0f,
+                            successRate = if (ping.success) 1f else 0f,
+                            score = if (ping.success) 1f / latency.coerceAtLeast(1L).toFloat() else 0f
+                        )
+                    }
+                }
+                val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
                 if (scanGeneration.get() != generation) {
                     logCollector.info(TAG, "Discarded cancelled scan results")
                     return@withLock _scannedServers.value
@@ -138,11 +151,11 @@ class ServerScanner @Inject constructor(
                 scannedConfigKeys = requestedKeys
                 _scannedServers.value = results
                 persistScanResults(results)
-                val tcpResponsive = results.filter { it.successRate > 0.5f }
-                val ruTcpResponsive = tcpResponsive.count { isRussianServer(it.config) }
+                val responsive = results.count { it.successRate > 0.5f }
+                val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
                 logCollector.info(
                     TAG,
-                    "Scan complete: ${unique.size} profiles retained; TCP endpoint responded for ${tcpResponsive.size}, RU=$ruTcpResponsive (input=${configs.size}). TCP reachability does not verify VPN protocol/tunnel."
+                    "Profile scan complete: ${unique.size} profiles retained; VPN-profile probe succeeded for $responsive, RU=$ruResponsive (input=${configs.size})"
                 )
                 results
             } finally {
@@ -206,13 +219,43 @@ class ServerScanner @Inject constructor(
      * it must not exclude UDP protocols or be interpreted as VPN tunnel availability.
      * Responsive TCP endpoints remain first for convenient ordering.
      */
-    fun availableServers(): List<ScoredServer> =
-        _scannedServers.value.sortedWith(
+    fun availableServers(): List<ScoredServer> = sortForCurrentNetwork(_scannedServers.value)
+
+    /** Successful profiles first, then profiles that actually connected on this network. */
+    fun sortForCurrentNetwork(servers: List<ScoredServer>): List<ScoredServer> {
+        val bucket = autoSwitcher.currentNetworkBucket()
+        return servers.sortedWith(
             compareBy<ScoredServer>(
                 { if (it.successRate > 0.5f) 0 else 1 },
+                { -successHistory.getLong(historyKey(it.config, bucket), 0L) },
                 { it.latencyMs }
             )
         )
+    }
+
+    fun bestAvailableServer(servers: List<ScoredServer>): ScoredServer? =
+        sortForCurrentNetwork(servers).firstOrNull { it.successRate > 0.5f }
+
+    /** Record only a confirmed connected state, not a successful probe. */
+    fun recordSuccessfulConnection(config: ParsedConfig) {
+        val bucket = autoSwitcher.currentNetworkBucket()
+        successHistory.edit().putLong(historyKey(config, bucket), System.currentTimeMillis()).apply()
+        logCollector.info(TAG, "Recorded successful connection for ${config.name} on $bucket")
+    }
+
+    private fun orderConfigsForCurrentNetwork(configs: List<ParsedConfig>): List<ParsedConfig> {
+        val bucket = autoSwitcher.currentNetworkBucket()
+        return configs.sortedWith(
+            compareByDescending<ParsedConfig> { successHistory.getLong(historyKey(it, bucket), 0L) }
+                .thenBy { if (isRussianServer(it)) 0 else 1 }
+        )
+    }
+
+    private fun historyKey(config: ParsedConfig, bucket: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest((bucket + "\u001F" + scanKey(config)).toByteArray(Charsets.UTF_8))
+            .take(16)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     fun isRussianServer(config: ParsedConfig): Boolean {
         val labels = "${config.name} ${config.providerTag}"
@@ -237,7 +280,7 @@ class ServerScanner @Inject constructor(
         if (savedAt <= 0L || System.currentTimeMillis() - savedAt > scanCacheMaxAgeMs) return
         val restored = configs.mapNotNull { config ->
             val key = cacheKey(config)
-            if (!scanCache.contains("server_${key}_latency")) return@mapNotNull null
+            if (!scanCache().contains("server_${key}_latency")) return@mapNotNull null
             ScoredServer(
                 config = config,
                 latencyMs = scanCache.getLong("server_${key}_latency", Long.MAX_VALUE),
@@ -247,19 +290,14 @@ class ServerScanner @Inject constructor(
             )
         }
         if (restored.isNotEmpty()) {
-            _scannedServers.value = restored.sortedWith(
-                compareBy<ScoredServer>(
-                    { if (it.successRate > 0.5f) 0 else 1 },
-                    { it.latencyMs }
-                )
-            )
+            _scannedServers.value = sortForCurrentNetwork(restored)
             logCollector.info(TAG, "Restored ${restored.size} cached server scan results")
         }
     }
 
     private fun persistScanResults(results: List<ScoredServer>) {
         val editor = scanCache.edit()
-        scanCache.all.keys.filter { it.startsWith("server_") }.forEach { key -> editor.remove(key) }
+        scanCache().all.keys.filter { it.startsWith("server_") }.forEach { key -> editor.remove(key) }
         results.forEach { server ->
             val key = cacheKey(server.config)
             editor.putLong("server_${key}_latency", server.latencyMs)
