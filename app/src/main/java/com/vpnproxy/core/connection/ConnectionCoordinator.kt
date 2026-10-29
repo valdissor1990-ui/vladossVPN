@@ -410,7 +410,10 @@ class ConnectionCoordinator @Inject constructor(
                     // Feed confirmed data-plane failures back into Smart Connect so
                     // unreliable free-pool nodes rank lower on the next selection.
                     val failedConfig = activeScoredServer?.config
-                    if (failedConfig != null && "proxy_port_not_ready" !in detail && "unreachable" !in detail.lowercase()) {
+                    val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
+                        detail.contains("unreachable", ignoreCase = true) ||
+                        detail.contains("DNS_ERROR", ignoreCase = true)
+                    if (failedConfig != null && !failureLooksLocalOrDns) {
                         scoringEngine.recordHardFailure(failedConfig, weight = 2)
                     }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
