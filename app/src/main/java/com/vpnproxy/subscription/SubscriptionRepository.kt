@@ -459,8 +459,8 @@ class SubscriptionRepository @Inject constructor(
         val obfsType: String? = null,
         val obfsPassword: String? = null,
         val pinSHA256: String? = null,
-        val congestionControl: String? = null,
-        val extra: Map<String, String> = emptyMap()
+        val congestionControl: String = "bbr",
+        val extra: String? = null
     ) {
         fun toParsedConfig() = ParsedConfig(
             uuid = uuid, address = address, port = port, transport = transport, security = security,
