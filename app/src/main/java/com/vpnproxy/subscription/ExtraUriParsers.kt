@@ -13,6 +13,21 @@ import java.net.URLDecoder
 internal object ExtraUriParsers {
     private const val TAG = "ExtraUriParsers"
 
+    // Keep this list aligned with cipher methods accepted by the bundled libbox.
+    // In particular, "chacha20-poly1305" is not the same declared method as
+    // "chacha20-ietf-poly1305" and currently fails during libbox initialization.
+    private val supportedShadowsocksMethods = setOf(
+        "2022-blake3-aes-128-gcm",
+        "2022-blake3-aes-256-gcm",
+        "2022-blake3-chacha20-poly1305",
+        "none",
+        "aes-128-gcm",
+        "aes-192-gcm",
+        "aes-256-gcm",
+        "chacha20-ietf-poly1305",
+        "xchacha20-ietf-poly1305"
+    )
+
     fun parseShadowsocks(
         uri: String,
         providerTag: String,
@@ -31,15 +46,22 @@ internal object ExtraUriParsers {
             val port: Int
             val atIdx = body.lastIndexOf('@')
             if (atIdx >= 0) {
-                val userInfo = String(
-                    Base64.decode(
-                        body.substring(0, atIdx),
-                        Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP
+                val encodedUserInfo = body.substring(0, atIdx)
+                val decodedUserInfo = runCatching {
+                    String(
+                        Base64.decode(
+                            encodedUserInfo,
+                            Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP
+                        ),
+                        Charsets.UTF_8
                     )
-                )
+                }.getOrNull()?.takeIf { it.contains(':') }
+                val userInfo = decodedUserInfo ?: runCatching {
+                    URLDecoder.decode(encodedUserInfo.replace("+", "%2B"), Charsets.UTF_8.name())
+                }.getOrNull() ?: return null
                 val colon = userInfo.indexOf(':')
                 if (colon <= 0) return null
-                method = userInfo.substring(0, colon)
+                method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = body.substring(atIdx + 1)
                 val hp = hostPort.split(':')
@@ -62,6 +84,14 @@ internal object ExtraUriParsers {
                 if (hp.size < 2) return null
                 host = hp[0]
                 port = hp[1].toIntOrNull() ?: return null
+            }
+            if (method !in supportedShadowsocksMethods) {
+                logCollector.warn(
+                    TAG,
+                    "Skipping Shadowsocks profile with unsupported cipher",
+                    mapOf("method" to method, "server" to host, "reason" to "unsupported_by_bundled_libbox")
+                )
+                return null
             }
             SubscriptionParser.ParsedConfig(
                 uuid = password,
