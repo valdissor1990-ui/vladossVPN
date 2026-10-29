@@ -10,8 +10,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.784"
-  APP_VERSION_CODE: "10784"
+  APP_VERSION_NAME: "1.0.785"
+  APP_VERSION_CODE: "10785"
 
 jobs:
   build-and-release:
