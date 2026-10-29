@@ -1,0 +1,156 @@
+name: stability-ux-patch
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/stop-scan-home-button]
+    paths: ['.github/workflows/apply-stability-ux.yml']
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/stop-scan-home-button
+      - name: patch
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+
+          # --- ConnectionCoordinator: endpoint-failed callback ---
+          c = Path('app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt')
+          t = c.read_text()
+          if 'onEndpointHardFailed' not in t:
+              t = t.replace(
+                  'import com.vpnproxy.smartconnect.ScoringEngine',
+                  'import com.vpnproxy.smartconnect.ScoringEngine\nimport com.vpnproxy.subscription.SubscriptionParser.ParsedConfig',
+                  1,
+              )
+              t = t.replace(
+                  '    @Volatile private var selectionCancel: (() -> Unit)? = null\n\n    fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }',
+                  '    @Volatile private var selectionCancel: (() -> Unit)? = null\n    /** Notified when an endpoint fails data-plane checks so AutoSwitcher can blacklist it. */\n    @Volatile private var onEndpointHardFailed: ((ParsedConfig) -> Unit)? = null\n\n    fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }\n\n    fun setOnEndpointHardFailed(listener: ((ParsedConfig) -> Unit)?) { onEndpointHardFailed = listener }',
+                  1,
+              )
+              old = (
+                  '                    if (failedConfig != null && !failureLooksLocalOrDns) {\n'
+                  '                        scoringEngine.recordHardFailure(failedConfig, weight = 2)\n'
+                  '                    }'
+              )
+              new = (
+                  '                    if (failedConfig != null && !failureLooksLocalOrDns) {\n'
+                  '                        scoringEngine.recordHardFailure(failedConfig, weight = 2)\n'
+                  '                        runCatching { onEndpointHardFailed?.invoke(failedConfig) }\n'
+                  '                    }'
+              )
+              if old not in t:
+                  raise SystemExit('traffic fail scoring block not found')
+              t = t.replace(old, new, 1)
+              c.write_text(t)
+              print('ConnectionCoordinator OK')
+          else:
+              print('ConnectionCoordinator already')
+
+          # --- VpnProxyService: register blacklist listener ---
+          vp = Path('app/src/main/java/com/vpnproxy/service/VpnProxyService.kt')
+          t = vp.read_text()
+          if 'setOnEndpointHardFailed' not in t:
+              # after dualPathStore inject or in onCreate
+              if 'override fun onCreate()' in t:
+                  t = t.replace(
+                      'override fun onCreate() {',
+                      'override fun onCreate() {\n        connectionCoordinator.setOnEndpointHardFailed { cfg ->\n            autoSwitcher.markServerFailed(cfg)\n        }',
+                      1,
+                  )
+              else:
+                  raise SystemExit('onCreate not found')
+              vp.write_text(t)
+              print('VpnProxyService OK')
+          else:
+              print('VpnProxyService already')
+
+          # --- HomeViewModel: dual-path summary ---
+          h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
+          t = h.read_text()
+          if 'dualPathEnabled' not in t:
+              t = t.replace(
+                  'import com.vpnproxy.subscription.SubscriptionRepository',
+                  'import com.vpnproxy.subscription.SubscriptionRepository\nimport com.vpnproxy.core.dualpath.DualPathStore',
+                  1,
+              )
+              t = t.replace(
+                  '    private val jsonConfigRepository: JsonConfigRepository\n) : ViewModel() {',
+                  '    private val jsonConfigRepository: JsonConfigRepository,\n    private val dualPathStore: DualPathStore\n) : ViewModel() {',
+                  1,
+              )
+              t = t.replace(
+                  '        val lastErrorMessage: String? = null\n    )',
+                  '        val lastErrorMessage: String? = null,\n        val dualPathEnabled: Boolean = false,\n        val dualPathAppCount: Int = 0\n    )',
+                  1,
+              )
+              # collect dual path settings in init near serverScanner collect
+              anchor = '        viewModelScope.launch {\n            serverScanner.isScanning.collect { scanning ->\n                _uiState.value = _uiState.value.copy(isScanningServers = scanning)\n            }\n        }'
+              add = anchor + '''
+        viewModelScope.launch {
+            dualPathStore.settings.collect { s ->
+                _uiState.value = _uiState.value.copy(
+                    dualPathEnabled = s.enabled,
+                    dualPathAppCount = s.packages.size
+                )
+            }
+        }'''
+              if anchor not in t:
+                  raise SystemExit('scan collect anchor missing')
+              t = t.replace(anchor, add, 1)
+              h.write_text(t)
+              print('HomeViewModel dual OK')
+          else:
+              print('HomeViewModel already')
+
+          # --- HomeScreen: dual-path status row ---
+          hs = Path('app/src/main/java/com/vpnproxy/ui/home/HomeScreen.kt')
+          t = hs.read_text()
+          if 'Зарубежный обход' not in t:
+              needle = '''                if (uiState.isScanningServers) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Поиск доступных серверов...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }'''
+              insert = needle + '''
+
+                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OnDarkSecondary
+                    )
+                }'''
+              if needle not in t:
+                  # fallback: after ConnectionStatsCard opening is harder; try simpler
+                  print('HomeScreen scan block not exact')
+              else:
+                  hs.write_text(t.replace(needle, insert, 1))
+                  print('HomeScreen dual OK')
+          else:
+              print('HomeScreen already')
+          PY
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: blacklist on traffic-fail; dual-path status on home" || echo nochange
+          git push origin HEAD:fix/stop-scan-home-button
