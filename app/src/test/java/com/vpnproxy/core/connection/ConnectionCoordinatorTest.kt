@@ -104,6 +104,11 @@ class ConnectionCoordinatorTest {
             coordinator.currentServerName() == "fast-global" &&
                 coordinator.state.value is ConnectionState.Reconnecting
         }
+        // A second failure must advance to the next untried profile, not cycle back.
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.currentServerName() == "🇷🇺 Россия" &&
+                coordinator.state.value is ConnectionState.Reconnecting
+        }
     }
 
     @Test
