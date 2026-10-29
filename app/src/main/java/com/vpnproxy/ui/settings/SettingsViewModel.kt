@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.update.UpdateCheckWorker
 import com.vpnproxy.smartconnect.BatteryPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +24,8 @@ private val Context.settingsDataStore by preferencesDataStore(name = "vpnproxy_s
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val dualPathStore: DualPathStore
 ) : ViewModel() {
 
     companion object {
@@ -47,9 +49,19 @@ class SettingsViewModel @Inject constructor(
     private val _batteryEconomyMode = MutableStateFlow(BatteryPolicy.isEconomyModeEnabled(context))
     val batteryEconomyMode: StateFlow<Boolean> = _batteryEconomyMode.asStateFlow()
 
+    val dualPathEnabled: StateFlow<Boolean> = dualPathStore.settings
+        .map { it.enabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     fun setBatteryEconomyMode(enabled: Boolean) {
         BatteryPolicy.setEconomyModeEnabled(context, enabled)
         _batteryEconomyMode.value = enabled
+    }
+
+    fun setDualPathEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            dualPathStore.setEnabled(enabled)
+        }
     }
 
     fun setAutoStart(enabled: Boolean) {
