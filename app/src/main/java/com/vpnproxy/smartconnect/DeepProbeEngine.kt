@@ -47,6 +47,16 @@ class DeepProbeEngine @Inject constructor(
         private const val CONNECT_TIMEOUT_MS = 2_000L
         private const val READ_TIMEOUT_MS = 4_000L
 
+        fun summarizeProfileLatency(config: ParsedConfig, samples: List<Long>): ProfilePingResult {
+            val valid = samples.filter { it > 0L }.sorted()
+            val success = valid.size >= 2
+            return ProfilePingResult(
+                config = config,
+                latencyMs = if (success) valid[valid.size / 2] else Long.MAX_VALUE,
+                success = success,
+                successfulSamples = valid.size
+            )
+        }
         fun scoreMetrics(metrics: List<ProbeMetrics>): List<ProbeMetrics> {
             if (metrics.isEmpty()) return emptyList()
             val latency = metrics.map { it.medianLatencyMs.toDouble() }
@@ -188,9 +198,7 @@ class DeepProbeEngine @Inject constructor(
                                             // A failed request is not a numeric ping sample.
                                         }
                                     }
-                                    val success = samples.size >= 2
-                                    val latency = if (success) samples.sorted()[samples.size / 2] else Long.MAX_VALUE
-                                    ProfilePingResult(configs[index], latency, success, samples.size)
+                                    summarizeProfileLatency(configs[index], samples)
                                 }
                             }
                         }.awaitAll()
