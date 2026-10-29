@@ -89,10 +89,21 @@ class SubscriptionsViewModel @Inject constructor(
         _message.value = "Тег обновлён"
     }
 
+    fun setSubscriptionEnabled(id: String, enabled: Boolean) {
+        if (id !in SubscriptionRepository.BUILT_IN_IDS) return
+        repository.setSubscriptionEnabled(id, enabled)
+        _message.value = if (enabled) "Источник включён" else "Источник отключён"
+        refreshAll()
+    }
+
     fun removeSubscription(id: String) {
         viewModelScope.launch {
             repository.removeSubscription(id)
-            _message.value = "Подписка удалена"
+            _message.value = if (id in SubscriptionRepository.BUILT_IN_IDS) {
+                "Встроенные источники нельзя удалить — их можно отключить"
+            } else {
+                "Подписка удалена"
+            }
         }
     }
 
