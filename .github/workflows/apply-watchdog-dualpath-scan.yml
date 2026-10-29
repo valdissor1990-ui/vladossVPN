@@ -1,0 +1,303 @@
+name: Apply watchdog dualpath scan fixes
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/watchdog-dualpath-scan]
+    paths:
+      - '.github/workflows/apply-watchdog-dualpath-scan.yml'
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/watchdog-dualpath-scan
+          fetch-depth: 0
+      - name: Patch sources
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # --- HomeViewModel: UI watchdog re-arm + stop-scan ---
+          h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
+          t = h.read_text()
+          t = t.replace(
+              'private const val CONNECTING_UI_WATCHDOG_MS = 60_000L',
+              'private const val CONNECTING_UI_WATCHDOG_MS = 90_000L',
+          )
+          old_arm = '''    private fun armConnectingWatchdog() {
+        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
+            }
+        }
+    }'''
+          new_arm = '''    private fun armConnectingWatchdog() {
+        // Re-arm on every Connecting/Reconnecting/Verifying progress so multi-server
+        // fallback is not killed by a single timer started on the first click.
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Connecting ||
+                s is ConnectionState.Reconnecting ||
+                s is ConnectionState.Verifying
+            ) {
+                logCollector.warn(
+                    TAG,
+                    tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms without Connected — RequestDisconnect")
+                )
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
+            }
+        }
+    }'''
+          if old_arm not in t:
+              if 'Re-arm on every' not in t:
+                  raise SystemExit('armConnectingWatchdog not found')
+          else:
+              t = t.replace(old_arm, new_arm)
+          old_cs = '''    fun cancelServerScan() {
+        if (_uiState.value.isScanningServers) {
+            serverScanner.cancelScan()
+            logCollector.info(TAG, "Server scan cancellation requested from home button")
+        }
+    }'''
+          new_cs = '''    fun cancelServerScan() {
+        logCollector.info(TAG, "Server scan stop requested from home button")
+        serverScanner.cancelScan()
+        cancelSelectionJob("user stop scan")
+        _uiState.value = _uiState.value.copy(isScanningServers = false)
+    }'''
+          if old_cs in t:
+              t = t.replace(old_cs, new_cs)
+          h.write_text(t)
+          print('HomeViewModel OK')
+
+          # --- ConnectionCoordinator: ServiceReady + timeout ---
+          c = Path('app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt')
+          t = c.read_text()
+          t = t.replace(
+              'const val CONNECTING_TIMEOUT_MS = 60_000L',
+              'const val CONNECTING_TIMEOUT_MS = 90_000L',
+          )
+          old_sr = '''            is ConnectionEvent.ServiceReady -> {
+                if (event.serverName != pendingServerName) {
+                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")
+                    return
+                }
+                if (isFatalErrorLocked) {
+                    logW("ServiceReady ignored — fatal lock is active")
+                    return
+                }
+                retryCount = 0
+                val validationId = ++trafficValidationGeneration
+                pendingServerName = event.serverName
+                hasServerSelected = true
+                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'''
+          new_sr = '''            is ConnectionEvent.ServiceReady -> {
+                if (event.serverName != pendingServerName) {
+                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")
+                    return
+                }
+                if (isFatalErrorLocked) {
+                    logW("ServiceReady ignored — fatal lock is active")
+                    return
+                }
+                when (current) {
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> Unit
+                    else -> {
+                        logW("ServiceReady ignored in state $current for ${event.serverName}")
+                        return
+                    }
+                }
+                retryCount = 0
+                val validationId = ++trafficValidationGeneration
+                pendingServerName = event.serverName
+                hasServerSelected = true
+                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'''
+          if old_sr not in t:
+              if 'ServiceReady ignored in state' not in t:
+                  raise SystemExit('ServiceReady block not found')
+          else:
+              t = t.replace(old_sr, new_sr)
+          c.write_text(t)
+          print('ConnectionCoordinator OK')
+
+          # --- ServerScanner: cancelScan ---
+          s = Path('app/src/main/java/com/vpnproxy/core/scanner/ServerScanner.kt')
+          t = s.read_text()
+          if 'activeScanJob?.cancel()' not in t:
+              t = t.replace(
+                  'import kotlinx.coroutines.isActive',
+                  'import kotlinx.coroutines.currentCoroutineContext\nimport kotlinx.coroutines.isActive',
+              )
+              t = t.replace(
+                  '    @Volatile private var backgroundJob: Job? = null',
+                  '    @Volatile private var backgroundJob: Job? = null\n    @Volatile private var activeScanJob: Job? = null',
+              )
+              old_cancel = '''    /** Cancels publication of the active scan without cancelling its parent lifecycle job or VPN. */
+    fun cancelScan() {
+        if (_isScanning.value) {
+            scanGeneration.incrementAndGet()
+            logCollector.info(TAG, "Server scan cancellation requested; in-flight TCP probes will drain")
+        }
+    }'''
+              new_cancel = '''    fun cancelScan() {
+        val wasScanning = _isScanning.value
+        scanGeneration.incrementAndGet()
+        _isScanning.value = false
+        activeScanJob?.cancel()
+        activeScanJob = null
+        if (wasScanning) {
+            logCollector.info(TAG, "Server scan cancellation requested; probes short-circuit and UI cleared")
+        } else {
+            logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
+        }
+    }'''
+              if old_cancel not in t:
+                  raise SystemExit('cancelScan not found')
+              t = t.replace(old_cancel, new_cancel)
+              old_try = '''            _isScanning.value = true
+            try {
+                val semaphore = Semaphore(CONCURRENCY)'''
+              new_try = '''            _isScanning.value = true
+            try {
+                activeScanJob = currentCoroutineContext()[Job]
+                val semaphore = Semaphore(CONCURRENCY)'''
+              t = t.replace(old_try, new_try)
+              old_finally = '''            } finally {
+                _isScanning.value = false
+            }
+        }'''
+              new_finally = '''            } finally {
+                activeScanJob = null
+                _isScanning.value = false
+            }
+        }'''
+              t = t.replace(old_finally, new_finally)
+              s.write_text(t)
+              print('ServerScanner OK')
+          else:
+              print('ServerScanner already OK')
+
+          # --- ServerRegionClassifier: better foreign pick for dual-path ---
+          r = Path('app/src/main/java/com/vpnproxy/core/dualpath/ServerRegionClassifier.kt')
+          r.write_text('''package com.vpnproxy.core.dualpath
+
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+
+/** Heuristic region label from subscription display name (flags / keywords). */
+object ServerRegionClassifier {
+
+    private val russianKeywords = listOf(
+        "russia", "россия", "москва", "moscow", "beget", " vk", "vk —", "vk-", "aeza"
+    )
+
+    /** Names that look "EU" in the list but are typically RU-bypass nodes — not true foreign exits. */
+    private val ruBypassHints = listOf(
+        "обход глушилок", "глушил", "white.?list", "whitelist", "ru-mobile", "rutube"
+    )
+
+    private val foreignFlagHints = listOf(
+        "🇸🇪", "🇩🇪", "🇺🇸", "🇫🇮", "🇵🇱", "🇳🇱", "🇬🇧", "🇫🇷", "🇯🇵", "🇸🇬",
+        "🇨🇦", "🇦🇺", "🇪🇸", "🇮🇹", "🇨🇭", "🇦🇹", "🇳🇴", "🇩🇰", "🇧🇪", "🇵🇹",
+        "🇦🇪", "🇹🇷", "🇭🇰", "🇹🇼", "🇰🇷", "🇧🇷", "🇮🇳", "🇲🇨", "luxembourg"
+    )
+
+    fun isLikelyRussianExit(name: String): Boolean {
+        if (name.contains("🇷🇺")) return true
+        val lower = " ${name.lowercase()} "
+        return russianKeywords.any { lower.contains(it) }
+    }
+
+    fun isForeignCandidate(config: ParsedConfig): Boolean {
+        val name = config.name.orEmpty()
+        if (isLikelyRussianExit(name)) return false
+        val lower = name.lowercase()
+        if (ruBypassHints.any { hint ->
+                if ("?" in hint) Regex(hint).containsMatchIn(lower) else lower.contains(hint)
+            }) return false
+        return true
+    }
+
+    /** Higher = better true-foreign candidate for dual-path AI routing. */
+    private fun foreignScore(name: String): Int {
+        if (!isForeignCandidate(ParsedConfig(
+                uuid = "", address = "", port = 0, transport = "", security = "",
+                name = name
+            )) && isLikelyRussianExit(name)) return -1
+        val lower = name.lowercase()
+        if (ruBypassHints.any { hint ->
+                if ("?" in hint) Regex(hint).containsMatchIn(lower) else lower.contains(hint)
+            }) return 0
+        if (isLikelyRussianExit(name)) return -1
+        var score = 1
+        if (foreignFlagHints.any { name.contains(it) }) score += 2
+        if ("hysteria" in lower || "hy2" in lower) score += 1
+        return score
+    }
+
+    fun pickBestForeign(
+        ranked: List<ParsedConfig>,
+        preferredNot: ParsedConfig? = null
+    ): ParsedConfig? {
+        val preferredKey = preferredNot?.connectionKey()
+        return ranked
+            .asSequence()
+            .filter { isForeignCandidate(it) }
+            .filter { preferredKey == null || it.connectionKey() != preferredKey }
+            .sortedByDescending { foreignScore(it.name.orEmpty()) }
+            .firstOrNull()
+            ?: ranked.firstOrNull {
+                isForeignCandidate(it) && (preferredKey == null || it.connectionKey() != preferredKey)
+            }
+    }
+}
+''')
+          print('ServerRegionClassifier OK')
+
+          # dual-path: also try subscription configs if ranked has no foreign
+          vp = Path('app/src/main/java/com/vpnproxy/service/VpnProxyService.kt')
+          vt = vp.read_text()
+          old_dp = '''      val foreignParsed = if (dualPackages.isNotEmpty()) {
+          val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
+          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+      } else null'''
+          new_dp = '''      val foreignParsed = if (dualPackages.isNotEmpty()) {
+          val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
+          val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+          fromRanked ?: run {
+              // Ranked list can be RU-heavy; fall back to full subscription pool for a true foreign exit.
+              val all = runCatching { subscriptionRepository.getAllConfigs() }.getOrDefault(emptyList())
+              ServerRegionClassifier.pickBestForeign(all, preferredNot = parsed)
+          }
+      } else null'''
+          if old_dp in vt:
+              vt = vt.replace(old_dp, new_dp)
+              vp.write_text(vt)
+              print('VpnProxyService dual-path OK')
+          else:
+              print('VpnProxyService dual-path block not exact — skip')
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo nochange
+          else
+            git commit -m "fix: UI watchdog re-arm, dual-path foreign pick, stop-scan"
+            git push origin fix/watchdog-dualpath-scan
+          fi
