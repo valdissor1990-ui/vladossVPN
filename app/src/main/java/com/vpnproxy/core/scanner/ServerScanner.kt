@@ -123,25 +123,17 @@ class ServerScanner @Inject constructor(
 
                 val probeConfigs = unique.filter { it.isValid() }
                 if (probeConfigs.isNotEmpty()) {
-                    deepProbeEngine.pingProfiles(probeConfigs) { batch ->
-                        if (scanGeneration.get() == generation) {
-                            batch.forEach { ping ->
-                                val latency = ping.latencyMs.takeIf { ping.success } ?: Long.MAX_VALUE
-                                resultByKey[scanKey(ping.config)] = ScoredServer(
-                                    config = ping.config, latencyMs = latency, speedMbps = 0f,
-                                    successRate = if (ping.success) 1f else 0f,
-                                    score = if (ping.success) 1f / latency.coerceAtLeast(1L).toFloat() else 0f
-                                )
+                    try {
+                        deepProbeEngine.pingProfiles(probeConfigs) { batch ->
+                            if (scanGeneration.get() == generation) {
+                                batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                                _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                             }
-                            _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                        }
-                    }.forEach { ping ->
-                        val latency = ping.latencyMs.takeIf { ping.success } ?: Long.MAX_VALUE
-                        resultByKey[scanKey(ping.config)] = ScoredServer(
-                            config = ping.config, latencyMs = latency, speedMbps = 0f,
-                            successRate = if (ping.success) 1f else 0f,
-                            score = if (ping.success) 1f / latency.coerceAtLeast(1L).toFloat() else 0f
-                        )
+                        }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        logCollector.warn(TAG, "Profile scan failed: ${error.message}")
                     }
                 }
                 val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
@@ -289,11 +281,7 @@ class ServerScanner @Inject constructor(
             _scannedServers.value.size == unique.size
     }
 
-    /**
-     * Returns all scanned profiles. TCP connect is only an endpoint reachability hint;
-     * it must not exclude UDP protocols or be interpreted as VPN tunnel availability.
-     * Responsive TCP endpoints remain first for convenient ordering.
-     */
+    /** Returns profiles in current-network history order, with confirmed VPN-profile responses first. */
     fun availableServers(): List<ScoredServer> = sortForCurrentNetwork(_scannedServers.value)
 
     /** Successful profiles first, then profiles that actually connected on this network. */
