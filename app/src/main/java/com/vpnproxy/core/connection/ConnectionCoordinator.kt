@@ -241,10 +241,12 @@ class ConnectionCoordinator @Inject constructor(
             }
             is ConnectionEvent.SetFallbackCandidates -> {
                 val incoming = event.servers.size
+                // Keep Smart Connect's measured score order. Sorting by region here
+                // silently overrode latency/reliability ranking and could send fallback
+                // through many poor endpoints before trying a healthier one.
                 fallbackCandidates = event.servers
                     .filter { isWithinProviderScope(it) }
                     .distinctBy { it.config.connectionKey() }
-                    .sortedBy { if (isRussianServer(it)) 0 else 1 }
                 fallbackIndex = -1
                 fallbackAttempts = 0
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
@@ -432,12 +434,6 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
         }
-    }
-
-    private fun isRussianServer(server: ScoringEngine.ScoredServer): Boolean {
-        val name = server.config.name.lowercase()
-        return name.contains("russia") || name.contains("ru ") || name.contains("🇷🇺") ||
-            name.contains("москва") || name.contains("moscow") || name.contains("ru-")
     }
 
     private fun tryFallback(reason: VpnFailureReason, current: ConnectionState): Boolean {
