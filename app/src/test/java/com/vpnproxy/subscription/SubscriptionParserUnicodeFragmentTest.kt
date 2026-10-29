@@ -26,6 +26,22 @@ class SubscriptionParserUnicodeFragmentTest {
 
 
     @Test
+    fun hysteria2AndTuicUrisWithUnicodeFragments_areParsed() {
+        val hysteria = parser.parseHysteria2Uri(
+            "hysteria2://secret@192.0.2.20:443?sni=example.com#🇷🇺 Россия"
+        )
+        val tuic = parser.parseTuicUri(
+            "tuic://550e8400-e29b-41d4-a716-446655440000:secret@192.0.2.21:443" +
+                "?sni=example.com#🇷🇺 Россия"
+        )
+
+        assertNotNull(hysteria)
+        assertEquals("🇷🇺 Россия", hysteria.name)
+        assertNotNull(tuic)
+        assertEquals("🇷🇺 Россия", tuic.name)
+    }
+
+    @Test
     fun unsupportedShadowsocksCipher_isSkippedBeforeCoreStartup() {
         val configs = parser.parse(
             "ss://chacha20-poly1305:password@192.0.2.1:8388#unsupported"
