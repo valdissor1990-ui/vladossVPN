@@ -37,6 +37,8 @@ class UpdateViewModel @Inject constructor(
     fun checkOnce() {
         if (checkedThisSession) return
         checkedThisSession = true
+        // Restore any previously downloaded APK, then check and prefetch if needed.
+        updateManager.restoreReadyFromDisk()
         check(force = false)
     }
 
@@ -44,7 +46,16 @@ class UpdateViewModel @Inject constructor(
         if (_isCheckingUpdates.value) return@launch
         _isCheckingUpdates.value = true
         try {
-            updateManager.checkForUpdate(force = force)
+            // Always try background-style prefetch: check → download latest → Ready
+            if (force) {
+                updateManager.checkAndPrefetch()
+            } else {
+                updateManager.checkForUpdate(force = false)
+                val available = updateManager.state.value
+                if (available is UpdateManager.State.UpdateAvailable) {
+                    updateManager.downloadUpdate(available.release)
+                }
+            }
             when (val s = updateManager.state.value) {
                 is UpdateManager.State.UpToDate ->
                     _feedback.emit(Feedback.UpToDate)
