@@ -351,9 +351,9 @@ class ServerScanner @Inject constructor(
             ScoredServer(
                 config = config,
                 latencyMs = scanCache().getLong("server_${key}_latency", Long.MAX_VALUE),
-                speedMbps = scanCache.getFloat("server_${key}_speed", 0f),
-                successRate = scanCache.getFloat("server_${key}_success", 0f),
-                score = scanCache.getFloat("server_${key}_score", 0f)
+                speedMbps = scanCache().getFloat("server_${key}_speed", 0f),
+                successRate = scanCache().getFloat("server_${key}_success", 0f),
+                score = scanCache().getFloat("server_${key}_score", 0f)
             )
         }
         if (restored.isNotEmpty()) {
