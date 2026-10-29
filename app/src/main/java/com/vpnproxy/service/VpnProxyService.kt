@@ -454,7 +454,7 @@ class VpnProxyService : VpnService() {
           parsed,
           diagnosticOptions,
           foreignConfig = foreignParsed,
-          foreignProcessNames = if (foreignParsed != null) dualPackages else emptyList()
+          foreignPackageNames = if (foreignParsed != null) dualPackages else emptyList()
       )
                 runCatching {
                     val root = org.json.JSONObject(configJson)
