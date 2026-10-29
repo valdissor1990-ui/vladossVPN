@@ -56,7 +56,7 @@ class ConnectionCoordinatorTest {
 
     @Before
     fun setUp() {
-        coordinator = ConnectionCoordinator(LogCollector(), TrafficValidator(LogCollector()))
+        coordinator = ConnectionCoordinator(LogCollector(), TrafficValidator(LogCollector()), ScoringEngine(null))
         // actor loop starts asynchronously
         Thread.sleep(50)
     }
