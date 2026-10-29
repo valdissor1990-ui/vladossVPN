@@ -13,6 +13,14 @@
     <!-- Required for in-app APK updates (canRequestPackageInstalls / ACTION_INSTALL_PACKAGE) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Required to list installed launcher apps for user-configurable Dual Path routing. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".VpnProxyApp"
         android:allowBackup="false"
