@@ -138,6 +138,7 @@ class DeepProbeEngine @Inject constructor(
      */
     suspend fun pingProfiles(
         configs: List<ParsedConfig>,
+        stopAfterSuccessfulBatch: Boolean = false,
         onBatch: (List<ProfilePingResult>) -> Unit = {}
     ): List<ProfilePingResult> = withContext(Dispatchers.IO) {
         if (configs.isEmpty()) return@withContext emptyList()
@@ -163,7 +164,7 @@ class DeepProbeEngine @Inject constructor(
             try {
                 val output = mutableListOf<ProfilePingResult>()
                 val semaphore = Semaphore(8)
-                configs.indices.toList().chunked(8).forEach { indices ->
+                for (indices in configs.indices.toList().chunked(8)) {
                     ensureActive()
                     if (!running.get()) throw CancellationException("Profile ping cancelled")
                     val batch = coroutineScope {
@@ -205,6 +206,7 @@ class DeepProbeEngine @Inject constructor(
                     }
                     output += batch
                     onBatch(batch)
+                    if (stopAfterSuccessfulBatch && batch.any { it.success }) break
                 }
                 return@withContext output
             } finally {
