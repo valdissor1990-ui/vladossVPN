@@ -76,6 +76,22 @@ android {
         }
     }
 
+    // Never produce a release variant signed with the publicly known debug key.
+    // Fail closed when a release task is requested without a configured release keystore.
+    val releaseTaskRequested = gradle.startParameter.taskNames.any { requested ->
+        val taskName = requested.substringAfterLast(':')
+        taskName.equals("assemble", ignoreCase = true) ||
+            taskName.equals("build", ignoreCase = true) ||
+            taskName.matches(Regex("(assemble|bundle|package|install|sign)[A-Za-z0-9]*Release", RegexOption.IGNORE_CASE))
+    }
+    val releaseSigningConfig = signingConfigs.getByName("release")
+    if (releaseTaskRequested && releaseSigningConfig.storeFile == null) {
+        throw GradleException(
+            "Release build requested but no release keystore is configured. " +
+                "Set KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD."
+        )
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -84,10 +100,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-        buildConfigField("boolean", "LOG_DEBUG", "false")
-            signingConfig = if (signingConfigs.findByName("release")?.storeFile != null)
-                signingConfigs.getByName("release")
-            else signingConfigs.getByName("debug")
+            buildConfigField("boolean", "LOG_DEBUG", "false")
+            signingConfig = releaseSigningConfig
         }
         debug {
             isMinifyEnabled = false
@@ -187,10 +201,10 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.2")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.1")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.yaml:snakeyaml:2.3")
