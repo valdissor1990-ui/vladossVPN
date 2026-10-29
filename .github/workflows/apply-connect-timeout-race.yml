@@ -1,8 +1,130 @@
 name: Apply connect-timeout-race fixes
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/connect-timeout-race]
+    paths:
+      - '.github/workflows/apply-connect-timeout-race.yml'
 jobs:
-  note:
+  apply:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - run: echo use full embed next
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/connect-timeout-race
+          fetch-depth: 0
+      - name: Restore from main and patch
+        run: |
+          set -euo pipefail
+          HVM=app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt
+          CC=app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt
+          git show origin/main:"$HVM" > "$HVM"
+          git show origin/main:"$CC" > "$CC"
+          python3 <<'PY'
+          from pathlib import Path
+
+          hvm = Path("app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt")
+          t = hvm.read_text()
+          t = t.replace(
+              "private const val CONNECTING_UI_WATCHDOG_MS = 60_000L",
+              "private const val CONNECTING_UI_WATCHDOG_MS = 90_000L",
+          )
+          old = '''    private fun armConnectingWatchdog() {
+        if (connectingWatchdogJob?.isActive == true) return
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {
+                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
+            }
+        }
+    }'''
+          new = '''    private fun armConnectingWatchdog() {
+        // Re-arm on every Connecting/Reconnecting/Verifying progress so multi-server
+        // fallback is not killed by a single timer started on the first click.
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = viewModelScope.launch {
+            delay(CONNECTING_UI_WATCHDOG_MS)
+            val s = connectionCoordinator.state.value
+            if (s is ConnectionState.Connecting ||
+                s is ConnectionState.Reconnecting ||
+                s is ConnectionState.Verifying
+            ) {
+                logCollector.warn(
+                    TAG,
+                    tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms without Connected — RequestDisconnect")
+                )
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
+            }
+        }
+    }'''
+          if old not in t:
+              raise SystemExit('armConnectingWatchdog block not found')
+          hvm.write_text(t.replace(old, new))
+
+          cc = Path("app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt")
+          t = cc.read_text()
+          t = t.replace(
+              "const val CONNECTING_TIMEOUT_MS = 60_000L",
+              "const val CONNECTING_TIMEOUT_MS = 90_000L",
+          )
+          old = '''            is ConnectionEvent.ServiceReady -> {
+                if (event.serverName != pendingServerName) {
+                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")
+                    return
+                }
+                if (isFatalErrorLocked) {
+                    logW("ServiceReady ignored — fatal lock is active")
+                    return
+                }
+                retryCount = 0
+                val validationId = ++trafficValidationGeneration
+                pendingServerName = event.serverName
+                hasServerSelected = true
+                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'''
+          new = '''            is ConnectionEvent.ServiceReady -> {
+                if (event.serverName != pendingServerName) {
+                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")
+                    return
+                }
+                if (isFatalErrorLocked) {
+                    logW("ServiceReady ignored — fatal lock is active")
+                    return
+                }
+                // Never accept a late start after UI/coordinator timeout already tore down.
+                when (current) {
+                    is ConnectionState.Connecting,
+                    is ConnectionState.Reconnecting,
+                    is ConnectionState.Verifying -> Unit
+                    else -> {
+                        logW("ServiceReady ignored in state $current for ${event.serverName}")
+                        return
+                    }
+                }
+                retryCount = 0
+                val validationId = ++trafficValidationGeneration
+                pendingServerName = event.serverName
+                hasServerSelected = true
+                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'''
+          if old not in t:
+              raise SystemExit('ServiceReady block not found')
+          cc.write_text(t.replace(old, new))
+          print('patched ok')
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt \
+                  app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt
+          if git diff --staged --quiet; then
+            echo nochange
+          else
+            git commit -m "fix(connect): re-arm UI watchdog; ignore ServiceReady after Error"
+            git push origin fix/connect-timeout-race
+          fi
