@@ -225,7 +225,15 @@ object SingboxConfigBuilder {
             put("server_port", config.port)
 
             when {
-                isHy2 -> put("password", config.password ?: config.uuid)
+                isHy2 -> {
+                    put("password", config.password ?: config.uuid)
+                    config.obfsType?.takeIf { it.isNotBlank() }?.let { obfsType ->
+                        put("obfs", buildJsonObject {
+                            put("type", obfsType)
+                            config.obfsPassword?.takeIf { it.isNotBlank() }?.let { put("password", it) }
+                        })
+                    }
+                }
                 isTuic -> {
                     put("uuid", config.uuid)
                     put("password", config.password.orEmpty())
