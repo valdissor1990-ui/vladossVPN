@@ -181,12 +181,13 @@ class DeepProbeEngine @Inject constructor(
                                         .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
                                         .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                                         .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .callTimeout(5, TimeUnit.SECONDS)
+                                        .callTimeout(3, TimeUnit.SECONDS)
                                         .retryOnConnectionFailure(false)
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
                                     val samples = mutableListOf<Long>()
-                                    repeat(3) {
+                                    for (attempt in 0 until 3) {
+                                        if (samples.size >= 2 || samples.size + (3 - attempt) < 2) break
                                         ensureActive()
                                         if (!running.get()) throw CancellationException("Profile ping cancelled")
                                         try {
