@@ -181,7 +181,7 @@ dependencies {
     // Full sing-box-lx 1.14.3-lx.23 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
 
-    implementation(platform("androidx.compose:compose-bom:2025.01.01"))
+    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
