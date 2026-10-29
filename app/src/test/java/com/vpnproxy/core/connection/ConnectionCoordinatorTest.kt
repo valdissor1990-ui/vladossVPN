@@ -62,6 +62,29 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+
+        // A result without the current ServiceReady generation is stale/untrusted.
+        coordinator.send(
+            ConnectionEvent.TrafficValidationResult(
+                serverName = "test-server",
+                success = true,
+                validationId = -1L
+            )
+        )
+        Thread.sleep(150)
+
+        assertFalse(coordinator.state.value is ConnectionState.Connected)
+        assertTrue(coordinator.state.value is ConnectionState.Connecting)
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
