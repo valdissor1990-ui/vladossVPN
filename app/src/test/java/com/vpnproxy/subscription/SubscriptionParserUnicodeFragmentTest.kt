@@ -75,6 +75,16 @@ class SubscriptionParserUnicodeFragmentTest {
     }
 
     @Test
+    fun malformedPercentEscapeInShadowsocksDisplayName_doesNotDiscardConfig() {
+        val configs = parser.parse(
+            "ss://chacha20-ietf-poly1305:password@192.0.2.1:8388#Free%ZZServer"
+        )
+
+        assertEquals(1, configs.size)
+        assertEquals("Free%ZZServer", configs.single().name)
+    }
+
+    @Test
     fun malformedPercentEscapeInDisplayName_doesNotDiscardConfig() {
         val config = parser.parseVlessUri(
             "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.10:443" +
