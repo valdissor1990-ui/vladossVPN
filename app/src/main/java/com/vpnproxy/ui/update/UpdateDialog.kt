@@ -11,7 +11,8 @@ import androidx.compose.ui.unit.dp
 import com.vpnproxy.update.UpdateManager
 
 /**
- * Диалог обновления. Показывает версию, changelog, прогресс скачивания.
+ * Диалог обновления. Показывает версию, changelog, прогресс скачивания
+ * или готовность к установке после фоновой загрузки.
  */
 @Composable
 fun UpdateDialog(
@@ -31,10 +32,16 @@ fun UpdateDialog(
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodySmall
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Можно скачать сейчас или дождаться фоновой загрузки.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             },
             confirmButton = {
-                Button(onClick = onDownload) { Text("Скачать и установить") }
+                Button(onClick = onDownload) { Text("Скачать") }
             },
             dismissButton = {
                 TextButton(onClick = onDismiss) { Text("Позже") }
@@ -59,13 +66,19 @@ fun UpdateDialog(
 
         is UpdateManager.State.Ready -> AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("Готово к установке") },
-            text = { Text("APK ${state.release.extractVersionName()} скачан. Нажмите «Установить», затем подтвердите установку в системном окне.") },
+            title = { Text("Обновление скачано") },
+            text = {
+                Text(
+                    "Версия ${state.release.extractVersionName()} уже загружена.\n" +
+                        "Нажмите «Установить» и подтвердите установку в системном окне.\n\n" +
+                        "Если до установки выйдет ещё более новая версия, будет сохранён последний скачанный APK."
+                )
+            },
             confirmButton = {
                 Button(onClick = onInstall) { Text("Установить") }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Отмена") }
+                TextButton(onClick = onDismiss) { Text("Позже") }
             }
         )
 
