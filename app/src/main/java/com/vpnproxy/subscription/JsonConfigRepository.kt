@@ -1,6 +1,7 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.logging.LogCollector
@@ -22,8 +23,12 @@ import javax.inject.Singleton
 
 /**
  * Local JSON / sing-box outbound import.
- * Stored encrypted on device; independent of HTTP subscription fetch.
+ * Stored encrypted on device when the credential-encrypted store is available;
+ * independent of HTTP subscription fetch.
  * Configs are exposed via [configs] and merged by callers through [allConfigsIncluding].
+ *
+ * Storage is initialized lazily so Direct Boot (LOCKED_BOOT_COMPLETED) does not crash
+ * Hilt injection when EncryptedSharedPreferences / MasterKey is unavailable.
  */
 @Singleton
 class JsonConfigRepository @Inject constructor(
@@ -48,18 +53,15 @@ class JsonConfigRepository @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val entrySerializer = ListSerializer(JsonEntry.serializer())
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val prefs = EncryptedSharedPreferences.create(
-        context, PREFS, masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
-
     /** Serializes read-modify-persist-publish sequences to prevent lost updates. */
     private val mutationMutex = Mutex()
+    private val prefsLock = Any()
+
+    @Volatile
+    private var prefsOrNull: SharedPreferences? = null
+
+    @Volatile
+    private var prefsInitAttempted: Boolean = false
 
     private val _entries = MutableStateFlow<List<JsonEntry>>(emptyList())
     val entries: StateFlow<List<JsonEntry>> = _entries.asStateFlow()
@@ -68,11 +70,41 @@ class JsonConfigRepository @Inject constructor(
     val configs: StateFlow<List<ParsedConfig>> = _configs.asStateFlow()
 
     init {
+        // Best-effort load; safe when encrypted prefs are unavailable (direct boot).
         load()
+    }
+
+    /**
+     * Returns encrypted prefs when the user credential store is available; null otherwise.
+     * Never throws — Direct Boot and broken keystore must not kill BootReceiver injection.
+     */
+    private fun prefs(): SharedPreferences? {
+        prefsOrNull?.let { return it }
+        synchronized(prefsLock) {
+            prefsOrNull?.let { return it }
+            if (prefsInitAttempted) return null
+            prefsInitAttempted = true
+            return try {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    context,
+                    PREFS,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                ).also { prefsOrNull = it }
+            } catch (e: Exception) {
+                logCollector.warn(TAG, "Encrypted JSON storage unavailable: ${e.message}")
+                null
+            }
+        }
     }
 
     private fun load() {
         try {
+            val prefs = prefs() ?: return
             val stored = prefs.getString(KEY_ENTRIES, null) ?: return
             val list = json.decodeFromString(entrySerializer, stored)
             _entries.value = list
@@ -89,6 +121,11 @@ class JsonConfigRepository @Inject constructor(
      */
     private fun persist(entries: List<JsonEntry>): Boolean {
         return try {
+            val prefs = prefs()
+            if (prefs == null) {
+                logCollector.error(TAG, "Failed to persist JSON entries: storage unavailable")
+                return false
+            }
             val serialized = json.encodeToString(entrySerializer, entries)
             val saved = prefs.edit().putString(KEY_ENTRIES, serialized).commit()
             if (!saved) {
@@ -116,6 +153,12 @@ class JsonConfigRepository @Inject constructor(
     suspend fun addFromJsonConfig(rawJson: String, name: String, tag: String = ""): Int? =
         withContext(Dispatchers.IO) {
             try {
+                // Retry storage init after unlock if the first attempt was during direct boot.
+                if (prefsOrNull == null) {
+                    synchronized(prefsLock) {
+                        prefsInitAttempted = false
+                    }
+                }
                 val displayName = name.ifBlank { "JSON" }
                 val parsed = parser.parse(rawJson, providerTag = displayName)
                 if (parsed.isEmpty()) {
