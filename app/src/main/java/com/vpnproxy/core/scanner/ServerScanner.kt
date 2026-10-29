@@ -51,16 +51,22 @@ class ServerScanner @Inject constructor(
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
+    @Volatile private var scannedNetworkBucket: String? = null
     @Volatile private var backgroundJob: Job? = null
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
     private val scanGeneration = AtomicLong(0L)
     private fun scanCache() = context.getSharedPreferences("server_scan_cache_v2_${autoSwitcher.currentNetworkBucket()}", Context.MODE_PRIVATE)
     private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
-    private val scanCacheMaxAgeMs = 7L * 24 * 60 * 60 * 1000
+    private val scanCacheMaxAgeMs = RESCAN_INTERVAL_MS
 
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
+            val networkBucket = autoSwitcher.currentNetworkBucket()
+            if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
+                _scannedServers.value = emptyList()
+                scannedConfigKeys = emptySet()
+            }
             val generation = scanGeneration.get()
             // Keep identical endpoints attributable to their provider. A scan cached for
             // provider A must never be reused as the scan result for provider B.
@@ -77,6 +83,7 @@ class ServerScanner @Inject constructor(
 
             if (unique.isEmpty()) {
                 scannedConfigKeys = emptySet()
+                scannedNetworkBucket = networkBucket
                 _scannedServers.value = emptyList()
                 scanCache().edit().clear().apply()
                 return@withLock emptyList()
@@ -95,6 +102,7 @@ class ServerScanner @Inject constructor(
                 _scannedServers.value.size == unique.size
             ) {
                 scannedConfigKeys = requestedKeys
+                scannedNetworkBucket = networkBucket
                 logCollector.info(TAG, "Reusing ${unique.size} fresh cached server scan results")
                 return@withLock _scannedServers.value
             }
@@ -142,6 +150,7 @@ class ServerScanner @Inject constructor(
                     return@withLock _scannedServers.value
                 }
                 scannedConfigKeys = requestedKeys
+                scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
                 persistScanResults(results)
                 val responsive = results.count { it.successRate > 0.5f }
