@@ -87,6 +87,21 @@ class ServerScanner @Inject constructor(
 
             if (_scannedServers.value.isEmpty()) restoreCachedResults(unique)
 
+            // A complete cache younger than the configured TTL is a valid immediate
+            // result. Reuse it after process restarts and APK updates; background scans
+            // refresh measurements later instead of blocking every connection attempt.
+            val savedAt = scanCache.getLong("saved_at", 0L)
+            val cachedKeys = _scannedServers.value.map { server -> scanKey(server.config) }.toSet()
+            val cacheFresh = savedAt > 0L &&
+                System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
+            if (!force && cacheFresh && cachedKeys == requestedKeys &&
+                _scannedServers.value.size == unique.size
+            ) {
+                scannedConfigKeys = requestedKeys
+                logCollector.info(TAG, "Reusing ${unique.size} fresh cached server scan results")
+                return@withLock _scannedServers.value
+            }
+
             _isScanning.value = true
             try {
                 val semaphore = Semaphore(CONCURRENCY)
@@ -143,8 +158,9 @@ class ServerScanner @Inject constructor(
         // and the network-specific blacklist are intentionally independent from subscription refresh.
         val currentKeys = configs.map(::scanKey).toSet()
         _scannedServers.value = _scannedServers.value.filter { scanKey(it.config) in currentKeys }
-        scannedConfigKeys = emptySet()
-        return scanAll(configs, force = true)
+        // Keep the in-memory scan generation when the provider set is unchanged.
+        // scanAll will rescan only when the config identity set actually changes.
+        return scanAll(configs, force = false)
     }
 
     fun scanInBackground(scope: CoroutineScope): Job {

@@ -112,6 +112,50 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun manualSelectionMode_doesNotRotateToFallbackServer() {
+        val current = sampleServer()
+        val fallback = current.copy(
+            config = current.config.copy(name = "must-not-select", address = "fallback.example.org"),
+            score = 0.9f
+        )
+
+        sendAndWait(ConnectionEvent.ServerSelected(current)) {
+            coordinator.hasSelectedServer()
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
+        coordinator.setManualSelectionMode(true)
+        sendAndWait(ConnectionEvent.ConnectRequested("manual-selection", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.state.value is ConnectionState.Reconnecting
+        }
+
+        assertEquals("test-server", coordinator.currentServerName())
+        assertEquals(1, coordinator.currentRetryCount())
+    }
+
+    @Test
+    fun providerScope_excludesFallbackFromOtherSubscription() {
+        val current = sampleServer().copy(config = sampleServer().config.copy(providerTag = "subscription-A"))
+        val allowed = current.copy(config = current.config.copy(name = "allowed", address = "allowed.example.org"))
+        val outside = current.copy(config = current.config.copy(name = "outside", address = "outside.example.org", providerTag = "subscription-B"))
+
+        coordinator.setProviderScope("subscription-A")
+        sendAndWait(ConnectionEvent.ServerSelected(current)) {
+            coordinator.hasSelectedServer()
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(outside, allowed)))
+        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
+            coordinator.currentServerName() == "allowed" && coordinator.state.value is ConnectionState.Reconnecting
+        }
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()

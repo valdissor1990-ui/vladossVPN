@@ -92,6 +92,7 @@ class AutoSwitcher @Inject constructor(
     @Volatile private var allowedProviderTag: String? = null
     @Volatile private var providerScopeBlocked: Boolean = false
     @Volatile private var providerScopeGeneration: Long = 0L
+    @Volatile private var manualSelectionMode: Boolean = false
     @Volatile private var rankingJob: Job? = null
 
     fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
@@ -104,6 +105,11 @@ class AutoSwitcher @Inject constructor(
         _rankedServers.value = _rankedServers.value.filter { isWithinProviderScope(it.config) }
         val scopeLabel = if (blocked) "BLOCKED" else normalized ?: "ALL"
         logCollector.info(TAG, "Automatic provider scope changed: $scopeLabel")
+    }
+
+    fun setManualSelectionMode(enabled: Boolean) {
+        manualSelectionMode = enabled
+        logCollector.info(TAG, "Manual selection mode=${if (enabled) "ON" else "OFF"}")
     }
 
     private fun isWithinProviderScope(config: ParsedConfig): Boolean =
@@ -436,6 +442,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     suspend fun switchToBest(): ScoredServer? {
+        if (manualSelectionMode) {
+            logCollector.info(TAG, "Automatic best-server switch suppressed in manual mode")
+            return null
+        }
         if (suppressIfFrozen("switchToBest")) return null
         if (isInPostConnectWarmup()) {
             logCollector.info(TAG, "switchToBest ignored — post-connect warmup")
@@ -579,6 +589,10 @@ class AutoSwitcher @Inject constructor(
                 _rankedServers.value = ranked
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(ranked))
                 logCollector.info(TAG, "Background ranking completed: ${ranked.size} reachable servers; RU probed first")
+                if (manualSelectionMode) {
+                    logCollector.info(TAG, "Ranking retained for diagnostics; automatic server switching suppressed in manual mode")
+                    return@launch
+                }
 
                 val current = _currentServer.value
                 val best = ranked.firstOrNull()
@@ -751,6 +765,10 @@ class AutoSwitcher @Inject constructor(
     }
 
     fun autoReselectIfNeeded() {
+        if (manualSelectionMode) {
+            logCollector.info(TAG, "Automatic reselection suppressed in manual mode")
+            return
+        }
         if (suppressIfFrozen("ServerSelected", _rankedServers.value.firstOrNull()?.config?.name ?: "unknown")) return
         val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
         if (ranked.isEmpty()) return
