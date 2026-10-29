@@ -1,0 +1,223 @@
+name: Apply UI watchdog fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/stop-scan-home-button]
+    paths:
+      - '.github/workflows/apply-watchdog-only.yml'
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/stop-scan-home-button
+          fetch-depth: 0
+      - name: Patch watchdog and dual-path
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
+          t = h.read_text()
+          t = t.replace(
+              'private const val CONNECTING_UI_WATCHDOG_MS = 60_000L',
+              'private const val CONNECTING_UI_WATCHDOG_MS = 90_000L',
+          )
+          old = (
+              '    private fun armConnectingWatchdog() {\n'
+              '        if (connectingWatchdogJob?.isActive == true) return\n'
+              '        connectingWatchdogJob = viewModelScope.launch {\n'
+              '            delay(CONNECTING_UI_WATCHDOG_MS)\n'
+              '            val s = connectionCoordinator.state.value\n'
+              '            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {\n'
+              '                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))\n'
+              '                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)\n'
+              '                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))\n'
+              '            }\n'
+              '        }\n'
+              '    }'
+          )
+          new = (
+              '    private fun armConnectingWatchdog() {\n'
+              '        // Re-arm on every Connecting/Reconnecting/Verifying progress.\n'
+              '        connectingWatchdogJob?.cancel()\n'
+              '        connectingWatchdogJob = viewModelScope.launch {\n'
+              '            delay(CONNECTING_UI_WATCHDOG_MS)\n'
+              '            val s = connectionCoordinator.state.value\n'
+              '            if (s is ConnectionState.Connecting ||\n'
+              '                s is ConnectionState.Reconnecting ||\n'
+              '                s is ConnectionState.Verifying\n'
+              '            ) {\n'
+              '                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms without Connected — RequestDisconnect"))\n'
+              '                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)\n'
+              '                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))\n'
+              '            }\n'
+              '        }\n'
+              '    }'
+          )
+          if old not in t:
+              if 'Re-arm on every' in t:
+                  print('watchdog already')
+              else:
+                  raise SystemExit('armConnectingWatchdog not found')
+          else:
+              t = t.replace(old, new)
+              h.write_text(t)
+              print('HomeViewModel watchdog OK')
+
+          c = Path('app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt')
+          t = c.read_text()
+          t = t.replace(
+              'const val CONNECTING_TIMEOUT_MS = 60_000L',
+              'const val CONNECTING_TIMEOUT_MS = 90_000L',
+          )
+          old = (
+              '            is ConnectionEvent.ServiceReady -> {\n'
+              '                if (event.serverName != pendingServerName) {\n'
+              '                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")\n'
+              '                    return\n'
+              '                }\n'
+              '                if (isFatalErrorLocked) {\n'
+              '                    logW("ServiceReady ignored — fatal lock is active")\n'
+              '                    return\n'
+              '                }\n'
+              '                retryCount = 0\n'
+              '                val validationId = ++trafficValidationGeneration\n'
+              '                pendingServerName = event.serverName\n'
+              '                hasServerSelected = true\n'
+              '                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'
+          )
+          new = (
+              '            is ConnectionEvent.ServiceReady -> {\n'
+              '                if (event.serverName != pendingServerName) {\n'
+              '                    logW("Ignoring stale ServiceReady for ${event.serverName}; active=$pendingServerName")\n'
+              '                    return\n'
+              '                }\n'
+              '                if (isFatalErrorLocked) {\n'
+              '                    logW("ServiceReady ignored — fatal lock is active")\n'
+              '                    return\n'
+              '                }\n'
+              '                when (current) {\n'
+              '                    is ConnectionState.Connecting,\n'
+              '                    is ConnectionState.Reconnecting,\n'
+              '                    is ConnectionState.Verifying -> Unit\n'
+              '                    else -> {\n'
+              '                        logW("ServiceReady ignored in state $current for ${event.serverName}")\n'
+              '                        return\n'
+              '                    }\n'
+              '                }\n'
+              '                retryCount = 0\n'
+              '                val validationId = ++trafficValidationGeneration\n'
+              '                pendingServerName = event.serverName\n'
+              '                hasServerSelected = true\n'
+              '                setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")'
+          )
+          if old not in t:
+              if 'ServiceReady ignored in state' in t:
+                  print('ServiceReady already')
+              else:
+                  raise SystemExit('ServiceReady block not found')
+          else:
+              t = t.replace(old, new)
+              c.write_text(t)
+              print('ConnectionCoordinator OK')
+
+          # dual-path foreign fallback pool
+          vp = Path('app/src/main/java/com/vpnproxy/service/VpnProxyService.kt')
+          vt = vp.read_text()
+          old = (
+              '      val foreignParsed = if (dualPackages.isNotEmpty()) {\n'
+              '          val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }\n'
+              '          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)\n'
+              '      } else null'
+          )
+          new = (
+              '      val foreignParsed = if (dualPackages.isNotEmpty()) {\n'
+              '          val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }\n'
+              '          val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)\n'
+              '          fromRanked ?: run {\n'
+              '              val all = runCatching { subscriptionRepository.getAllConfigs() }.getOrDefault(emptyList())\n'
+              '              ServerRegionClassifier.pickBestForeign(all, preferredNot = parsed)\n'
+              '          }\n'
+              '      } else null'
+          )
+          if old in vt:
+              vp.write_text(vt.replace(old, new))
+              print('VpnProxyService dual-path OK')
+          else:
+              print('VpnProxyService dual-path skip')
+
+          # improved classifier
+          Path('app/src/main/java/com/vpnproxy/core/dualpath/ServerRegionClassifier.kt').write_text('''package com.vpnproxy.core.dualpath
+
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+
+object ServerRegionClassifier {
+
+    private val russianKeywords = listOf(
+        "russia", "россия", "москва", "moscow", "beget", " vk", "vk —", "vk-", "aeza"
+    )
+
+    private val ruBypassHints = listOf(
+        "обход глушилок", "глушил", "whitelist", "white-list", "white_list"
+    )
+
+    private val foreignFlagHints = listOf(
+        "🇸🇪", "🇩🇪", "🇺🇸", "🇫🇮", "🇵🇱", "🇳🇱", "🇬🇧", "🇫🇷", "🇯🇵", "🇸🇬",
+        "🇨🇦", "🇦🇺", "🇪🇸", "🇮🇹", "🇨🇭", "🇦🇹", "🇳🇴", "🇩🇰", "🇧🇪", "🇵🇹",
+        "🇦🇪", "🇹🇷", "🇭🇰", "🇹🇼", "🇰🇷", "🇧🇷", "🇮🇳", "🇲🇨"
+    )
+
+    fun isLikelyRussianExit(name: String): Boolean {
+        if (name.contains("🇷🇺")) return true
+        val lower = " ${name.lowercase()} "
+        return russianKeywords.any { lower.contains(it) }
+    }
+
+    fun isForeignCandidate(config: ParsedConfig): Boolean {
+        val name = config.name
+        if (isLikelyRussianExit(name)) return false
+        val lower = name.lowercase()
+        if (ruBypassHints.any { lower.contains(it) }) return false
+        return true
+    }
+
+    private fun foreignScore(name: String): Int {
+        if (isLikelyRussianExit(name)) return -1
+        val lower = name.lowercase()
+        if (ruBypassHints.any { lower.contains(it) }) return 0
+        var score = 1
+        if (foreignFlagHints.any { name.contains(it) }) score += 2
+        if ("hysteria" in lower || "hy2" in lower) score += 1
+        return score
+    }
+
+    fun pickBestForeign(
+        ranked: List<ParsedConfig>,
+        preferredNot: ParsedConfig? = null
+    ): ParsedConfig? {
+        val preferredKey = preferredNot?.connectionKey()
+        return ranked
+            .asSequence()
+            .filter { isForeignCandidate(it) }
+            .filter { preferredKey == null || it.connectionKey() != preferredKey }
+            .sortedByDescending { foreignScore(it.name) }
+            .firstOrNull()
+    }
+}
+''')
+          print('classifier OK')
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then echo nochange; else
+            git commit -m "fix: UI watchdog re-arm, ServiceReady guard, dual-path foreign pick"
+            git push origin fix/stop-scan-home-button
+          fi
