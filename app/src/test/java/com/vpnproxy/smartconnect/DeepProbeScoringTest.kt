@@ -13,6 +13,21 @@ class DeepProbeScoringTest {
         flow = null, name = name
     )
 
+    @Test fun profileLatencyUsesMedianAndRequiresAtLeastTwoSuccessfulSamples() {
+        val config = config("profile", "profile.example")
+        val healthy = DeepProbeEngine.summarizeProfileLatency(config, listOf(90L, 42L, 60L))
+        assertTrue(healthy.success)
+        assertEquals(3, healthy.successfulSamples)
+        assertEquals(60L, healthy.latencyMs)
+
+        val oneResponse = DeepProbeEngine.summarizeProfileLatency(config, listOf(42L))
+        assertTrue(!oneResponse.success)
+        assertEquals(Long.MAX_VALUE, oneResponse.latencyMs)
+
+        val noResponses = DeepProbeEngine.summarizeProfileLatency(config, emptyList())
+        assertTrue(!noResponses.success)
+        assertEquals(Long.MAX_VALUE, noResponses.latencyMs)
+    }
     @Test fun normalizesScoresAndSortsBestFirst() {
         val slow = DeepProbeEngine.ProbeMetrics(config("slow", "slow.example"), 180, 1.5, 60, 0.6, false)
         val fast = DeepProbeEngine.ProbeMetrics(config("fast", "fast.example"), 20, 50.0, 2, 0.0, true)
