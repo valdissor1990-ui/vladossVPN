@@ -89,7 +89,7 @@ internal object ExtraUriParsers {
                 val userInfo = decoded.substring(0, at)
                 val colon = userInfo.indexOf(':')
                 if (colon <= 0) return null
-                method = userInfo.substring(0, colon)
+                method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = decoded.substring(at + 1)
                 val hp = hostPort.split(':')
