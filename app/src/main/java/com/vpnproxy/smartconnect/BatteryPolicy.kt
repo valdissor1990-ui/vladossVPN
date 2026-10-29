@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.PowerManager
 
 /**
- * Central place for battery-aware decisions used by AutoSwitcher and (later) UI.
+ * Central place for battery-aware decisions used by AutoSwitcher and Settings UI.
  * Does not own VpnService lifecycle — only answers "how aggressive should monitoring be?".
  */
 object BatteryPolicy {
