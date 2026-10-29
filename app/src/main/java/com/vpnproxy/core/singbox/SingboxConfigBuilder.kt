@@ -42,7 +42,16 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    fun buildVpn(config: ParsedConfig, options: DiagnosticOptions = DiagnosticOptions()): String = buildJsonObject {
+    /**
+     * @param foreignConfig optional second outbound for AI / selected apps (non-RU exit)
+     * @param foreignProcessNames Android package names routed to foreign outbound
+     */
+    fun buildVpn(
+        config: ParsedConfig,
+        options: DiagnosticOptions = DiagnosticOptions(),
+        foreignConfig: ParsedConfig? = null,
+        foreignProcessNames: List<String> = emptyList()
+    ): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
             put("timestamp", true)
@@ -101,6 +110,9 @@ object SingboxConfigBuilder {
         })
         put("outbounds", buildJsonArray {
             add(buildOutbound(config, "proxy"))
+            if (foreignConfig != null && foreignProcessNames.isNotEmpty()) {
+                add(buildOutbound(foreignConfig, "proxy-foreign"))
+            }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
             add(buildJsonObject { put("type", "block"); put("tag", "block") })
         })
@@ -112,6 +124,16 @@ object SingboxConfigBuilder {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
                 })
+                if (foreignConfig != null && foreignProcessNames.isNotEmpty()) {
+                    add(buildJsonObject {
+                        put("process_name", buildJsonArray {
+                            foreignProcessNames.forEach { pkg ->
+                                add(kotlinx.serialization.json.JsonPrimitive(pkg))
+                            }
+                        })
+                        put("outbound", "proxy-foreign")
+                    })
+                }
                 add(buildJsonObject {
                     put("inbound", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("local-proxy-in")) })
                     put("outbound", "proxy")
@@ -203,7 +225,15 @@ object SingboxConfigBuilder {
             put("server_port", config.port)
 
             when {
-                isHy2 -> put("password", config.password ?: config.uuid)
+                isHy2 -> {
+                    put("password", config.password ?: config.uuid)
+                    config.obfsType?.takeIf { it.isNotBlank() }?.let { obfsType ->
+                        put("obfs", buildJsonObject {
+                            put("type", obfsType)
+                            config.obfsPassword?.takeIf { it.isNotBlank() }?.let { put("password", it) }
+                        })
+                    }
+                }
                 isTuic -> {
                     put("uuid", config.uuid)
                     put("password", config.password.orEmpty())
@@ -363,13 +393,6 @@ object SingboxConfigBuilder {
                             }
                         }
                     }
-                })
-            }
-
-            if (isHy2 && !config.obfsType.isNullOrBlank()) {
-                put("obfs", buildJsonObject {
-                    put("type", config.obfsType!!)
-                    config.obfsPassword?.let { put("password", it) }
                 })
             }
         }
