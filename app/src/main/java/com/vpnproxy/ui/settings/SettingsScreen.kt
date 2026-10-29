@@ -191,7 +191,7 @@ fun SettingsScreen(
 
     UpdateDialog(
         state = updateState,
-        onDownloadDownload = { updateViewModel.download() },
+        onDownload = { updateViewModel.download() },
         onInstall = { updateViewModel.install() },
         onDismiss = { updateViewModel.dismiss() }
     )
