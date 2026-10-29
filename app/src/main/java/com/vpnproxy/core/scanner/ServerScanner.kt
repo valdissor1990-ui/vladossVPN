@@ -15,17 +15,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,8 +40,6 @@ class ServerScanner @Inject constructor(
 ) {
     companion object {
         private const val TAG = "ServerScanner"
-        private const val CONCURRENCY = 20
-        private const val SERVER_TIMEOUT_MS = 2_000L
         private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
     }
 
@@ -306,38 +299,6 @@ class ServerScanner @Inject constructor(
                 .putFloat("server_${key}_score", server.score)
         }
         editor.putLong("saved_at", System.currentTimeMillis()).apply()
-    }
-
-    private suspend fun probe(config: ParsedConfig, generation: Long): ScoredServer {
-        if (scanGeneration.get() != generation) return unavailable(config)
-        val target = PingTarget(
-            id = pingTargetId(config),
-            displayName = config.name,
-            host = config.address,
-            port = config.port,
-            protocol = PingProtocol.TCP_CONNECT,
-            weight = 1.0,
-            regions = setOf(if (isRussianServer(config)) PingRegion.RU else PingRegion.GLOBAL)
-        )
-        return try {
-            val result = pingExecutor.ping(target, SERVER_TIMEOUT_MS)
-            if (scanGeneration.get() != generation) return unavailable(config)
-            val latency = result.rttMs?.takeIf { result.success } ?: Long.MAX_VALUE
-            ScoredServer(
-                config = config,
-                latencyMs = latency,
-                speedMbps = 0f,
-                successRate = if (result.success && result.rttMs != null) 1f else 0f,
-                score = if (result.success && result.rttMs != null) {
-                    1f / result.rttMs.coerceAtLeast(1L).toFloat()
-                } else 0f
-            )
-        } catch (c: CancellationException) {
-            throw c
-        } catch (e: Exception) {
-            logCollector.debug(TAG, "TCP probe failed for ${config.name}: ${e.message}")
-            unavailable(config)
-        }
     }
 
     private fun unavailable(config: ParsedConfig): ScoredServer =
