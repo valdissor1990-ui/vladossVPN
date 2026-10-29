@@ -16,10 +16,10 @@ import javax.inject.Singleton
 private val Context.dualPathDataStore by preferencesDataStore(name = "vpnproxy_dual_path")
 
 data class DualPathSettings(
-    /** When true, AI packages use a dedicated foreign outbound. */
+    /** Master switch: when false, no process_name foreign routing is applied. */
     val enabled: Boolean = true,
-    /** Package names routed to foreign outbound (subset of catalog + user). */
-    val packages: Set<String> = AiAppCatalog.DEFAULT_PACKAGES
+    /** User-selected package names routed to the foreign outbound. Empty by default. */
+    val packages: Set<String> = emptySet()
 )
 
 @Singleton
@@ -34,7 +34,7 @@ class DualPathStore @Inject constructor(
     val settings: Flow<DualPathSettings> = context.dualPathDataStore.data.map { prefs ->
         DualPathSettings(
             enabled = prefs[KEY_ENABLED] ?: true,
-            packages = prefs[KEY_PACKAGES] ?: AiAppCatalog.DEFAULT_PACKAGES
+            packages = prefs[KEY_PACKAGES] ?: emptySet()
         )
     }
 
@@ -45,13 +45,23 @@ class DualPathStore @Inject constructor(
     }
 
     suspend fun setPackages(packages: Set<String>) {
-        context.dualPathDataStore.edit { it[KEY_PACKAGES] = packages }
+        context.dualPathDataStore.edit {
+            it[KEY_PACKAGES] = packages - context.packageName
+        }
     }
 
-    /** Installed packages from the current dual-path selection. */
+    suspend fun setPackageSelected(packageName: String, selected: Boolean) {
+        if (packageName == context.packageName) return
+        context.dualPathDataStore.edit { prefs ->
+            val current = prefs[KEY_PACKAGES] ?: emptySet()
+            prefs[KEY_PACKAGES] = if (selected) current + packageName else current - packageName
+        }
+    }
+
+    /** Installed packages from the current dual-path selection (for sing-box rules). */
     suspend fun installedPackagesForRules(): List<String> {
         val s = read()
-        if (!s.enabled) return emptyList()
+        if (!s.enabled || s.packages.isEmpty()) return emptyList()
         val pm = context.packageManager
         return s.packages.filter { pkg ->
             try {
