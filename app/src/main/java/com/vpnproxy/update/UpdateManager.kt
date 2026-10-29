@@ -79,7 +79,21 @@ class UpdateManager @Inject constructor(
             val result = checker.check()
             lastCheckAt = System.currentTimeMillis()
             _state.value = when {
-                result.error != null -> State.Error(result.error)
+                result.error != null -> {
+                    // A failed online check must not hide a valid APK already downloaded.
+                    val pendingFile = pendingStore.readyFile()
+                    if (previousReady != null && pendingFile != null &&
+                        previousReady.file.absolutePath == pendingFile.absolutePath
+                    ) {
+                        logCollector.warn(
+                            "UpdateManager",
+                            "Update check failed; keeping pending APK ${previousReady.release.tagName} ready"
+                        )
+                        previousReady
+                    } else {
+                        State.Error(result.error)
+                    }
+                }
                 result.hasUpdate && result.release != null -> {
                     val remoteCode = result.release.extractVersionCode()
                     val localPending = pendingStore.read()
