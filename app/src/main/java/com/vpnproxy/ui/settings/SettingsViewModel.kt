@@ -53,6 +53,17 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setAutoStart(enabled: Boolean) {
+        // BootReceiver reads device-protected preferences before user unlock.
+        val bootPrefsContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            context.createDeviceProtectedStorageContext() ?: context
+        } else {
+            context
+        }
+        bootPrefsContext.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("auto_start", enabled)
+            .apply()
+
         viewModelScope.launch {
             context.settingsDataStore.edit { it[KEY_AUTO_START] = enabled }
         }
