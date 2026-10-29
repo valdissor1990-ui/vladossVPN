@@ -161,7 +161,7 @@ class AutoSwitcher @Inject constructor(
             .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun currentNetworkBucket(): String {
+    fun currentNetworkBucket(): String {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return "other"
         val active = manager.activeNetwork
