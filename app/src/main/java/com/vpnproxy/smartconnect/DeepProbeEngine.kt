@@ -50,9 +50,15 @@ class DeepProbeEngine @Inject constructor(
         fun summarizeProfileLatency(config: ParsedConfig, samples: List<Long>): ProfilePingResult {
             val valid = samples.filter { it > 0L }.sorted()
             val success = valid.size >= 2
+            val middle = valid.size / 2
+            val median = when {
+                !success -> Long.MAX_VALUE
+                valid.size % 2 == 0 -> (valid[middle - 1] + valid[middle]) / 2L
+                else -> valid[middle]
+            }
             return ProfilePingResult(
                 config = config,
-                latencyMs = if (success) valid[valid.size / 2] else Long.MAX_VALUE,
+                latencyMs = median,
                 success = success,
                 successfulSamples = valid.size
             )
