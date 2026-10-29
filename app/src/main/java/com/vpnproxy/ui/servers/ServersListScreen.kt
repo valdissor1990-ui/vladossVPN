@@ -591,7 +591,7 @@ private fun GlassServerCard(
         "trojan" -> "Trojan"
         "tuic" -> "TUIC"
         "socks", "socks5" -> "SOCKS"
-        else -> "VLESS"
+        else -> config.transport.uppercase().ifBlank { "VPN" }
     }
 
     Row(
