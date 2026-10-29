@@ -19,8 +19,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Следит за сменой сети (WiFi ↔ LTE).
- * Flow + debounce 3s + distinctUntilChanged — не спамит NetworkChanged.
+ * Watches underlying network (Wi‑Fi ↔ LTE, loss, restore).
+ * Debounced + cooldown so VPN is not restarted in a tight loop.
  */
 class NetworkAwareReconnector(
     context: Context,
@@ -32,8 +32,10 @@ class NetworkAwareReconnector(
 ) {
     companion object {
         private const val TAG = "NetworkAwareReconnector"
-        private const val DEBOUNCE_MS = 3_000L
-        private const val COOLDOWN_MS = 5_000L
+        /** Quiet period after the last network event before acting. */
+        private const val DEBOUNCE_MS = 4_000L
+        /** Minimum gap between reconnect requests. */
+        private const val COOLDOWN_MS = 8_000L
     }
 
     private val appContext = context.applicationContext
@@ -47,7 +49,8 @@ class NetworkAwareReconnector(
 
     private sealed class NetEvent {
         data class Lost(val netId: Int, val isVpn: Boolean) : NetEvent()
-        data class Available(val netId: Int, val signature: String) : NetEvent()
+        /** Underlying transport became available / changed (non-VPN). */
+        data class UnderlyingChanged(val netId: Int, val signature: String) : NetEvent()
     }
 
     private val networkStatusFlow = callbackFlow {
@@ -59,7 +62,7 @@ class NetworkAwareReconnector(
                     return
                 }
                 vpnNetworks.remove(network)
-                trySend(NetEvent.Available(network.hashCode(), signature(caps)))
+                trySend(NetEvent.UnderlyingChanged(network.hashCode(), signature(caps)))
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
@@ -68,7 +71,12 @@ class NetworkAwareReconnector(
                     return
                 }
                 vpnNetworks.remove(network)
-                trySend(NetEvent.Available(network.hashCode(), signature(caps)))
+                // Only care once the network is validated — avoids half-up links.
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                ) {
+                    trySend(NetEvent.UnderlyingChanged(network.hashCode(), signature(caps)))
+                }
             }
 
             override fun onLost(network: Network) {
@@ -118,9 +126,12 @@ class NetworkAwareReconnector(
                 .debounce(DEBOUNCE_MS)
                 .distinctUntilChanged()
                 .filter { event ->
+                    if (!isVpnActive() || isBusy()) return@filter false
                     when (event) {
-                        is NetEvent.Lost -> isVpnActive() && !isBusy()
-                        is NetEvent.Available -> false // only lost triggers reconnect after quiet period
+                        // Underlying network gone — need reconnect when/if path returns.
+                        is NetEvent.Lost -> !event.isVpn
+                        // Wi‑Fi ↔ LTE or restore after outage.
+                        is NetEvent.UnderlyingChanged -> true
                     }
                 }
                 .collect { event ->

@@ -29,7 +29,8 @@ class AutoSwitcherTest {
 
         assertEquals(NetworkFaultKind.SERVER_DEGRADATION, classifyProbeFault(direct, vpn))
         assertFalse(shouldSwitchAfterEvidence(1, 0, directPathHealthy = true))
-        assertTrue(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
+        assertFalse(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
+        assertTrue(shouldSwitchAfterEvidence(3, 0, directPathHealthy = true))
     }
 
     @Test
@@ -75,9 +76,9 @@ class AutoSwitcherTest {
     fun rankingSwitch_requiresMaterialScoreImprovement() {
         val engine = SwitchDecisionEngine()
 
-        assertTrue(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.21f))
-        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.19f))
-        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.20f - 0.001f))
+        assertTrue(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.25f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.24f))
+        assertFalse(engine.shouldSwitchForRanking(currentScore = 1.0f, candidateScore = 1.25f - 0.001f))
     }
 
     @Test

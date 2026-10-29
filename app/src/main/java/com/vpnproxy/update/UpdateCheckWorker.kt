@@ -23,7 +23,10 @@ import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
- * WorkManager worker: периодически проверяет обновление в фоне.
+ * WorkManager: периодически проверяет обновление и скачивает APK в фоне.
+ * После успешной загрузки показывает уведомление «нужно установить».
+ * Если пользователь не установил и вышла новая версия — скачивается последняя,
+ * старый APK удаляется.
  */
 class UpdateCheckWorker(
     context: Context,
@@ -66,14 +69,29 @@ class UpdateCheckWorker(
                 Deps::class.java
             )
             val updateManager = deps.updateManager()
-            updateManager.checkForUpdate(force = true)
-            val state = updateManager.state.value
-            if (state is UpdateManager.State.UpdateAvailable) {
-                showNotification(state.release.extractVersionName(), state.release.body)
+            val log = deps.logCollector()
+
+            updateManager.checkAndPrefetch()
+            when (val state = updateManager.state.value) {
+                is UpdateManager.State.Ready -> {
+                    log.info(
+                        "UpdateCheckWorker",
+                        "APK ready: ${state.release.extractVersionName()}"
+                    )
+                    showReadyNotification(state.release.extractVersionName())
+                }
+                is UpdateManager.State.UpToDate -> {
+                    log.debug("UpdateCheckWorker", "Up to date")
+                }
+                is UpdateManager.State.Error -> {
+                    log.warn("UpdateCheckWorker", "Prefetch error: ${state.message}")
+                }
+                else -> {
+                    log.debug("UpdateCheckWorker", "State after prefetch: $state")
+                }
             }
             Result.success()
         } catch (e: CancellationException) {
-            // Штатная отмена — WorkManager прервал воркер. НЕ считаем ошибкой.
             try {
                 val deps = EntryPointAccessors.fromApplication(
                     applicationContext,
@@ -94,13 +112,16 @@ class UpdateCheckWorker(
         }
     }
 
-    private fun showNotification(version: String, changelog: String) {
+    private fun showReadyNotification(version: String) {
         val ctx = applicationContext
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "Обновления VPNProxy",
+                CHANNEL_ID,
+                "Обновления VPNProxy",
                 NotificationManager.IMPORTANCE_DEFAULT
-            )
+            ).apply {
+                description = "Уведомления о скачанных обновлениях"
+            }
             ctx.getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
@@ -113,11 +134,18 @@ class UpdateCheckWorker(
 
         val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_vpn)
-            .setContentTitle("Доступно обновление $version")
-            .setContentText(changelog.take(100).replace("\n", " "))
-            .setStyle(NotificationCompat.BigTextStyle().bigText(changelog))
+            .setContentTitle("Обновление $version скачано")
+            .setContentText("Необходимо установить. Откройте приложение и нажмите «Установить».")
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    "Обновление $version уже скачано в фоне.\n" +
+                        "Откройте VPNProxy и нажмите «Установить».\n" +
+                        "Если выйдет более новая версия до установки — будет сохранён последний APK."
+                )
+            )
             .setContentIntent(pending)
             .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
         try {

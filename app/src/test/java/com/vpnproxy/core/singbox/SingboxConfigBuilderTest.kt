@@ -328,4 +328,28 @@ class SingboxConfigBuilderTest {
         assertEquals("user", outbound["username"]!!.jsonPrimitive.content)
         assertEquals("pass", outbound["password"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun dualPathRoutesAndroidPackagesToForeignOutbound() {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.buildVpn(
+                config("ws", "primary-secret"),
+                foreignConfig = config("ws", "foreign-secret"),
+                foreignPackageNames = listOf("com.openai.chatgpt", "com.anthropic.claude")
+            )
+        ).jsonObject
+
+        val outbounds = root["outbounds"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "proxy-foreign" })
+
+        val rules = root["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        val appRule = rules.first { it.containsKey("package_name") }
+        assertEquals(
+            listOf("com.openai.chatgpt", "com.anthropic.claude"),
+            appRule["package_name"]!!.jsonArray.map { it.jsonPrimitive.content }
+        )
+        assertEquals("proxy-foreign", appRule["outbound"]!!.jsonPrimitive.content)
+        assertFalse(appRule.containsKey("process_name"))
+    }
+
 }

@@ -27,6 +27,8 @@ import com.vpnproxy.core.singbox.SingBoxCore
 import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticOptions
+import com.vpnproxy.core.dualpath.DualPathStore
+import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
@@ -77,6 +79,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
+    @Inject lateinit var dualPathStore: DualPathStore
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
@@ -431,7 +434,28 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "DNS mode=${diagnosticOptions.dnsMode} hijack=${if (diagnosticOptions.dnsMode == "system_no_hijack") "off" else "on"}")
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
                 logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
-                val configJson = SingboxConfigBuilder.buildVpn(parsed, diagnosticOptions)
+                // Dual-path: selected apps -> foreign (non-RU) outbound when available
+      val dualPackages = runCatching {
+          dualPathStore.installedPackagesForRules()
+      }.getOrDefault(emptyList())
+      val foreignParsed = if (dualPackages.isNotEmpty()) {
+          val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
+          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
+      } else null
+      if (foreignParsed != null) {
+          logCollector.info(
+              TAG,
+              "DUAL-PATH enabled foreign=${foreignParsed.name} apps=${dualPackages.size} packages=$dualPackages"
+          )
+      } else if (dualPackages.isNotEmpty()) {
+          logCollector.warn(TAG, "DUAL-PATH: no foreign server in ranked list; selected apps use default proxy")
+      }
+      val configJson = SingboxConfigBuilder.buildVpn(
+          parsed,
+          diagnosticOptions,
+          foreignConfig = foreignParsed,
+          foreignPackageNames = if (foreignParsed != null) dualPackages else emptyList()
+      )
                 runCatching {
                     val root = org.json.JSONObject(configJson)
                     val route = root.optJSONObject("route")
