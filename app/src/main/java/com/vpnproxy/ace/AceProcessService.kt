@@ -13,6 +13,13 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.R
 import com.vpnproxy.ace.ipc.AceIpcClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import uniffi.ace_core.AceListener
 import uniffi.ace_core.aceEmitTestEvent
 import uniffi.ace_core.aceInitialize
@@ -24,16 +31,16 @@ import uniffi.ace_core.aceVersion
 /**
  * Foreground Service in process `:ace`.
  *
- * Stage B order (Q2):
- * 1) AceIpcClient.connectBlocking — wait Binder to main
- * 2) aceInitialize(listener)
- * 3) acePing / aceEmitTestEvent
- *
- * Does **not** control VPN or Smart Connect.
+ * Stage B only: Rust smoke calls and one-way Binder events to the main process.
+ * All initialization and blocking Binder waits run on Dispatchers.IO, never
+ * on the service main thread. This service does not control VPN or Smart Connect.
  */
 class AceProcessService : Service() {
 
-    private var ipcClient: AceIpcClient? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var initializationJob: Job? = null
+    @Volatile private var initialized = false
+    @Volatile private var ipcClient: AceIpcClient? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -45,32 +52,58 @@ class AceProcessService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 Log.i(TAG, "ACTION_STOP")
-                stopSelf()
+                serviceScope.launch {
+                    initializationJob?.cancelAndJoin()
+                    runCatching { aceShutdown() }
+                        .onFailure { Log.w(TAG, "ACE shutdown during stop failed", it) }
+                    ipcClient?.disconnect()
+                    ipcClient = null
+                    initialized = false
+                    stopSelf(startId)
+                }
                 return START_NOT_STICKY
             }
+
             ACTION_PANIC -> {
-                runCatching {
-                    aceTriggerTestPanic()
-                    Log.w(TAG, "aceTriggerTestPanic returned Ok (unexpected)")
-                }.onFailure {
-                    Log.i(TAG, "aceTriggerTestPanic contained: ${it.javaClass.simpleName}: ${it.message}")
+                serviceScope.launch {
+                    runCatching {
+                        aceTriggerTestPanic()
+                        Log.w(TAG, "aceTriggerTestPanic returned Ok (unexpected)")
+                    }.onFailure {
+                        Log.i(TAG, "aceTriggerTestPanic contained: ${it.javaClass.simpleName}: ${it.message}")
+                    }
                 }
                 return START_STICKY
             }
         }
 
-        promoteToForeground()
+        // onStartCommand runs on the main thread. Do not wait for Binder here:
+        // ServiceConnection callbacks are also dispatched on this process's main
+        // thread, so a blocking CountDownLatch here deadlocks until timeout.
+        if (!initialized && initializationJob?.isActive != true) {
+            initializationJob = serviceScope.launch { initializeAce() }
+        }
+        return START_STICKY
+    }
 
-        // Q2: create client, block until Binder connected, then init Rust.
+    private suspend fun initializeAce() {
         val client = AceIpcClient(applicationContext)
         ipcClient = client
-        val bound = client.connectBlocking(5_000L)
+        val bound = runCatching { client.connectBlocking(5_000L) }
+            .onFailure { Log.e(TAG, "IPC bind failed", it) }
+            .getOrDefault(false)
         Log.i(TAG, "IPC bind ready=$bound")
+        if (!bound) {
+            client.disconnect()
+            if (ipcClient === client) ipcClient = null
+            Log.e(TAG, "ACE initialization aborted: main-process Binder is unavailable")
+            return
+        }
 
-        runCatching {
+        try {
             val version = aceVersion()
             Log.i(TAG, "ACE version: $version")
-            require(version.contains("(rust, target=")) {
+            check(version.contains("(rust, target=")) {
                 "ACE version missing rust marker — not real FFI: $version"
             }
 
@@ -87,24 +120,30 @@ class AceProcessService : Service() {
 
             val pong = acePing()
             Log.i(TAG, "ACE ping: $pong")
-            require(pong.contains("(rust, target=")) {
+            check(pong.contains("(rust, target=")) {
                 "ACE ping missing rust marker — not real FFI: $pong"
             }
 
             aceEmitTestEvent("hello from :ace")
-        }.onFailure {
-            Log.e(TAG, "ACE native init failed", it)
-            runCatching { client.forwardError(it.message ?: "init failed") }
+            initialized = true
+        } catch (t: Throwable) {
+            Log.e(TAG, "ACE native init failed", t)
+            runCatching { client.forwardError(t.message ?: "init failed") }
+            runCatching { aceShutdown() }
+            client.disconnect()
+            if (ipcClient === client) ipcClient = null
         }
-
-        return START_STICKY
     }
 
     override fun onDestroy() {
         Log.i(TAG, "AceProcessService.onDestroy")
+        initializationJob?.cancel()
+        serviceScope.cancel()
         runCatching { aceShutdown() }
+            .onFailure { Log.w(TAG, "ACE shutdown during destroy failed", it) }
         ipcClient?.disconnect()
         ipcClient = null
+        initialized = false
         super.onDestroy()
     }
 
@@ -133,7 +172,7 @@ class AceProcessService : Service() {
         }
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Vladoss ACE")
-            .setContentText("Connection Engine (shadow)")
+            .setContentText("Connection Engine (observation only)")
             .setSmallIcon(R.drawable.ic_vpn)
             .setOngoing(true)
             .build()
