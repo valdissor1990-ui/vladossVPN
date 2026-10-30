@@ -61,14 +61,6 @@ internal object ConnectServerSelector {
             if (best != null) {
                 autoSwitcher.selectScanned(best, scanned)
             } else {
-                val currentConfig = autoSwitcher.currentServer.value?.config
-                    ?.takeIf { current ->
-                        !autoSwitcher.isBlacklisted(current) && configs.any {
-                            it.providerTag == current.providerTag && it.connectionKey() == current.connectionKey()
-                        }
-                    }
-                    ?: orderedConfigs.firstOrNull { !autoSwitcher.isBlacklisted(it) }
-                    ?: configs.first()
                 logCollector.warn(TAG, traceMsg("No server passed reachability scan; refusing automatic selection"))
                 null
             }
