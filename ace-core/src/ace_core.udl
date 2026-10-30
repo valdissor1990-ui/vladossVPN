@@ -1,3 +1,5 @@
+// Stage B: flat callback signature (not AceEvent enum).
+// Enum events may return in Stage C/D when real event types exist.
 namespace ace_core {
     string ace_version();
 
