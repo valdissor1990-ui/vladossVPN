@@ -1,59 +1,12 @@
 name: soft-watchdog-patch
-# Legacy one-shot patcher. Manual only — never auto-run on push.
+# Retired: watchdog re-arm / ServiceReady guard already on main. Manual dispatch is a no-op.
 on:
   workflow_dispatch:
 jobs:
   apply:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: fix/stop-scan-home-button
-      - name: patch
+      - name: Retired
         run: |
-          python3 << 'PY'
-          from pathlib import Path
-          h = Path("app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt")
-          t = h.read_text()
-          t = t.replace("private const val CONNECTING_UI_WATCHDOG_MS = 60_000L", "private const val CONNECTING_UI_WATCHDOG_MS = 90_000L")
-          t = t.replace(
-          "if (connectingWatchdogJob?.isActive == true) return\n        connectingWatchdogJob = viewModelScope.launch {",
-          "connectingWatchdogJob?.cancel()\n        connectingWatchdogJob = viewModelScope.launch {",
-          )
-          t = t.replace(
-          "if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting) {",
-          "if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {",
-          )
-          h.write_text(t)
-          print("hvm", "90_000L" in t)
-
-          c = Path("app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt")
-          t = c.read_text()
-          t = t.replace("const val CONNECTING_TIMEOUT_MS = 60_000L", "const val CONNECTING_TIMEOUT_MS = 90_000L")
-          needle = "if (isFatalErrorLocked) {\n                    logW(\"ServiceReady ignored — fatal lock is active\")\n                    return\n                }\n                retryCount = 0"
-          insert = "if (isFatalErrorLocked) {\n                    logW(\"ServiceReady ignored — fatal lock is active\")\n                    return\n                }\n                when (current) {\n                    is ConnectionState.Connecting,\n                    is ConnectionState.Reconnecting,\n                    is ConnectionState.Verifying -> Unit\n                    else -> {\n                        logW(\"ServiceReady ignored in state $current for ${event.serverName}\")\n                        return\n                    }\n                }\n                retryCount = 0"
-          if needle not in t:
-              raise SystemExit("needle missing")
-          t = t.replace(needle, insert, 1)
-          c.write_text(t)
-          print("cc ok")
-
-          vp = Path("app/src/main/java/com/vpnproxy/service/VpnProxyService.kt")
-          t = vp.read_text()
-          old = "val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }\n          ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)"
-          new = "val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }\n          val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)\n          fromRanked ?: ServerRegionClassifier.pickBestForeign(\n              runCatching { subscriptionRepository.getAllConfigs() }.getOrDefault(emptyList()),\n              preferredNot = parsed\n          )"
-          if old in t:
-              vp.write_text(t.replace(old, new, 1))
-              print("vp ok")
-          else:
-              print("vp skip")
-          PY
-      - name: commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: UI watchdog re-arm and ServiceReady state guard" || echo nochange
-          git push origin HEAD:fix/stop-scan-home-button
+          echo "This legacy apply-* workflow is retired."
+          echo "Watchdog patches are already on main."
