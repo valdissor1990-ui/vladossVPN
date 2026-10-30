@@ -56,6 +56,7 @@ class ServerScanner @Inject constructor(
     @Volatile private var backgroundJob: Job? = null
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
+    @Volatile private var pendingFullScanConfigs: List<ParsedConfig> = emptyList()
     private val scanGeneration = AtomicLong(0L)
     private fun scanCache() = context.getSharedPreferences("server_scan_cache_v2_${autoSwitcher.currentNetworkBucket()}", Context.MODE_PRIVATE)
     private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
@@ -130,7 +131,10 @@ class ServerScanner @Inject constructor(
                 scannedConfigKeys = if (complete) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
-                if (complete) persistScanResults(results) else scanCache().edit().putLong("saved_at", 0L).apply()
+                if (complete) {
+                    persistScanResults(results)
+                    pendingFullScanConfigs = emptyList()
+                } else scanCache().edit().putLong("saved_at", 0L).apply()
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
                 logCollector.info(TAG, "Profile scan complete: ${unique.size} profiles retained; VPN-profile probe succeeded for $responsive, RU=$ruResponsive (input=${configs.size})")
@@ -228,7 +232,13 @@ class ServerScanner @Inject constructor(
                 scannedNetworkBucket = networkBucket
                 scannedConfigKeys = if (complete) requestedKeys else emptySet()
                 _scannedServers.value = results
-                if (complete) persistScanResults(results) else scanCache().edit().putLong("saved_at", 0L).apply()
+                if (complete) {
+                    persistScanResults(results)
+                    pendingFullScanConfigs = emptyList()
+                } else {
+                    pendingFullScanConfigs = unique
+                    scanCache().edit().putLong("saved_at", 0L).apply()
+                }
             }
             val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
             logCollector.info(TAG, "Connection scan staged: reachable=$reachable target=$targetAvailableCount total=${unique.size}; remaining profiles stay unmeasured")
@@ -245,10 +255,21 @@ class ServerScanner @Inject constructor(
             val initialConfigs = subscriptionRepository.getAllConfigs()
             if (initialConfigs.isNotEmpty()) scanAll(initialConfigs)
             while (isActive) {
-                delay(RESCAN_INTERVAL_MS)
-                if (connectionCoordinator.state.value is ConnectionState.Connected) {
-                    val configs = subscriptionRepository.getAllConfigs()
-                    if (configs.isNotEmpty()) scanAll(configs, force = true)
+                val pending = pendingFullScanConfigs
+                if (pending.isNotEmpty()) {
+                    // The temporary profile-probe core cannot coexist with the active VPN core.
+                    // Resume the full scan as soon as the tunnel is down instead of dropping it.
+                    delay(10_000L)
+                    if (!VpnProxyService.isRunning.value) {
+                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${pending.size}")
+                        scanAll(pending, force = true)
+                    }
+                } else {
+                    delay(RESCAN_INTERVAL_MS)
+                    if (connectionCoordinator.state.value is ConnectionState.Connected) {
+                        val configs = subscriptionRepository.getAllConfigs()
+                        if (configs.isNotEmpty()) scanAll(configs, force = true)
+                    }
                 }
             }
         }.also { backgroundJob = it }
