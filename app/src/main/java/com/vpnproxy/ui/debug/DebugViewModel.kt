@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.ace.AceControlPlane
+import com.vpnproxy.ace.AceNativeBridge
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.singbox.DiagnosticOptions
 import com.vpnproxy.core.singbox.DiagnosticSettings
@@ -131,6 +133,43 @@ class DebugViewModel @Inject constructor(
         batteryLogger.logSnapshot("manual_from_ui")
         refreshBattery()
         _message.value = "BATTERY snapshot logged"
+    }
+
+    /** Stage B: start isolated :ace process (no VPN control). */
+    fun startAceStageB() {
+        runCatching {
+            AceControlPlane.start(context)
+            logCollector.info("AceControlPlane", "Stage B Start ACE requested; nativeLoaded=${AceNativeBridge.isNativeLoaded()}")
+            _message.value = "ACE start requested (see logcat AceProcessService)"
+        }.onFailure {
+            _message.value = "ACE start failed: ${it.message}"
+            logCollector.error("AceControlPlane", "Stage B start failed", it)
+        }
+    }
+
+    /** Stage B: stop :ace process. */
+    fun stopAceStageB() {
+        runCatching {
+            AceControlPlane.stop(context)
+            logCollector.info("AceControlPlane", "Stage B Stop ACE requested")
+            _message.value = "ACE stop requested"
+        }.onFailure {
+            _message.value = "ACE stop failed: ${it.message}"
+        }
+    }
+
+    /** Stage B: intentional panic via native bridge (if .so loaded). */
+    fun triggerAcePanicStageB() {
+        val result = AceNativeBridge.triggerTestPanic()
+        logCollector.info(
+            "AceControlPlane",
+            "Stage B panic test: success=${result.isSuccess} error=${result.exceptionOrNull()?.message}"
+        )
+        _message.value = if (result.isSuccess) {
+            "Panic returned Ok (unexpected)"
+        } else {
+            "Panic contained or stub: ${result.exceptionOrNull()?.message}"
+        }
     }
 
     fun clearCrash() {
