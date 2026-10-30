@@ -10,7 +10,7 @@
   - `ace_ingest_telemetry(record_json)`
   - `ace_telemetry_snapshot()`
   - `ace_telemetry_count()`
-- Strict schema validation; unknown JSON fields are rejected.
+- Strict schema validation; unknown JSON fields are rejected. Metric-specific units and numeric ranges are enforced (including boolean/code domains, HTTP status, and packet-loss percentage bounds).
 - Finite numeric values only.
 - Missing measurements remain `value: null` and require an explicit `missing_reason`; missing is never converted to zero.
 - `observation_failure` is retained as its own outcome and is not admitted as primary evidence.
@@ -33,8 +33,8 @@
 - Collector shutdown unregisters callbacks/receiver, closes the queue, and safely stops its HandlerThread.
 - No active probes, sockets, VPN commands, Smart Connect calls, or collection of SSID/IP/server identifiers.
 - Android observations are ingested directly into Rust in the ACE process.
-- Reverse Binder transport contract is implemented: main process registers an `IAceTelemetryReceiver` with `:ace`; telemetry delivery is one-way, bounded (128 records on each process boundary), non-blocking for producers, and payload-limited to 16 KiB.
-- `AceTelemetryBridge.submitMetric(...)` builds schema-v1 records only when ACE is connected; it does not start ACE and drops observations when ACE is unavailable or the queue is full.
+- Reverse Binder transport contract is implemented: main process registers an `IAceTelemetryReceiver` with `:ace`; telemetry delivery is one-way, bounded (128 records on each process boundary), non-blocking for producers, and payload-limited to 16 KiB. Both process queues use the shared `BoundedTelemetryQueue` admission primitive; UTF-8 byte size is checked before enqueue, and full/closed queues reject records without suspending Binder callers. ACE client disconnect also guards against a late asynchronous receiver registration by unregistering it.
+- `AceTelemetryBridge.submitMetric(...)` builds schema-v1 records only when ACE is connected; it does not start ACE and drops observations when ACE is unavailable, the record exceeds 16 KiB, or the queue is full.
 - The existing `ConnectionCoordinator` submits the duration and available HTTP status codes from its already-running `TrafficValidator` report. This is passive observation after the existing validation completes: it does not launch probes, alter the validation result, or feed Smart Connect.
 - TrafficValidator duration is recorded for both successful and failed reports. HTTP status is submitted only when an actual response status exists; DNS, timeout, and other failures do not receive fabricated status values.
 - `VpnProxyService.transitionServiceState(...)` submits the actual service lifecycle state as a numeric code (`Idle=0`, `Starting=1`, `Active=2`, `Verifying=3`, `Stopping=4`, `Failed=5`) with source `vpn_service`. Failure text and server/user identifiers are not exported. The observation is emitted only on an actual state transition and does not affect service behavior.
@@ -47,7 +47,7 @@ Required fields:
 - `elapsed_realtime_ms`: monotonic Android elapsed time; wall-clock time is not used for ordering.
 - `metric`: allow-listed metric name.
 - `value`: finite number or null.
-- `unit`: optional unit.
+- `unit`: required exact unit for each allow-listed metric; Rust rejects a unit mismatch.
 - `outcome`: observed / success / failure / unavailable / observation_failure / unknown_outcome.
 - `missing_reason`: mandatory when value is null.
 - `restricted_context`: whether Doze/restricted context applies.
@@ -67,6 +67,11 @@ Allowed metrics currently include RTT, jitter, packet loss, traffic validation s
 | unknown | unclassified (not primary-admissible) |
 
 This map is a versioned code artifact and must be reviewed when a new source is introduced. Separate API calls backed by the same physical subsystem must share one group.
+
+## Transport unit tests
+
+- `BoundedTelemetryQueueTest` covers non-blocking queue-full rejection, UTF-8 byte-size enforcement, close/drain behavior, and the 128-record / 16 KiB defaults.
+- Binder process-death/rebind behavior, actual `RemoteException` delivery, and Android process lifecycle races still require device or Binder integration testing; pure queue tests do not claim to prove those runtime paths.
 
 ## Not yet implemented / not yet verified
 
