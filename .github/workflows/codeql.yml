@@ -78,6 +78,24 @@ jobs:
           jar tf "$RUNNER_TEMP/libbox-classes.jar" | grep -q '^io/nekohasekai/libbox/PlatformInterface.class$'
           jar tf "$RUNNER_TEMP/libbox-classes.jar" | grep -q '^go/Seq.class$'
 
+      - name: Set up Rust for UniFFI binding generation
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UniFFI bindgen CLI
+        run: |
+          set -euo pipefail
+          cargo install uniffi_bindgen --version 0.28.3 --features cli --locked
+          command -v uniffi-bindgen
+          uniffi-bindgen --version
+
+      - name: Generate UniFFI Kotlin bindings
+        run: |
+          set -euo pipefail
+          uniffi-bindgen generate ace-core/src/ace_core.udl \
+            --language kotlin \
+            --out-dir app/src/main/java
+          find app/src/main/java -type f -name '*.kt' | grep -qi 'ace_core\|uniffi'
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
