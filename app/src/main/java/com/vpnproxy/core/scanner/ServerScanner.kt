@@ -178,6 +178,11 @@ class ServerScanner @Inject constructor(
             return@withLock emptyList()
         }
         if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers()
+        val alreadyReachable = _scannedServers.value.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+        if (scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
+            logCollector.info(TAG, "Reusing staged scan: reachable=$alreadyReachable target=$targetAvailableCount")
+            return@withLock availableServers()
+        }
         if (_scannedServers.value.isEmpty()) restoreCachedResults(unique)
         val savedAt = scanCache().getLong("saved_at", 0L)
         val cachedKeys = _scannedServers.value.map { scanKey(it.config) }.toSet()
