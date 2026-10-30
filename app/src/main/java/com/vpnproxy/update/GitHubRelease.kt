@@ -47,7 +47,7 @@ data class GitHubRelease(
         val major = parts[0].toLongOrNull() ?: return 0
         val minor = parts[1].toLongOrNull() ?: return 0
         val patch = parts[2].toLongOrNull() ?: return 0
-        if (major < 0 || minor < 0 || patch <= 0) return 0
+        if (major < 0 || minor < 0 || patch < 0) return 0
 
         val code = 10_000L + major * 1_000L + minor * 100L + patch
         return code.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt() ?: 0
