@@ -102,7 +102,7 @@ jobs:
           uniffi-bindgen generate ace-core/src/ace_core.udl \
             --language kotlin \
             --out-dir app/src/main/java
-          find app/src/main/java -type f -name '*.kt' | grep -qi 'ace_core\|uniffi'
+          test -f app/src/main/java/uniffi/ace_core/ace_core.kt
 
       - name: Compile Direct Debug Kotlin
         run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
