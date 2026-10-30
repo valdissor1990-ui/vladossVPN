@@ -1,102 +1,12 @@
 name: stability-ux-patch
-# Legacy one-shot patcher. Manual only — never auto-run on push.
+# Retired: dual-path / hard-fail wiring already on main. Manual dispatch is a no-op.
 on:
   workflow_dispatch:
 jobs:
   apply:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: fix/stop-scan-home-button
-      - name: patch
+      - name: Retired
         run: |
-          python3 << 'PY'
-          from pathlib import Path
-
-          c = Path('app/src/main/java/com/vpnproxy/core/connection/ConnectionCoordinator.kt')
-          t = c.read_text()
-          if 'onEndpointHardFailed' not in t:
-              t = t.replace(
-                  'import com.vpnproxy.smartconnect.ScoringEngine',
-                  'import com.vpnproxy.smartconnect.ScoringEngine\nimport com.vpnproxy.subscription.SubscriptionParser.ParsedConfig',
-                  1,
-              )
-              t = t.replace(
-                  'fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }',
-                  'fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }\n\n    @Volatile private var onEndpointHardFailed: ((ParsedConfig) -> Unit)? = null\n    fun setOnEndpointHardFailed(listener: ((ParsedConfig) -> Unit)?) { onEndpointHardFailed = listener }',
-                  1,
-              )
-              t = t.replace(
-                  'scoringEngine.recordHardFailure(failedConfig, weight = 2)',
-                  'scoringEngine.recordHardFailure(failedConfig, weight = 2)\n                        runCatching { onEndpointHardFailed?.invoke(failedConfig) }',
-                  1,
-              )
-              c.write_text(t)
-              print('cc ok')
-          else:
-              print('cc skip')
-
-          vp = Path('app/src/main/java/com/vpnproxy/service/VpnProxyService.kt')
-          t = vp.read_text()
-          if 'setOnEndpointHardFailed' not in t:
-              t = t.replace(
-                  'override fun onCreate() {',
-                  'override fun onCreate() {\n        connectionCoordinator.setOnEndpointHardFailed { cfg ->\n            autoSwitcher.markServerFailed(cfg)\n        }',
-                  1,
-              )
-              vp.write_text(t)
-              print('vp ok')
-          else:
-              print('vp skip')
-
-          h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
-          t = h.read_text()
-          if 'dualPathAppCount' not in t:
-              t = t.replace(
-                  'import com.vpnproxy.subscription.SubscriptionRepository',
-                  'import com.vpnproxy.subscription.SubscriptionRepository\nimport com.vpnproxy.core.dualpath.DualPathStore',
-                  1,
-              )
-              t = t.replace(
-                  'private val jsonConfigRepository: JsonConfigRepository\n) : ViewModel() {',
-                  'private val jsonConfigRepository: JsonConfigRepository,\n    private val dualPathStore: DualPathStore\n) : ViewModel() {',
-                  1,
-              )
-              t = t.replace(
-                  'val lastErrorMessage: String? = null\n    )',
-                  'val lastErrorMessage: String? = null,\n        val dualPathEnabled: Boolean = false,\n        val dualPathAppCount: Int = 0\n    )',
-                  1,
-              )
-              t = t.replace(
-                  'serverScanner.isScanning.collect { scanning ->\n                _uiState.value = _uiState.value.copy(isScanningServers = scanning)\n            }',
-                  'serverScanner.isScanning.collect { scanning ->\n                _uiState.value = _uiState.value.copy(isScanningServers = scanning)\n            }\n        }\n        viewModelScope.launch {\n            dualPathStore.settings.collect { s ->\n                _uiState.value = _uiState.value.copy(\n                    dualPathEnabled = s.enabled,\n                    dualPathAppCount = s.packages.size\n                )\n            }',
-                  1,
-              )
-              h.write_text(t)
-              print('hvm ok')
-          else:
-              print('hvm skip')
-
-          hs = Path('app/src/main/java/com/vpnproxy/ui/home/HomeScreen.kt')
-          t = hs.read_text()
-          if 'Зарубежный обход' not in t:
-              t = t.replace(
-                  'text = "Поиск доступных серверов...",\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.onSurface\n                        )\n                    }\n                }',
-                  'text = "Поиск доступных серверов...",\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.onSurface\n                        )\n                    }\n                }\n\n                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {\n                    Spacer(modifier.height(10.dp))\n                    Text(\n                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",\n                        style = MaterialTheme.typography.labelMedium,\n                        color = OnDarkSecondary\n                    )\n                }',
-                  1,
-              )
-              hs.write_text(t)
-              print('hs ok')
-          else:
-              print('hs skip')
-          PY
-      - name: commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: blacklist on traffic-fail; dual-path status on home" || echo nochange
-          git push origin HEAD:fix/stop-scan-home-button
+          echo "This legacy apply-* workflow is retired."
+          echo "Stability/UX patches are already on main."
