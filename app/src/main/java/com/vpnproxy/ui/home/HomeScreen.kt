@@ -407,7 +407,7 @@ fun HomeScreen(
                         Text("Сканируем серверы и измеряем задержку", color = Color(0xFF334155))
                     }
                     Text(
-                        text = "Найдено доступных: \${uiState.scannedAvailableServers} из \${uiState.scanTotalServers}. Для подключения ищем минимум 4 надёжных сервера.",
+                        text = "Найдено доступных: ${uiState.scannedAvailableServers} из ${uiState.scanTotalServers}. Для подключения ищем минимум 4 надёжных сервера.",
                         color = Color(0xFF334155)
                     )
                     Text("Серверы без подтверждённого отклика не будут выбраны автоматически.", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
