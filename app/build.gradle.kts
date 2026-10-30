@@ -114,7 +114,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true; buildConfig = true }
+    // AIDL required for ACE Binder IPC (Stage B). Compose + BuildConfig unchanged.
+    buildFeatures { compose = true; buildConfig = true; aidl = true }
 
     // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
     splits {
@@ -148,6 +149,13 @@ android {
         }
         jniLibs {
             useLegacyPackaging = false
+        }
+    }
+
+    // Stage B: place for cargo-ndk output of libace_core.so (when built).
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir("src/main/jniLibs")
         }
     }
 }
@@ -208,6 +216,8 @@ dependencies {
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.yaml:snakeyaml:2.3")
+    // UniFFI / JNA — required when libace_core.so + generated bindings are present.
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
