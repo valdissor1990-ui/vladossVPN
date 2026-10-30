@@ -18,12 +18,9 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Runs in `:ace`. Binds to the main-process [AceIpcServer].
- *
- * Main → ACE telemetry is one-way, observational, size-limited, and buffered
- * with bounded backpressure before Rust schema validation/ingestion.
+ * Main → ACE telemetry is one-way, observational, bounded, and size-limited.
  */
 class AceIpcClient(private val context: Context) {
-
     private val remoteRef = AtomicReference<IAceEventReceiver?>(null)
     private val connected = CountDownLatch(1)
     private val telemetryQueue = BoundedTelemetryQueue()
@@ -33,19 +30,16 @@ class AceIpcClient(private val context: Context) {
     private val telemetryReceiver = object : IAceTelemetryReceiver.Stub() {
         override fun onTelemetryRecord(recordJson: String?) {
             val record = recordJson ?: return
-            if (record.toByteArray(Charsets.UTF_8).size > MAX_RECORD_BYTES) {
-                Log.w(TAG, "Rejected oversized telemetry Binder payload")
-                return
-            }
-            if (disconnected || telemetryQueue.trySend(record).isFailure) {
-                Log.w(TAG, "ACE telemetry queue full or client stopped; observation dropped")
+            if (disconnected || !telemetryQueue.offer(record)) {
+                Log.w(TAG, "ACE telemetry queue full, oversized, or client stopped; observation dropped")
             }
         }
     }
 
     init {
         telemetryScope.launch {
-            while (true) {\n                val record = telemetryQueue.receive() ?: break
+            while (true) {
+                val record = telemetryQueue.receive() ?: break
                 runCatching { aceIngestTelemetry(record) }
                     .onFailure { Log.w(TAG, "Rust rejected telemetry record", it) }
             }
@@ -59,8 +53,18 @@ class AceIpcClient(private val context: Context) {
             Log.i(TAG, "Connected to AceIpcServer")
             if (remote != null) {
                 telemetryScope.launch {
-                    runCatching { remote.registerTelemetryReceiver(telemetryReceiver) }
-                        .onFailure { Log.w(TAG, "Telemetry receiver registration failed", it) }
+                    if (disconnected) return@launch
+                    val registration = runCatching {
+                        remote.registerTelemetryReceiver(telemetryReceiver)
+                    }
+                    registration.onFailure {
+                        Log.w(TAG, "Telemetry receiver registration failed", it)
+                    }
+                    // disconnect() may race with this IO Binder call. Undo a late registration.
+                    if (disconnected && registration.isSuccess) {
+                        runCatching { remote.unregisterTelemetryReceiver() }
+                            .onFailure { Log.w(TAG, "Late telemetry registration cleanup failed", it) }
+                    }
                 }
             }
             connected.countDown()
@@ -74,6 +78,7 @@ class AceIpcClient(private val context: Context) {
 
     /** Bind and wait up to [timeoutMs] for onServiceConnected. */
     fun connectBlocking(timeoutMs: Long = 5_000L): Boolean {
+        if (disconnected) return false
         val ok = runCatching {
             context.bindService(
                 Intent(ACTION_BIND).setPackage(context.packageName),
@@ -91,6 +96,7 @@ class AceIpcClient(private val context: Context) {
     }
 
     fun disconnect() {
+        if (disconnected) return
         disconnected = true
         runCatching { context.unbindService(connection) }
         remoteRef.set(null)
@@ -116,7 +122,6 @@ class AceIpcClient(private val context: Context) {
 
     companion object {
         private const val TAG = "AceIpcClient"
-        private const val MAX_RECORD_BYTES = 16 * 1024
         const val ACTION_BIND = "com.vpnproxy.ace.BIND_RECEIVER"
     }
 }
