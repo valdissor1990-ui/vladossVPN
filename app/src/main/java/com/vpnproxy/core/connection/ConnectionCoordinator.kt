@@ -1,1 +1,3 @@
-TOO_LARGE_USE_LOCAL
+package com.vpnproxy.core.connection
+
+// TEMPORARY - will be replaced
