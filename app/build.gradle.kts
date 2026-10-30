@@ -76,8 +76,6 @@ android {
         }
     }
 
-    // Never produce a release variant signed with the publicly known debug key.
-    // Fail closed when a release task is requested without a configured release keystore.
     val releaseTaskRequested = gradle.startParameter.taskNames.any { requested ->
         val taskName = requested.substringAfterLast(':')
         taskName.equals("assemble", ignoreCase = true) ||
@@ -105,6 +103,8 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            // Stage B: do not overwrite production install (com.vpnproxy.direct).
+            applicationIdSuffix = ".debug"
             buildConfigField("boolean", "LOG_DEBUG", "true")
         }
     }
@@ -114,20 +114,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    // AIDL required for ACE Binder IPC (Stage B). Compose + BuildConfig unchanged.
     buildFeatures { compose = true; buildConfig = true; aidl = true }
 
-    // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
     splits {
         abi {
             isEnable = true
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
-            isUniversalApk = true   // плюс универсальный APK для GitHub Releases
+            isUniversalApk = true
         }
     }
 
-    // ★ Упаковка: pickFirsts решает конфликты нативных .so
     packaging {
         resources {
             excludes += setOf(
@@ -152,7 +149,6 @@ android {
         }
     }
 
-    // Stage B: place for cargo-ndk output of libace_core.so (when built).
     sourceSets {
         getByName("main") {
             jniLibs.srcDir("src/main/jniLibs")
@@ -186,7 +182,6 @@ tasks.named("preBuild") {
 }
 
 dependencies {
-    // Full sing-box-lx 1.14.3-lx.23 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2025.01.01"))
@@ -216,7 +211,7 @@ dependencies {
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.yaml:snakeyaml:2.3")
-    // UniFFI / JNA — required when libace_core.so + generated bindings are present.
+    // Required for UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("junit:junit:4.13.2")

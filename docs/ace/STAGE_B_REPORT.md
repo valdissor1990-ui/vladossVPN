@@ -1,108 +1,54 @@
 # Stage B Report
 
-**Status:** IN PROGRESS — CI + owner device smoke required for ACCEPT
+**Status:** FIX IN PROGRESS (FFI real path) — await green CI then owner logcat
 
-**Branch:** `feat/ace-foundation`  
-**Base:** `1dde84b`  
-**Model:** CI builds APK → owner installs → logcat back
+**Branch:** `feat/ace-foundation`
 
----
+## Fixes vs REJECT review
 
-## CI
+| Review item | Status |
+|-------------|--------|
+| MSRV / UniFFI host | `rust-toolchain.toml` channel 1.82.0; uniffi 0.28.3 in ace-core |
+| Bindgen mandatory | CI fails if no Kotlin bindings / no arm64 .so |
+| AceNativeBridge stub | **Deleted** |
+| AceProcessService | `uniffi.ace_core.*` only; requires `(rust, target=` marker |
+| Version marker | `ace-core 0.1.0 (rust, target=...)` |
+| debug applicationIdSuffix | `.debug` → id `com.vpnproxy.direct.debug` |
+| Debug UI gate | `if (BuildConfig.DEBUG)` around ACE card |
+| release.yml | `on.push.branches: [main]` + job `if: github.ref == 'refs/heads/main'` |
 
-- Workflow: `.github/workflows/ace-build.yml`
-- Trigger: push to `feat/ace-foundation` or `workflow_dispatch`
-- Artifact name: `vladoss-ace-stage-b-debug-apk`
-- Also: `stage-b-logs` (cargo-test.log + .so if built)
+## release.yml (FACT excerpt)
 
-After first green run, fill:
+```yaml
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+...
+jobs:
+  build-and-release:
+    if: github.ref == 'refs/heads/main'
+```
 
-- Workflow run URL: _pending_
-- cargo test: host 8/8 previously; CI re-runs on each push
-- .so sizes: _from CI log_
+feat/* does not publish production.
 
----
+## Owner test (after green Ace Build)
 
-## release.yml guard (FACT)
-
-`on.push.branches: [main]` and job `if: github.ref == 'refs/heads/main'`.  
-`feat/*` does **not** publish production releases.
-
----
-
-## Blockers for Stage B closure
-
-| Item | Owner |
-|------|--------|
-| Device smoke (criteria 4–8) | Owner logcat |
-| ARM64 benchmark (criterion 9) | Owner optional |
-| docs/ace synthesis approval | Owner / architect review |
-
----
-
-## Owner instructions
-
-### 1. Get APK
-
-1. GitHub → **Actions** → **Ace Build** → latest successful run on `feat/ace-foundation`.
-2. Download artifact **`vladoss-ace-stage-b-debug-apk`**.
-3. Install (flavor `direct` + debug):
+1. Download `vladoss-ace-stage-b-debug-apk`
+2. `adb install -r app-direct-*-debug.apk` (package `com.vpnproxy.direct.debug`)
+3. Debug screen → **Start ACE (Stage B test)**
+4. Logcat must contain **`(rust, target=`** in ACE version / ping lines
 
 ```bash
-adb install -r app-direct-*-debug.apk
+adb logcat -d | grep -E "AceProcessService|AceIpcServer|AceControlPlane" > logcat-ace.txt
 ```
 
-Package id is `com.vpnproxy.direct` (does not overwrite Play/release id if different suffix).
-
-### 2. Start ACE smoke
-
-1. Open the debug APK.
-2. Open **Журнал отладки** (Debug screen) — same path as before.
-3. Tap **Start ACE (Stage B test)**.
-4. Wait ~5 seconds.
-5. Optionally **Trigger ACE panic (Stage B)**.
-6. **Export log** (existing button) or collect logcat.
-
-### 3. Collect logcat (preferred if adb available)
-
-```bash
-adb logcat -d | grep -E "AceProcessService|AceListener|AceIpcServer|AceControlPlane|AceNativeBridge" > logcat-ace.txt
-```
-
-Send `logcat-ace.txt` (or exported log file) back in chat.
-
-### 4. Expected lines (when native + IPC work)
+Expected:
 
 ```
-AceProcessService: AceProcessService.onCreate pid=<ace_pid>
-AceProcessService: ACE version: ...
-AceProcessService: ACE ping: pong...
+ACE version: ace-core 0.1.0 (rust, target=aarch64)
+ACE ping: pong from ace-core 0.1.0 (rust, target=aarch64)
 AceIpcServer: event from :ace: hello from :ace
 ```
 
-Main process pid must differ from `:ace` pid.
-
-### 5. Isolation check
-
-```bash
-# find :ace pid from logcat, then:
-adb shell kill <ace_pid>
-# confirm main app still running; if VPN was up, it should stay up
-```
-
----
-
-## What is NOT in Stage B
-
-- Telemetry Pipeline / Digital Twin / Prediction / Decision / NetworkExecutor
-- Self-Healing
-- Changes to Smart Connect logic
-- Production release
-
----
-
-## Executor notes
-
-- Host `cargo test`: 8/8 passed (rustc 1.75) before UniFFI host dep was removed.
-- `AceNativeBridge` remains a **safe stub** until CI successfully packages `libace_core.so` and (optionally) UniFFI Kotlin is generated; service still starts and emits test events through the Kotlin listener path for IPC smoke.
-- Full native ping/panic require successful cargo-ndk step in CI.
+Without `(rust, target=` → REJECT (not real FFI).
