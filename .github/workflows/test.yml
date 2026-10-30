@@ -15,6 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up Rust for ACE bindings
+        if: ${{ hashFiles('ace-core/Cargo.toml') != '' }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UniFFI bindgen for ACE
+        if: ${{ hashFiles('ace-core/Cargo.toml') != '' }}
+        run: cargo install --git https://github.com/mozilla/uniffi-rs --tag v0.28.3 uniffi-bindgen-cli --locked
+
+      - name: Generate ACE UniFFI Kotlin bindings
+        if: ${{ hashFiles('ace-core/Cargo.toml') != '' }}
+        run: |
+          set -euo pipefail
+          uniffi-bindgen generate ace-core/src/ace_core.udl --language kotlin --out-dir app/src/main/java
+          test -f app/src/main/java/uniffi/ace_core/ace_core.kt
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
