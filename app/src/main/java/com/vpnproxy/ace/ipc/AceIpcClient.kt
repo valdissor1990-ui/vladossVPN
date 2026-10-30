@@ -10,7 +10,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import uniffi.ace_core.aceIngestTelemetry
 import java.util.concurrent.CountDownLatch
@@ -27,7 +26,7 @@ class AceIpcClient(private val context: Context) {
 
     private val remoteRef = AtomicReference<IAceEventReceiver?>(null)
     private val connected = CountDownLatch(1)
-    private val telemetryQueue = Channel<String>(capacity = 128)
+    private val telemetryQueue = BoundedTelemetryQueue()
     private val telemetryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var disconnected = false
 
@@ -46,7 +45,7 @@ class AceIpcClient(private val context: Context) {
 
     init {
         telemetryScope.launch {
-            for (record in telemetryQueue) {
+            while (true) {\n                val record = telemetryQueue.receive() ?: break
                 runCatching { aceIngestTelemetry(record) }
                     .onFailure { Log.w(TAG, "Rust rejected telemetry record", it) }
             }
