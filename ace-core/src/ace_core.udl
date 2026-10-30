@@ -1,0 +1,30 @@
+namespace ace_core {
+    string ace_version();
+    [Throws=AceError]
+    void ace_initialize(AceListener? listener);
+    [Throws=AceError]
+    void ace_shutdown();
+    [Throws=AceError]
+    string ace_ping();
+    [Throws=AceError]
+    void ace_emit_test_event(string payload);
+    [Throws=AceError]
+    void ace_trigger_test_panic();
+};
+
+[Error]
+enum AceError {
+    "NotInitialized",
+    "Panic",
+    "Internal",
+};
+
+enum AceEvent {
+    Test,
+    Initialized,
+    Shutdown,
+};
+
+callback interface AceListener {
+    void on_event(AceEvent event, string payload);
+};
