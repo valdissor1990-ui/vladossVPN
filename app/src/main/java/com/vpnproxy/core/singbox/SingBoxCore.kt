@@ -37,9 +37,11 @@ class SingBoxCore(
 ) {
     companion object {
         private const val TAG = "SingBoxCore"
-        private const val PORT_RELEASE_TIMEOUT_MS = 5_000L
-        private const val PORT_POLL_INTERVAL_MS = 100L
-        private const val MIN_STOP_START_COOLDOWN_MS = 1_000L
+        // Raised from 5s/1s after 1.0.791 races: temporary profile-ping cores +
+        // forceSelect left 10809 occupied long enough for both wait windows to fail.
+        private const val PORT_RELEASE_TIMEOUT_MS = 12_000L
+        private const val PORT_POLL_INTERVAL_MS = 150L
+        private const val MIN_STOP_START_COOLDOWN_MS = 1_800L
         @Volatile private var setupComplete = false
 
         @Synchronized
@@ -196,14 +198,17 @@ class SingBoxCore(
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
-        // startSuspended owns the port wait below. Avoid waiting once inside
-        // stopSuspended and then immediately waiting again for the same listener.
-        stopSuspended(waitForPort = false)
+        // Always wait for the mixed inbound port. Skipping the wait caused
+        // "Port 10809 still in use after retry" when a temporary profile-ping
+        // core had just stopped and forceSelect immediately started the VPN.
+        stopSuspended(waitForPort = true)
 
         var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
             logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; force-close and retry once")
-            stopSuspended(waitForPort = false)
+            stopSuspended(waitForPort = true)
+            // Brief extra settle time after forced close (TIME_WAIT / delayed FIN).
+            delay(400)
             portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         }
         if (!portFreed) {
