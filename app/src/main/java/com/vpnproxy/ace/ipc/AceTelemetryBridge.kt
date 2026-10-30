@@ -7,7 +7,6 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
@@ -21,15 +20,14 @@ import java.util.concurrent.atomic.AtomicReference
  */
 internal object AceTelemetryBridge {
     private const val TAG = "AceTelemetryBridge"
-    private const val MAX_RECORD_BYTES = 16 * 1024
     private val receiver = AtomicReference<IAceTelemetryReceiver?>(null)
     private val sequence = AtomicLong()
-    private val queue = Channel<String>(capacity = 128)
+    private val queue = BoundedTelemetryQueue()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         scope.launch {
-            for (record in queue) {
+            while (true) {\n                val record = queue.receive() ?: break
                 val target = receiver.get()
                 if (target == null) {
                     Log.d(TAG, "ACE unavailable; telemetry observation dropped")
@@ -96,6 +94,6 @@ internal object AceTelemetryBridge {
             return false
         }
         if (receiver.get() == null) return false
-        return queue.trySend(recordJson).isSuccess
+        return queue.offer(recordJson)
     }
 }
