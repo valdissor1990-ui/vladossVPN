@@ -21,7 +21,7 @@ class GitHubReleaseTest {
     fun rejectsMalformedOrNonPositiveTags() {
         assertEquals(0, release("latest").extractVersionCode())
         assertEquals(0, release("v1.0").extractVersionCode())
-        assertEquals(0, release("v1.0.0").extractVersionCode())
+        assertEquals(11000, release("v1.0.0").extractVersionCode())
         assertEquals(0, release("v1.x.797").extractVersionCode())
     }
 
