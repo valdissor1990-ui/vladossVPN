@@ -77,13 +77,12 @@ fun DebugScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Keep the effective-settings summary pinned above the scrollable content.
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                Column(Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(12.dp)) {
                     Text("Effective settings", style = MaterialTheme.typography.titleSmall)
                     Text("DNS=${diagnosticOptions.dnsMode}", fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                     Text("TUN=${diagnosticOptions.tunStack} strict=${diagnosticOptions.strictRoute}", fontFamily = FontFamily.Monospace, fontSize = 11.sp)
@@ -136,6 +135,29 @@ fun DebugScreen(
 
                 item(key = "battery-card") {
                     BatteryCard(state = battery, onLog = { viewModel.logBatteryManual() })
+                }
+
+                if (BuildConfig.DEBUG) {
+                    item(key = "ace-stage-b") {
+                        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("ACE Stage B (smoke)", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Отдельный процесс :ace. Не управляет VPN. Smart Connect не затрагивается.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Button(onClick = { viewModel.startAceStageB() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Start ACE (Stage B test)")
+                                }
+                                Button(onClick = { viewModel.stopAceStageB() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Stop ACE")
+                                }
+                                Button(onClick = { viewModel.triggerAcePanicStageB() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Trigger ACE panic (Stage B)")
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (BuildConfig.DEBUG && DebugFlags.diagnosticEnabled()) {
@@ -362,8 +384,8 @@ private fun LogEntryItem(entry: com.vpnproxy.logging.LogEntry) {
             }
             Text(
                 text = entry.message,
-                fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
