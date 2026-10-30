@@ -84,7 +84,7 @@ jobs:
       - name: Install UniFFI bindgen CLI
         run: |
           set -euo pipefail
-          cargo install uniffi-bindgen-cli --version 0.28.3 --locked
+          cargo install --git https://github.com/mozilla/uniffi-rs --tag v0.28.3 uniffi-bindgen-cli --locked
           command -v uniffi-bindgen
           uniffi-bindgen --version
 
