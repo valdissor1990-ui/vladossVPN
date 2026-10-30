@@ -6,43 +6,57 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Runs in `:ace`. Binds to [AceIpcServer] in the main process and forwards events.
- * Stage B: no authentication beyond signature permission on the server side.
+ * Runs in `:ace`. Binds to [AceIpcServer] in main.
+ * [connectBlocking] waits until Binder is ready so Stage B emit is not lost.
  */
 class AceIpcClient(private val context: Context) {
 
-    @Volatile
-    private var remote: IAceEventReceiver? = null
+    private val remoteRef = AtomicReference<IAceEventReceiver?>(null)
+    private val connected = CountDownLatch(1)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            remote = IAceEventReceiver.Stub.asInterface(service)
+            remoteRef.set(IAceEventReceiver.Stub.asInterface(service))
             Log.i(TAG, "Connected to AceIpcServer")
+            connected.countDown()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            remote = null
+            remoteRef.set(null)
             Log.w(TAG, "Disconnected from AceIpcServer")
         }
     }
 
-    fun connect() {
+    /**
+     * Bind and wait up to [timeoutMs] for onServiceConnected.
+     * @return true if Binder is ready
+     */
+    fun connectBlocking(timeoutMs: Long = 5_000L): Boolean {
         val intent = Intent(ACTION_BIND).setPackage(context.packageName)
-        runCatching {
-            val ok = context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-            Log.i(TAG, "bindService result=$ok")
-        }.onFailure { Log.e(TAG, "bind failed", it) }
+        val ok = runCatching {
+            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        }.getOrElse {
+            Log.e(TAG, "bind failed", it)
+            false
+        }
+        if (!ok) return false
+        val ready = connected.await(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!ready) Log.e(TAG, "bind timeout after ${timeoutMs}ms")
+        return ready && remoteRef.get() != null
     }
 
     fun disconnect() {
         runCatching { context.unbindService(connection) }
-        remote = null
+        remoteRef.set(null)
     }
 
     fun forwardTestEvent(payload: String) {
-        val r = remote
+        val r = remoteRef.get()
         if (r == null) {
             Log.w(TAG, "forwardTestEvent dropped: not connected")
             return
@@ -52,7 +66,7 @@ class AceIpcClient(private val context: Context) {
     }
 
     fun forwardError(message: String) {
-        val r = remote ?: return
+        val r = remoteRef.get() ?: return
         runCatching { r.onError(message) }
             .onFailure { Log.e(TAG, "forwardError failed", it) }
     }

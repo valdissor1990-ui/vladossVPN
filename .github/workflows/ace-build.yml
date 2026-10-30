@@ -28,23 +28,14 @@ jobs:
           echo "ANDROID_SDK_ROOT=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           mkdir -p "$SDK/licenses"
-          printf '%s\n' \
-            "24333f8a63b6825ea9c5514f83c2829b004d1fee" \
-            > "$SDK/licenses/android-sdk-license"
-          printf '%s\n' \
-            "84831b9409646a918e30573bab4c9c91346d8abd" \
-            > "$SDK/licenses/android-sdk-preview-license"
+          printf '%s\n' "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$SDK/licenses/android-sdk-license"
+          printf '%s\n' "84831b9409646a918e30573bab4c9c91346d8abd" > "$SDK/licenses/android-sdk-preview-license"
           CMDLINE=$(find "$SDK/cmdline-tools" -name sdkmanager 2>/dev/null | head -1 || true)
           if [ -n "$CMDLINE" ]; then
             yes | "$CMDLINE" --sdk_root="$SDK" \
-              "platform-tools" \
-              "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "ndk;26.3.11579264" \
-              || true
+              "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264" || true
           fi
           echo "SDK ready at $SDK"
-          ls -d "$SDK"/ndk/* 2>/dev/null || echo "NDK will be resolved later"
 
       - name: Set up Rust (1.82.0 + Android targets)
         uses: dtolnay/rust-toolchain@master
@@ -52,9 +43,10 @@ jobs:
           toolchain: "1.82.0"
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: Install cargo-ndk + uniffi-bindgen
+      - name: Install cargo-ndk 3.5.4 + uniffi-bindgen 0.28.3
         run: |
-          cargo install cargo-ndk --locked
+          # cargo-ndk 4.x requires rustc >= 1.86; pin 3.5.4 for toolchain 1.82
+          cargo install cargo-ndk --version 3.5.4 --locked
           cargo install uniffi-bindgen-cli --version 0.28.3 --locked
 
       - name: Host Rust unit tests

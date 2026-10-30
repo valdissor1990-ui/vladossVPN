@@ -24,7 +24,11 @@ import uniffi.ace_core.aceVersion
 /**
  * Foreground Service in process `:ace`.
  *
- * Stage B: load libace_core.so via UniFFI, prove Rust FFI + Binder path.
+ * Stage B order (Q2):
+ * 1) AceIpcClient.connectBlocking — wait Binder to main
+ * 2) aceInitialize(listener)
+ * 3) acePing / aceEmitTestEvent
+ *
  * Does **not** control VPN or Smart Connect.
  */
 class AceProcessService : Service() {
@@ -57,8 +61,11 @@ class AceProcessService : Service() {
 
         promoteToForeground()
 
-        val client = AceIpcClient(applicationContext).also { it.connect() }
+        // Q2: create client, block until Binder connected, then init Rust.
+        val client = AceIpcClient(applicationContext)
         ipcClient = client
+        val bound = client.connectBlocking(5_000L)
+        Log.i(TAG, "IPC bind ready=$bound")
 
         runCatching {
             val version = aceVersion()
