@@ -4,15 +4,17 @@ use thiserror::Error;
 pub enum AceError {
     #[error("ACE not initialized")]
     NotInitialized,
-    #[error("Panic caught at FFI boundary: {0}")]
-    Panic(String),
-    #[error("Internal error: {0}")]
-    Internal(String),
+    #[error("Panic caught at FFI boundary")]
+    Panic,
+    #[error("Internal ACE error")]
+    Internal,
 }
 
-// UniFFI Error mapping via UDL enum variants NotInitialized / Panic / Internal.
+// UDL declares a flat error enum, so Rust variants intentionally carry no
+// payload. Detailed panic/callback information is written to the native log.
 impl From<uniffi::UnexpectedUniFFICallbackError> for AceError {
     fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        AceError::Internal(e.to_string())
+        log::error!("Unexpected UniFFI callback error: {}", e);
+        AceError::Internal
     }
 }
