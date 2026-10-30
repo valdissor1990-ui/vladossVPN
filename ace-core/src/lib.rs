@@ -2,8 +2,9 @@
 //!
 //! Scope: version, ping, initialize/shutdown, test event, panic containment.
 //! No Telemetry, Digital Twin, Prediction, or NetworkExecutor.
-
-uniffi::include_scaffolding!("ace_core");
+//!
+//! UniFFI export surface is deferred until NDK device build (AceNativeBridge
+//! on the Kotlin side is a stub until libace_core.so is packaged).
 
 mod error;
 mod events;
@@ -24,7 +25,7 @@ struct AceState {
     listener: Option<Arc<dyn AceListener>>,
 }
 
-/// Foreign callback implemented on the Kotlin side (in `:ace` process).
+/// Callback implemented on the Kotlin side (in `:ace` process) once native is wired.
 pub trait AceListener: Send + Sync {
     fn on_event(&self, event: AceEvent, payload: String);
 }
@@ -86,10 +87,16 @@ pub fn ace_trigger_test_panic() -> Result<(), AceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    struct TestListener;
+    struct TestListener {
+        last: Mutex<Option<(AceEvent, String)>>,
+    }
+
     impl AceListener for TestListener {
-        fn on_event(&self, _event: AceEvent, _payload: String) {}
+        fn on_event(&self, event: AceEvent, payload: String) {
+            *self.last.lock().unwrap() = Some((event, payload));
+        }
     }
 
     #[test]
@@ -103,8 +110,28 @@ mod tests {
     }
 
     #[test]
-    fn init_and_shutdown() {
-        ace_initialize(Some(Arc::new(TestListener))).unwrap();
+    fn init_emit_shutdown() {
+        let listener = Arc::new(TestListener {
+            last: Mutex::new(None),
+        });
+        ace_initialize(Some(listener.clone())).unwrap();
+        ace_emit_test_event("hello".into()).unwrap();
+        let last = listener.last.lock().unwrap().clone();
+        assert_eq!(last, Some((AceEvent::Test, "hello".into())));
         ace_shutdown().unwrap();
+    }
+
+    #[test]
+    fn emit_without_init_fails() {
+        // Ensure clean state after other tests.
+        let _ = ace_shutdown();
+        let err = ace_emit_test_event("x".into()).unwrap_err();
+        assert!(matches!(err, AceError::NotInitialized));
+    }
+
+    #[test]
+    fn trigger_panic_is_caught() {
+        let err = ace_trigger_test_panic().unwrap_err();
+        assert!(matches!(err, AceError::Panic(_)));
     }
 }

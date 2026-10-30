@@ -21,13 +21,12 @@ codegen-units = 1
 strip = "symbols"
 
 [dependencies]
-uniffi = { version = "0.28", features = ["cli"] }
 once_cell = "1"
 parking_lot = "0.12"
 log = "0.4"
 thiserror = "1"
 
-[build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
-
-[dev-dependencies]
+# UniFFI is intentionally not a host dependency in Stage B.
+# Device .so + Kotlin bindings will be added with cargo-ndk on a
+# machine that has Android NDK and a Rust toolchain that supports
+# the chosen UniFFI version (see docs/ace/BENCHMARK_ARM64.md).
