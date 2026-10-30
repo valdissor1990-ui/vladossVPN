@@ -157,7 +157,10 @@ class ServerScanner @Inject constructor(
         return scanForConnection(configs)
     }
 
-    suspend fun scanForConnection(configs: List<ParsedConfig>): List<ScoredServer> = scanMutex.withLock {
+    suspend fun scanForConnection(
+        configs: List<ParsedConfig>,
+        targetAvailableCount: Int = 4
+    ): List<ScoredServer> = scanMutex.withLock {
         val generationForScan = scanGeneration.get()
         val networkBucket = autoSwitcher.currentNetworkBucket()
         if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
@@ -198,7 +201,10 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
             var probedCount = 0
             try {
-                val results = deepProbeEngine.pingProfiles(probeConfigs, stopAfterSuccessfulBatch = true) { batch ->
+                val results = deepProbeEngine.pingProfiles(
+                    probeConfigs,
+                    stopAfterSuccessfulCount = targetAvailableCount.coerceAtLeast(1)
+                ) { batch ->
                     if (scanGeneration.get() == generationForScan) {
                         batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
                         probedCount += batch.size
@@ -219,6 +225,8 @@ class ServerScanner @Inject constructor(
                 _scannedServers.value = results
                 if (complete) persistScanResults(results) else scanCache().edit().putLong("saved_at", 0L).apply()
             }
+            val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+            logCollector.info(TAG, "Connection scan staged: reachable=$reachable target=$targetAvailableCount total=${unique.size}; remaining profiles stay unmeasured")
             results
         } finally {
             activeScanJob = null
