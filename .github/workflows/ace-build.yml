@@ -37,17 +37,20 @@ jobs:
           fi
           echo "SDK ready at $SDK"
 
-      - name: Set up Rust (1.82.0 + Android targets)
-        uses: dtolnay/rust-toolchain@master
+      - name: Set up Rust (stable + Android targets)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.82.0"
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: Install cargo-ndk 3.5.4 + uniffi-bindgen 0.28.3
+      - name: Install cargo-ndk + uniffi-bindgen
         run: |
-          # cargo-ndk 4.x requires rustc >= 1.86; pin 3.5.4 for toolchain 1.82
-          cargo install cargo-ndk --version 3.5.4 --locked
-          cargo install uniffi-bindgen-cli --version 0.28.3 --locked
+          set -euo pipefail
+          cargo install cargo-ndk --locked
+          # Binary is provided by the uniffi crate with feature cli, or uniffi_bindgen package.
+          cargo install uniffi_bindgen --version 0.28.3 --locked \
+            || cargo install uniffi --version 0.28.3 --features cli --locked
+          command -v uniffi-bindgen
+          uniffi-bindgen --version || true
 
       - name: Host Rust unit tests
         run: |
