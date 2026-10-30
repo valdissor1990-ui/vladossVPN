@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
+import com.vpnproxy.ace.ipc.AceTelemetryBridge
 import com.vpnproxy.R
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -294,8 +295,28 @@ class VpnProxyService : VpnService() {
     }
 
     private fun transitionServiceState(next: ServiceState) {
+        val previous = _serviceState.value
+        if (previous == next) return
         _serviceState.value = next
         logCollector.debug(TAG, "Service lifecycle state -> $next")
+
+        // Passive ACE observation of the actual VPN service lifecycle.
+        // Numeric codes avoid exporting failure reasons or other user/server data.
+        val stateCode = when (next) {
+            ServiceState.Idle -> 0.0
+            ServiceState.Starting -> 1.0
+            ServiceState.Active -> 2.0
+            ServiceState.Verifying -> 3.0
+            ServiceState.Stopping -> 4.0
+            is ServiceState.Failed -> 5.0
+        }
+        AceTelemetryBridge.submitMetric(
+            metric = "vpn_state",
+            value = stateCode,
+            unit = "service_state_code",
+            outcome = "observed",
+            source = "vpn_service"
+        )
     }
 
     private fun scheduleIdleStop() {
