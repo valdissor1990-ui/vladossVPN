@@ -7,4 +7,6 @@ package com.vpnproxy.ace.ipc;
 interface IAceEventReceiver {
     void onTestEvent(String payload);
     void onError(String message);
+    void registerTelemetryReceiver(IAceTelemetryReceiver receiver);
+    void unregisterTelemetryReceiver();
 }
