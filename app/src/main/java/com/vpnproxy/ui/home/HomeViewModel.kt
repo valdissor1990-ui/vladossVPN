@@ -441,15 +441,27 @@ class HomeViewModel @Inject constructor(
         serverScanner.cancelScan()
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
+        ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
     }
 
-    private fun ensureServiceRunning() {
+    fun forceDisconnect() {
+        cancelConnectingWatchdog()
+        cancelSelectionJob("forceDisconnect")
+        serverScanner.cancelScan()
+        VpnProxyService.clearError()
+        connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
+        ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
+        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
+    }
+
+    private fun ensureServiceRunning(action: String? = null) {
         val intent = Intent(context, VpnProxyService::class.java)
+        if (action != null) intent.action = action
         try {
             context.startForegroundService(intent)
         } catch (e: Exception) {
-            logCollector.error(TAG, "startForegroundService failed", e)
+            logCollector.error(TAG, "startForegroundService failed action=$action", e)
         }
     }
 
