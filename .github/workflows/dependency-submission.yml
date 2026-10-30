@@ -72,7 +72,7 @@ jobs:
           ./scripts/download_libbox.sh
 
       - name: Submit dependency graph to GitHub
-        uses: gradle/actions/dependency-submission@v4
+        uses: gradle/actions/dependency-submission@v5
         with:
           dependency-graph: generate-and-submit
           dependency-graph-exclude-configurations: |
