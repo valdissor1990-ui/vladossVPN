@@ -10,8 +10,8 @@ permissions:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.792"
-  APP_VERSION_CODE: "10792"
+  APP_VERSION_NAME: "1.0.793"
+  APP_VERSION_CODE: "10793"
 
 jobs:
   build-and-release:
@@ -267,7 +267,11 @@ jobs:
           {
             echo "changelog<<EOF"
             echo "## Что нового"
-            git log -20 --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo "")..HEAD || git log -20 --pretty=format:"- %s (%h)"
+            echo "- VPN дольше живёт при блокировке экрана (whitelist батареи)"
+            echo "- Список серверов восстанавливает недавние успешные подключения (не все н/д)"
+            echo "- Выбор сервера учитывает историю успешных подключений"
+            echo "- Порт 10809: фикс гонки после скана"
+            git log -15 --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo "")..HEAD || true
             echo ""
             echo "**Full SHA:** \`${{ github.sha }}\`"
             echo "EOF"
