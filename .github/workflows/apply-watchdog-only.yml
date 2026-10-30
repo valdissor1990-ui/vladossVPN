@@ -1,9 +1,7 @@
 name: soft-watchdog-patch
+# Legacy one-shot patcher. Manual only — never auto-run on push.
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/stop-scan-home-button]
-    paths: ['.github/workflows/apply-watchdog-only.yml']
 jobs:
   apply:
     runs-on: ubuntu-24.04
