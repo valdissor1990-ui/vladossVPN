@@ -1,6 +1,6 @@
 # Stage C — Telemetry Foundation
 
-**Status:** PARTIAL IMPLEMENTATION — Rust admission/buffer, passive Android collector, bounded reverse Binder transport, and passive TrafficValidator integration are implemented; runtime validation and additional source integration remain open  
+**Status:** PARTIAL IMPLEMENTATION — Rust admission/buffer, passive Android collector, bounded reverse Binder transport, passive TrafficValidator integration, and passive VPN service lifecycle integration are implemented; runtime validation and additional source integration remain open  
 **Branch:** `feat/ace-foundation`  
 **Scope:** observation and evidence ingestion only
 
@@ -37,6 +37,7 @@
 - `AceTelemetryBridge.submitMetric(...)` builds schema-v1 records only when ACE is connected; it does not start ACE and drops observations when ACE is unavailable or the queue is full.
 - The existing `ConnectionCoordinator` submits the duration and available HTTP status codes from its already-running `TrafficValidator` report. This is passive observation after the existing validation completes: it does not launch probes, alter the validation result, or feed Smart Connect.
 - TrafficValidator duration is recorded for both successful and failed reports. HTTP status is submitted only when an actual response status exists; DNS, timeout, and other failures do not receive fabricated status values.
+- `VpnProxyService.transitionServiceState(...)` submits the actual service lifecycle state as a numeric code (`Idle=0`, `Starting=1`, `Active=2`, `Verifying=3`, `Stopping=4`, `Failed=5`) with source `vpn_service`. Failure text and server/user identifiers are not exported. The observation is emitted only on an actual state transition and does not affect service behavior.
 - HealthMonitor has not been connected to ACE. Its current behavior and any Smart Connect dependencies remain untouched.
 
 ## Telemetry record contract (schema_version=1)
@@ -70,7 +71,7 @@ This map is a versioned code artifact and must be reviewed when a new source is 
 ## Not yet implemented / not yet verified
 
 1. Decide whether HealthMonitor can be instrumented as a strictly passive source without changing its measurement or Smart Connect decision behavior; do not connect it until that review is complete.
-2. Verification that all collector and TrafficValidator metrics and units match the schema contract through runtime ingestion tests.
+2. Verification that all collector, TrafficValidator, and VPN lifecycle metrics and units match the schema contract through runtime ingestion tests.
 3. Lifecycle and process-isolation validation in the installed application, including ACE process termination while VPN remains active.
 4. Tests proving no measurable effect on VPN startup, reconnect, traffic validation, or Smart Connect.
 5. Device-level verification of actual process IDs and telemetry behavior under network changes, Doze, and battery saver.
