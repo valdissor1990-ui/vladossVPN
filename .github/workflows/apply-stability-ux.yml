@@ -1,9 +1,7 @@
 name: stability-ux-patch
+# Legacy one-shot patcher. Manual only — never auto-run on push.
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/stop-scan-home-button]
-    paths: ['.github/workflows/apply-stability-ux.yml']
 jobs:
   apply:
     runs-on: ubuntu-24.04
@@ -87,7 +85,7 @@ jobs:
           if 'Зарубежный обход' not in t:
               t = t.replace(
                   'text = "Поиск доступных серверов...",\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.onSurface\n                        )\n                    }\n                }',
-                  'text = "Поиск доступных серверов...",\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.onSurface\n                        )\n                    }\n                }\n\n                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {\n                    Spacer(Modifier.height(10.dp))\n                    Text(\n                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",\n                        style = MaterialTheme.typography.labelMedium,\n                        color = OnDarkSecondary\n                    )\n                }',
+                  'text = "Поиск доступных серверов...",\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.onSurface\n                        )\n                    }\n                }\n\n                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {\n                    Spacer(modifier.height(10.dp))\n                    Text(\n                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",\n                        style = MaterialTheme.typography.labelMedium,\n                        color = OnDarkSecondary\n                    )\n                }',
                   1,
               )
               hs.write_text(t)
