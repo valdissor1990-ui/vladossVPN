@@ -1,5 +1,4 @@
-// Stage B: flat callback signature (not AceEvent enum).
-// Enum events may return in Stage C/D when real event types exist.
+// Stage B foundation + Stage C telemetry ingestion API.
 namespace ace_core {
     string ace_version();
 
@@ -17,6 +16,17 @@ namespace ace_core {
 
     [Throws=AceError]
     void ace_trigger_test_panic();
+
+    // Accepts one versioned JSON TelemetryRecord. No commands or VPN control.
+    [Throws=AceError]
+    void ace_ingest_telemetry(string record_json);
+
+    // Returns the bounded in-memory telemetry window; this is not persistent storage.
+    [Throws=AceError]
+    string ace_telemetry_snapshot();
+
+    [Throws=AceError]
+    u32 ace_telemetry_count();
 };
 
 [Error]
