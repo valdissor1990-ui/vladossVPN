@@ -93,10 +93,6 @@ class AceIpcClient(private val context: Context) {
 
     fun disconnect() {
         disconnected = true
-        remoteRef.get()?.let { remote ->
-            runCatching { remote.unregisterTelemetryReceiver() }
-                .onFailure { Log.d(TAG, "Telemetry receiver unregister skipped", it) }
-        }
         runCatching { context.unbindService(connection) }
         remoteRef.set(null)
         telemetryQueue.close()
