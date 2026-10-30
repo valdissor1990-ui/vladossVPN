@@ -15,6 +15,12 @@
     <!-- Required for in-app APK updates (canRequestPackageInstalls / ACTION_INSTALL_PACKAGE) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- ACE IPC: signature-level permission so only this app can bind -->
+    <permission
+        android:name="com.vpnproxy.permission.ACE_IPC"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.vpnproxy.permission.ACE_IPC" />
+
     <!-- Required to list installed launcher apps for user-configurable Dual Path routing. -->
     <queries>
         <intent>
@@ -57,6 +63,27 @@
             <meta-data
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="VPN tunnel foreground service for encrypted network traffic" />
+        </service>
+
+        <!-- ACE Control Plane process (Stage B). Isolated from VpnService/libbox. -->
+        <service
+            android:name=".ace.AceProcessService"
+            android:exported="false"
+            android:process=":ace"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="ACE connection engine process (observation only)" />
+        </service>
+
+        <!-- Main-process Binder sink for events from :ace -->
+        <service
+            android:name=".ace.ipc.AceIpcServer"
+            android:exported="false"
+            android:permission="com.vpnproxy.permission.ACE_IPC">
+            <intent-filter>
+                <action android:name="com.vpnproxy.ace.BIND_RECEIVER" />
+            </intent-filter>
         </service>
 
         <receiver
