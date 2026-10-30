@@ -14,9 +14,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Main-process, non-blocking telemetry egress to :ace.
- *
- * This bridge never starts ACE. If ACE is not connected, records are dropped.
- * Queueing is bounded and payloads are capped before they cross Binder.
+ * This bridge never starts ACE. Offline, oversized, and excess records are dropped.
  */
 internal object AceTelemetryBridge {
     private const val TAG = "AceTelemetryBridge"
@@ -27,7 +25,8 @@ internal object AceTelemetryBridge {
 
     init {
         scope.launch {
-            while (true) {\n                val record = queue.receive() ?: break
+            while (true) {
+                val record = queue.receive() ?: break
                 val target = receiver.get()
                 if (target == null) {
                     Log.d(TAG, "ACE unavailable; telemetry observation dropped")
@@ -51,17 +50,9 @@ internal object AceTelemetryBridge {
     }
 
     fun detach(target: IAceTelemetryReceiver? = null) {
-        if (target == null) {
-            receiver.set(null)
-        } else {
-            receiver.compareAndSet(target, null)
-        }
+        if (target == null) receiver.set(null) else receiver.compareAndSet(target, null)
     }
 
-    /**
-     * Build a schema-v1 record from an existing main-process measurement.
-     * Callers must pass actual observed values; null requires an explicit reason.
-     */
     fun submitMetric(
         metric: String,
         value: Double?,
@@ -89,11 +80,9 @@ internal object AceTelemetryBridge {
 
     /** Returns false when ACE is offline, payload is oversized, or queue is full. */
     fun submit(recordJson: String): Boolean {
-        if (recordJson.toByteArray(Charsets.UTF_8).size > MAX_RECORD_BYTES) {
-            Log.w(TAG, "Telemetry payload exceeds 16 KiB; observation rejected")
-            return false
-        }
         if (receiver.get() == null) return false
-        return queue.offer(recordJson)
+        val accepted = queue.offer(recordJson)
+        if (!accepted) Log.w(TAG, "Telemetry payload rejected (oversized or queue full)")
+        return accepted
     }
 }
