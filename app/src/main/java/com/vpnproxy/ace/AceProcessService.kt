@@ -41,6 +41,7 @@ class AceProcessService : Service() {
     private var initializationJob: Job? = null
     @Volatile private var initialized = false
     @Volatile private var ipcClient: AceIpcClient? = null
+    @Volatile private var telemetryCollector: AceAndroidTelemetryCollector? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -54,6 +55,8 @@ class AceProcessService : Service() {
                 Log.i(TAG, "ACTION_STOP")
                 serviceScope.launch {
                     initializationJob?.cancelAndJoin()
+                    telemetryCollector?.stop()
+                    telemetryCollector = null
                     runCatching { aceShutdown() }
                         .onFailure { Log.w(TAG, "ACE shutdown during stop failed", it) }
                     ipcClient?.disconnect()
@@ -118,6 +121,11 @@ class AceProcessService : Service() {
             }
             aceInitialize(listener)
 
+            // Collect only passive platform callbacks after the Rust core is ready.
+            val collector = AceAndroidTelemetryCollector(applicationContext)
+            telemetryCollector = collector
+            collector.start()
+
             val pong = acePing()
             Log.i(TAG, "ACE ping: $pong")
             check(pong.contains("(rust, target=")) {
@@ -129,6 +137,8 @@ class AceProcessService : Service() {
         } catch (t: Throwable) {
             Log.e(TAG, "ACE native init failed", t)
             runCatching { client.forwardError(t.message ?: "init failed") }
+            telemetryCollector?.stop()
+            telemetryCollector = null
             runCatching { aceShutdown() }
             client.disconnect()
             if (ipcClient === client) ipcClient = null
@@ -139,6 +149,8 @@ class AceProcessService : Service() {
         Log.i(TAG, "AceProcessService.onDestroy")
         initializationJob?.cancel()
         serviceScope.cancel()
+        telemetryCollector?.stop()
+        telemetryCollector = null
         runCatching { aceShutdown() }
             .onFailure { Log.w(TAG, "ACE shutdown during destroy failed", it) }
         ipcClient?.disconnect()
