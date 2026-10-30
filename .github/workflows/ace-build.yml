@@ -84,8 +84,8 @@ jobs:
             --language kotlin \
             --out-dir app/src/main/java
           echo "=== generated UniFFI tree ==="
-          find app/src/main/java -iname '*ace*' -type f | head -50
-          if ! find app/src/main/java -type f -name '*.kt' | grep -qi 'ace_core\|uniffi'; then
+          find app/src/main/java -iname '*ace*' -type f
+          if [ ! -f app/src/main/java/uniffi/ace_core/ace_core.kt ]; then
             echo "FATAL: UniFFI Kotlin bindings not generated"
             exit 1
           fi
