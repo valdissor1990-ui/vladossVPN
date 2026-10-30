@@ -1,10 +1,7 @@
 name: Apply stop-scan home button fix
+# Legacy one-shot patcher. Manual only — never auto-run on push.
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/stop-scan-home-button]
-    paths:
-      - '.github/workflows/apply-stop-scan-home.yml'
 jobs:
   apply:
     runs-on: ubuntu-24.04
@@ -40,7 +37,7 @@ jobs:
                   raise SystemExit('cancelScan block not found')
               t = t.replace(old_cancel, new_cancel, 1)
               old_try = '''            _isScanning.value = true\n            try {\n                val semaphore = Semaphore(CONCURRENCY)'''
-              new_try = '''            _isScanning.value = true\n            try {\n                // Track this scan's job so cancelScan() can abort awaitAll promptly.\n                activeScanJob = currentCoroutineContext()[Job]\n                val semaphore = Semaphore(CONCURRENCY)'''
+              new_try = '''            _isScanning.value = true\n            try {\n                # Track this scan's job so cancelScan() can abort awaitAll promptly.\n                activeScanJob = currentCoroutineContext()[Job]\n                val semaphore = Semaphore(CONCURRENCY)'''
               if old_try not in t:
                   raise SystemExit('scan try block not found')
               t = t.replace(old_try, new_try, 1)
@@ -57,7 +54,7 @@ jobs:
           h = Path('app/src/main/java/com/vpnproxy/ui/home/HomeViewModel.kt')
           ht = h.read_text()
           old_cs = '''    fun cancelServerScan() {\n        if (_uiState.value.isScanningServers) {\n            serverScanner.cancelScan()\n            logCollector.info(TAG, "Server scan cancellation requested from home button")\n        }\n    }'''
-          new_cs = '''    fun cancelServerScan() {\n        // Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).\n        logCollector.info(TAG, "Server scan stop requested from home button")\n        serverScanner.cancelScan()\n        // Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.\n        cancelSelectionJob("user stop scan")\n        _uiState.value = _uiState.value.copy(isScanningServers = false)\n    }'''
+          new_cs = '''    fun cancelServerScan() {\n        # Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).\n        logCollector.info(TAG, "Server scan stop requested from home button")\n        serverScanner.cancelScan()\n        # Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.\n        cancelSelectionJob("user stop scan")\n        _uiState.value = _uiState.value.copy(isScanningServers = false)\n    }'''
           if old_cs not in ht:
               if 'Server scan stop requested from home button' in ht:
                   print('HomeViewModel already patched')
@@ -67,11 +64,10 @@ jobs:
               h.write_text(ht.replace(old_cs, new_cs, 1))
               print('HomeViewModel patched')
 
-          # HomeScreen: keep button enabled and prioritize stop-scan
           hs = Path('app/src/main/java/com/vpnproxy/ui/home/HomeScreen.kt')
           hst = hs.read_text()
           old_btn = '''                GlowPowerButton(\n                    state = uiState.connectionState,\n                    enabled = !uiState.isBusy || uiState.isScanningServers,\n                    isScanning = uiState.isScanningServers,\n                    onClick = {\n                        if (uiState.isScanningServers) viewModel.cancelServerScan()\n                        else viewModel.toggleConnection()\n                    }\n                )'''
-          new_btn = '''                GlowPowerButton(\n                    state = uiState.connectionState,\n                    // Always allow the main button while scanning so stop works even if isBusy lags.\n                    enabled = !uiState.isBusy || uiState.isScanningServers,\n                    isScanning = uiState.isScanningServers,\n                    onClick = {\n                        if (uiState.isScanningServers) {\n                            Log.i("HomeScreen", "HomeScreen: stop scan from main button")\n                            viewModel.cancelServerScan()\n                        } else {\n                            viewModel.toggleConnection()\n                        }\n                    }\n                )'''
+          new_btn = '''                GlowPowerButton(\n                    state = uiState.connectionState,\n                    enabled = !uiState.isBusy || uiState.isScanningServers,\n                    isScanning = uiState.isScanningServers,\n                    onClick = {\n                        if (uiState.isScanningServers) {\n                            Log.i("HomeScreen", "HomeScreen: stop scan from main button")\n                            viewModel.cancelServerScan()\n                        } else {\n                            viewModel.toggleConnection()\n                        }\n                    }\n                )'''
           if old_btn in hst:
               hs.write_text(hst.replace(old_btn, new_btn, 1))
               print('HomeScreen patched')
