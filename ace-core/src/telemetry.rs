@@ -69,6 +69,32 @@ fn valid_metric(metric: &str) -> bool {
     )
 }
 
+fn expected_unit(metric: &str) -> Option<&'static str> {
+    match metric {
+        "rtt_ms" | "jitter_ms" | "traffic_validation_duration_ms" => Some("ms"),
+        "packet_loss_pct" => Some("percent"),
+        "traffic_validation_http_status" => Some("status_code"),
+        "network_transport" => Some("transport_code"),
+        "network_validated" | "network_metered" | "battery_saver" | "device_idle" => Some("boolean"),
+        "vpn_state" => Some("service_state_code"),
+        _ => None,
+    }
+}
+
+fn valid_metric_value(metric: &str, value: f64) -> bool {
+    match metric {
+        "rtt_ms" | "jitter_ms" | "traffic_validation_duration_ms" => value >= 0.0,
+        "packet_loss_pct" => (0.0..=100.0).contains(&value),
+        "traffic_validation_http_status" => (100.0..=599.0).contains(&value) && value.fract() == 0.0,
+        "network_transport" => (0.0..=4.0).contains(&value) && value.fract() == 0.0,
+        "network_validated" | "network_metered" | "battery_saver" | "device_idle" => {
+            value == 0.0 || value == 1.0
+        }
+        "vpn_state" => (0.0..=5.0).contains(&value) && value.fract() == 0.0,
+        _ => false,
+    }
+}
+
 fn validate(record: TelemetryRecord) -> Result<AdmittedTelemetry, String> {
     if record.schema_version != 1 {
         return Err("unsupported telemetry schema_version".into());
@@ -79,12 +105,20 @@ fn validate(record: TelemetryRecord) -> Result<AdmittedTelemetry, String> {
     if !valid_metric(&record.metric) {
         return Err("unknown telemetry metric".into());
     }
+    let expected = expected_unit(&record.metric)
+        .ok_or_else(|| "telemetry metric has no unit contract".to_string())?;
+    if record.unit.as_deref() != Some(expected) {
+        return Err("telemetry unit does not match metric contract".into());
+    }
     if !matches!(record.outcome.as_str(), "observed" | "success" | "failure" | "unavailable" | "observation_failure" | "unknown_outcome") {
         return Err("unknown telemetry outcome".into());
     }
     if let Some(value) = record.value {
         if !value.is_finite() {
             return Err("telemetry value must be finite".into());
+        }
+        if !valid_metric_value(&record.metric, value) {
+            return Err("telemetry value is outside metric contract".into());
         }
         if record.missing_reason.is_some() {
             return Err("missing_reason must be absent when value is present".into());
@@ -185,6 +219,25 @@ mod tests {
     fn restricted_context_is_not_primary() {
         let admitted = parse(&json("12.5", "null", "health_monitor", true)).unwrap();
         assert!(!admitted.admitted_to_primary);
+    }
+
+    #[test]
+    fn enforces_metric_units_and_value_ranges() {
+        let mut raw = json("1.0", "null", "health_monitor", false);
+        raw = raw.replace(r#""metric":"rtt_ms""#, r#""metric":"vpn_state""#)
+            .replace(r#""unit":"ms""#, r#""unit":"service_state_code""#);
+        assert!(parse(&raw).is_ok());
+
+        let wrong_unit = raw.replace(r#""unit":"service_state_code""#, r#""unit":"ms""#);
+        assert!(parse(&wrong_unit).is_err());
+
+        let invalid_state = raw.replace(r#""value":1.0"#, r#""value":6.0"#);
+        assert!(parse(&invalid_state).is_err());
+
+        let invalid_loss = raw.replace(r#""metric":"vpn_state""#, r#""metric":"packet_loss_pct""#)
+            .replace(r#""unit":"service_state_code""#, r#""unit":"percent""#)
+            .replace(r#""value":1.0"#, r#""value":101.0"#);
+        assert!(parse(&invalid_loss).is_err());
     }
 
     #[test]
