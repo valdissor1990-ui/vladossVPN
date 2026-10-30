@@ -33,18 +33,24 @@ data class GitHubRelease(
     /**
      * Извлекает versionCode из tag_name.
      *
-     * Формат тега: v<major>.<minor>.<run_number>   (например, v1.0.73)
-     * Формула versionCode в build.gradle.kts:      10000 + run_number
-     * Поэтому:                                     versionCode = 10000 + patch
+     * Формула должна совпадать с .github/workflows/release.yml:
+     * 10000 + major * 1000 + minor * 100 + patch.
+     * Например, v1.0.797 соответствует versionCode 11797.
      *
-     * Возвращает 0, если распарсить не удалось — тогда UpdateChecker
-     * просто не покажет ложное обновление.
+     * Возвращает 0 для некорректного тега или переполнения Int.
      */
     fun extractVersionCode(): Int {
         val cleaned = tagName.removePrefix("v").trim()
         val parts = cleaned.split(".")
-        val patch = parts.lastOrNull()?.toIntOrNull() ?: return 0
-        return if (patch > 0) 10000 + patch else 0
+        if (parts.size != 3) return 0
+
+        val major = parts[0].toLongOrNull() ?: return 0
+        val minor = parts[1].toLongOrNull() ?: return 0
+        val patch = parts[2].toLongOrNull() ?: return 0
+        if (major < 0 || minor < 0 || patch <= 0) return 0
+
+        val code = 10_000L + major * 1_000L + minor * 100L + patch
+        return code.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt() ?: 0
     }
 
     fun extractVersionName(): String = tagName.removePrefix("v")
