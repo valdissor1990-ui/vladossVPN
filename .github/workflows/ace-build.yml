@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           cargo install cargo-ndk --locked
           # Install the UniFFI CLI package; uniffi_bindgen itself is a library crate.
-          cargo install uniffi-bindgen-cli --version 0.28.3 --locked
+          cargo install --git https://github.com/mozilla/uniffi-rs --tag v0.28.3 uniffi-bindgen-cli --locked
           command -v uniffi-bindgen
           uniffi-bindgen --version
 
