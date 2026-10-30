@@ -1,18 +1,13 @@
 //! Vladoss ACE Control Plane — Stage B smoke foundation.
-//!
-//! Scope: version, ping, initialize/shutdown, test event, panic containment.
-//! No Telemetry, Digital Twin, Prediction, or NetworkExecutor.
-//!
-//! UniFFI export surface is deferred until NDK device build (AceNativeBridge
-//! on the Kotlin side is a stub until libace_core.so is packaged).
+//! Real UniFFI exports. No Telemetry / Digital Twin / NetworkExecutor.
+
+uniffi::include_scaffolding!("ace_core");
 
 mod error;
-mod events;
 mod panic_guard;
 mod version;
 
 pub use error::AceError;
-pub use events::AceEvent;
 pub use version::VERSION;
 
 use once_cell::sync::OnceCell;
@@ -25,13 +20,18 @@ struct AceState {
     listener: Option<Arc<dyn AceListener>>,
 }
 
-/// Callback implemented on the Kotlin side (in `:ace` process) once native is wired.
+/// Implemented on the Kotlin side in process `:ace`.
 pub trait AceListener: Send + Sync {
-    fn on_event(&self, event: AceEvent, payload: String);
+    fn on_event(&self, event: String, payload: String);
 }
 
+/// Marker string proves the call reached Rust .so (not a Kotlin stub).
 pub fn ace_version() -> String {
-    VERSION.to_string()
+    format!(
+        "ace-core {} (rust, target={})",
+        VERSION,
+        std::env::consts::ARCH
+    )
 }
 
 pub fn ace_initialize(listener: Option<Arc<dyn AceListener>>) -> Result<(), AceError> {
@@ -39,9 +39,9 @@ pub fn ace_initialize(listener: Option<Arc<dyn AceListener>>) -> Result<(), AceE
         let state = STATE.get_or_init(|| RwLock::new(AceState { listener: None }));
         let mut lock = state.write();
         lock.listener = listener;
-        log::info!("ACE initialized, version {}", VERSION);
+        log::info!("ACE initialized {}", ace_version());
         if let Some(ref l) = lock.listener {
-            l.on_event(AceEvent::Initialized, VERSION.to_string());
+            l.on_event("Initialized".into(), ace_version());
         }
         Ok(())
     })
@@ -52,7 +52,7 @@ pub fn ace_shutdown() -> Result<(), AceError> {
         if let Some(state) = STATE.get() {
             let mut lock = state.write();
             if let Some(ref l) = lock.listener {
-                l.on_event(AceEvent::Shutdown, String::new());
+                l.on_event("Shutdown".into(), String::new());
             }
             lock.listener = None;
         }
@@ -62,22 +62,20 @@ pub fn ace_shutdown() -> Result<(), AceError> {
 }
 
 pub fn ace_ping() -> Result<String, AceError> {
-    panic_guard::guard(|| Ok("pong".to_string()))
+    panic_guard::guard(|| Ok(format!("pong from {}", ace_version())))
 }
 
-/// Stage B only: emit a test event through the registered listener.
 pub fn ace_emit_test_event(payload: String) -> Result<(), AceError> {
     panic_guard::guard(|| {
         let listener = STATE
             .get()
             .and_then(|s| s.read().listener.clone())
             .ok_or(AceError::NotInitialized)?;
-        listener.on_event(AceEvent::Test, payload);
+        listener.on_event("Test".into(), payload);
         Ok(())
     })
 }
 
-/// Stage B only: intentional panic to verify FFI containment.
 pub fn ace_trigger_test_panic() -> Result<(), AceError> {
     panic_guard::guard(|| {
         panic!("intentional panic for Stage B smoke test");
@@ -90,23 +88,27 @@ mod tests {
     use std::sync::Mutex;
 
     struct TestListener {
-        last: Mutex<Option<(AceEvent, String)>>,
+        last: Mutex<Option<(String, String)>>,
     }
 
     impl AceListener for TestListener {
-        fn on_event(&self, event: AceEvent, payload: String) {
+        fn on_event(&self, event: String, payload: String) {
             *self.last.lock().unwrap() = Some((event, payload));
         }
     }
 
     #[test]
-    fn version_not_empty() {
-        assert!(!ace_version().is_empty());
+    fn version_marks_rust() {
+        let v = ace_version();
+        assert!(v.contains("ace-core"), "{v}");
+        assert!(v.contains("(rust, target="), "{v}");
     }
 
     #[test]
     fn ping_works() {
-        assert_eq!(ace_ping().unwrap(), "pong");
+        let p = ace_ping().unwrap();
+        assert!(p.starts_with("pong"), "{p}");
+        assert!(p.contains("(rust, target="), "{p}");
     }
 
     #[test]
@@ -117,14 +119,15 @@ mod tests {
         ace_initialize(Some(listener.clone())).unwrap();
         ace_emit_test_event("hello".into()).unwrap();
         let last = listener.last.lock().unwrap().clone();
-        assert_eq!(last, Some((AceEvent::Test, "hello".into())));
+        assert_eq!(last.as_ref().map(|x| x.0.as_str()), Some("Test"));
+        assert_eq!(last.as_ref().map(|x| x.1.as_str()), Some("hello"));
         ace_shutdown().unwrap();
     }
 
     #[test]
     fn emit_without_init_fails() {
-        // Ensure clean state after other tests.
         let _ = ace_shutdown();
+        // Re-init clean: clear by shutdown already
         let err = ace_emit_test_event("x".into()).unwrap_err();
         assert!(matches!(err, AceError::NotInitialized));
     }

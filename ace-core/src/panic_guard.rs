@@ -1,8 +1,8 @@
 use crate::error::AceError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-/// Catch panics at the FFI boundary. Does **not** protect against
-/// abort / SIGSEGV / OOM (ADR-006 LIMITATION).
+/// Catch panics at the FFI boundary.
+/// Does **not** protect against abort / SIGSEGV / OOM (ADR-006 LIMITATION).
 pub fn guard<F, T>(f: F) -> Result<T, AceError>
 where
     F: FnOnce() -> Result<T, AceError>,
