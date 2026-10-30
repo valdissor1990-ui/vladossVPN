@@ -97,8 +97,13 @@ fn validate(record: TelemetryRecord) -> Result<AdmittedTelemetry, String> {
         // never admitted as primary prediction evidence.
     }
     let (group, source_admitted) = independence_group(&record.source);
-    let admitted_to_primary =
-        source_admitted && !record.restricted_context && record.outcome != "observation_failure";
+    // Only actual measurements with a classified outcome can enter primary
+    // evidence. Missing/unavailable/unknown outcomes remain diagnostic records.
+    let outcome_admitted = matches!(record.outcome.as_str(), "observed" | "success" | "failure");
+    let admitted_to_primary = source_admitted
+        && !record.restricted_context
+        && record.value.is_some()
+        && outcome_admitted;
     Ok(AdmittedTelemetry {
         schema_version: record.schema_version,
         event_id: record.event_id,
@@ -154,44 +159,57 @@ mod tests {
         )
     }
 
+    fn parse(raw: &str) -> Result<AdmittedTelemetry, String> {
+        let record: TelemetryRecord =
+            serde_json::from_str(raw).map_err(|_| "invalid telemetry JSON/schema".to_string())?;
+        validate(record)
+    }
+
     #[test]
     fn missing_is_not_zero_and_requires_reason() {
-        let raw = json("null", r#""not_measured""#, "health_monitor", false);
-        ingest(&raw).unwrap();
-        let out = snapshot().unwrap();
-        assert!(out.contains(r#""value":null"#));
-        assert!(out.contains(r#""missing_reason":"not_measured""#));
+        let admitted = parse(&json("null", r#""not_measured""#, "health_monitor", false)).unwrap();
+        assert_eq!(admitted.value, None);
+        assert_eq!(admitted.missing_reason.as_deref(), Some("not_measured"));
+        assert!(!admitted.admitted_to_primary);
+        assert!(parse(&json("null", "null", "health_monitor", false)).is_err());
     }
 
     #[test]
     fn unknown_source_is_unclassified_and_not_primary() {
-        let raw = json("12.5", "null", "unknown_probe", false);
-        ingest(&raw).unwrap();
-        let out = snapshot().unwrap();
-        assert!(out.contains(r#""independence_group":"unclassified""#));
-        assert!(out.contains(r#""admitted_to_primary":false"#));
+        let admitted = parse(&json("12.5", "null", "unknown_probe", false)).unwrap();
+        assert_eq!(admitted.independence_group, "unclassified");
+        assert!(!admitted.admitted_to_primary);
     }
 
     #[test]
     fn restricted_context_is_not_primary() {
-        let raw = json("12.5", "null", "health_monitor", true);
-        ingest(&raw).unwrap();
-        let out = snapshot().unwrap();
-        assert!(out.contains(r#""admitted_to_primary":false"#));
+        let admitted = parse(&json("12.5", "null", "health_monitor", true)).unwrap();
+        assert!(!admitted.admitted_to_primary);
     }
 
     #[test]
     fn rejects_nan_and_unknown_fields() {
-        let raw = json("NaN", "null", "health_monitor", false);
-        assert!(ingest(&raw).is_err());
+        assert!(parse(&json("NaN", "null", "health_monitor", false)).is_err());
         let raw = r#"{"schema_version":1,"event_id":"x","elapsed_realtime_ms":1,"metric":"rtt_ms","value":1.0,"unit":"ms","outcome":"observed","missing_reason":null,"restricted_context":false,"source":"health_monitor","ssid":"private"}"#;
-        assert!(ingest(raw).is_err());
+        assert!(parse(raw).is_err());
     }
 
     #[test]
     fn observation_failure_is_not_primary_evidence() {
         let raw = r#"{"schema_version":1,"event_id":"evt-2","elapsed_realtime_ms":43,"metric":"rtt_ms","value":null,"unit":"ms","outcome":"observation_failure","missing_reason":"probe_cancelled","restricted_context":false,"source":"health_monitor"}"#;
-        ingest(raw).unwrap();
-        assert!(snapshot().unwrap().contains(r#""admitted_to_primary":false"#));
+        let admitted = parse(raw).unwrap();
+        assert!(!admitted.admitted_to_primary);
+        assert_eq!(admitted.outcome, "observation_failure");
+    }
+
+    #[test]
+    fn unavailable_and_unknown_outcomes_are_not_primary() {
+        for outcome in ["unavailable", "unknown_outcome"] {
+            let raw = format!(
+                r#"{{"schema_version":1,"event_id":"evt-3","elapsed_realtime_ms":44,"metric":"rtt_ms","value":1.0,"unit":"ms","outcome":"{}","missing_reason":null,"restricted_context":false,"source":"health_monitor"}}"#,
+                outcome
+            );
+            assert!(!parse(&raw).unwrap().admitted_to_primary, "{outcome}");
+        }
     }
 }
