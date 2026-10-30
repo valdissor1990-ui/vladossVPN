@@ -1,5 +1,6 @@
 package com.vpnproxy.core.connection
 
+import com.vpnproxy.ace.ipc.AceTelemetryBridge
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
@@ -398,6 +399,26 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 scope.launch {
                     val report = trafficValidator.probeTraffic(event.serverName)
+                    // Passive ACE observation of the existing validation result.
+                    // This does not start probes, change validation, or feed Smart Connect.
+                    AceTelemetryBridge.submitMetric(
+                        metric = "traffic_validation_duration_ms",
+                        value = report.durationMs.toDouble(),
+                        unit = "ms",
+                        outcome = if (report.success) "success" else "failure",
+                        source = "traffic_validator"
+                    )
+                    report.targets.forEach { target ->
+                        target.statusCode?.let { status ->
+                            AceTelemetryBridge.submitMetric(
+                                metric = "traffic_validation_http_status",
+                                value = status.toDouble(),
+                                unit = "status_code",
+                                outcome = if (target.success) "success" else "failure",
+                                source = "traffic_validator"
+                            )
+                        }
+                    }
                     val summary = if (!report.success) {
                         if (!report.portReady) {
                             "proxy_port_not_ready"
