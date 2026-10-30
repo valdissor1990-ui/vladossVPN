@@ -22,6 +22,7 @@ import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.BatteryPolicy
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.JsonConfigRepository
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -62,7 +63,7 @@ class HomeViewModel @Inject constructor(
     companion object {
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
-        private const val SERVER_SELECTION_TIMEOUT_MS = 5_000L
+        private const val SERVER_SELECTION_TIMEOUT_MS = 25_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
@@ -181,7 +182,6 @@ class HomeViewModel @Inject constructor(
         }
         startPinging()
         viewModelScope.launch {
-            // React to both subscription refreshes and local JSON imports.
             combine(
                 subscriptionRepository.allConfigs,
                 jsonConfigRepository.configs
@@ -265,10 +265,8 @@ class HomeViewModel @Inject constructor(
     fun setVpnPermissionRequester(requester: () -> Unit) { vpnPermissionRequester = requester }
 
     fun cancelServerScan() {
-        // Always cancel — do not gate only on UI flag (it can lag one frame behind scanner).
         logCollector.info(TAG, "Server scan stop requested from home button")
         serverScanner.cancelScan()
-        // Connect-time scans run inside selectionJob; cancel it so Mutex/awaitAll unwind.
         cancelSelectionJob("user stop scan")
         _uiState.value = _uiState.value.copy(isScanningServers = false)
     }
@@ -348,6 +346,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun connect() {
+        runCatching { BatteryPolicy.requestIgnoreBatteryOptimizations(context) }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastConnectClickMs < 900L) {
             Log.d(TAG, "Connect debounced")
@@ -404,33 +403,16 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    // connectionKey intentionally excludes provider attribution. Match both
-                    // fields so a shared endpoint from another subscription cannot leak into
-                    // the selected subscription's candidate list.
-                    val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
-                    val scanned = serverScanner.availableServers()
-                        .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
-                        .filterNot { autoSwitcher.isBlacklisted(it.config) }
-                    if (_uiState.value.isAutomaticMode) {
-                        val bestScanned = serverScanner.bestAvailableServer(scanned)
-                        if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
-                        else {
-                            val currentConfig = autoSwitcher.currentServer.value?.config
-                                ?.takeIf { current -> !autoSwitcher.isBlacklisted(current) && configs.any {
-                                    it.providerTag == current.providerTag && it.connectionKey() == current.connectionKey()
-                                } }
-                                ?: configs.firstOrNull { !autoSwitcher.isBlacklisted(it) }
-                                ?: configs.first()
-                            autoSwitcher.selectImmediate(currentConfig, configs)
-                        }
-                    } else {
-                        manuallySelectedServer?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
-                            ?: run {
-                                val bestScanned = serverScanner.bestAvailableServer(scanned)
-                                if (bestScanned != null) autoSwitcher.selectScanned(bestScanned, scanned)
-                                else autoSwitcher.selectImmediate(configs.first(), configs)
-                            }
-                    }
+                    ConnectServerSelector.select(
+                        configs = configs,
+                        isAutomaticMode = _uiState.value.isAutomaticMode,
+                        manuallySelected = manuallySelectedServer,
+                        lastServerStore = lastServerStore,
+                        serverScanner = serverScanner,
+                        autoSwitcher = autoSwitcher,
+                        logCollector = logCollector,
+                        traceMsg = { tmsg(it) },
+                    )
                 }
                 if (selected == null) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
@@ -459,8 +441,6 @@ class HomeViewModel @Inject constructor(
         serverScanner.cancelScan()
         VpnProxyService.clearError()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-        // RequestDisconnect changes the actor state, but the force-stop action also
-        // tears down the native core/TUN immediately instead of relying on idle timeout.
         ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
     }
@@ -491,7 +471,9 @@ class HomeViewModel @Inject constructor(
         try {
             val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
             context.startForegroundService(intent)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            logCollector.error(TAG, "startForegroundService failed action=$action", e)
+        }
     }
 
     fun refreshSubscription() {
