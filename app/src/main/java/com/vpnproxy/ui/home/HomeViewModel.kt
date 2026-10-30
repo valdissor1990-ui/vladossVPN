@@ -78,6 +78,8 @@ class HomeViewModel @Inject constructor(
         val sessionStartedAt: Long? = null,
         val isRefreshingSubscription: Boolean = false,
         val isScanningServers: Boolean = false,
+        val scannedAvailableServers: Int = 0,
+        val scanTotalServers: Int = 0,
         val isAutomaticMode: Boolean = true,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
         val lastErrorMessage: String? = null,
@@ -196,6 +198,14 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             serverScanner.isScanning.collect { scanning ->
                 _uiState.value = _uiState.value.copy(isScanningServers = scanning)
+            }
+        }
+        viewModelScope.launch {
+            serverScanner.scannedServers.collect { servers ->
+                _uiState.value = _uiState.value.copy(
+                    scannedAvailableServers = servers.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE },
+                    scanTotalServers = servers.size
+                )
             }
         }
         viewModelScope.launch {

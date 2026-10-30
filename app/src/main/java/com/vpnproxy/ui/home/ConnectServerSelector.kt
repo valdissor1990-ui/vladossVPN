@@ -37,7 +37,7 @@ internal object ConnectServerSelector {
         }
         logCollector.info(TAG, traceMsg("Connect path: ping-first scanForConnection (${orderedConfigs.size} profiles)"))
         val probed = try {
-            serverScanner.scanForConnection(orderedConfigs)
+            serverScanner.scanForConnection(orderedConfigs, targetAvailableCount = 4)
         } catch (c: CancellationException) {
             throw c
         } catch (e: Exception) {
@@ -61,22 +61,15 @@ internal object ConnectServerSelector {
             if (best != null) {
                 autoSwitcher.selectScanned(best, scanned)
             } else {
-                val currentConfig = autoSwitcher.currentServer.value?.config
-                    ?.takeIf { current ->
-                        !autoSwitcher.isBlacklisted(current) && configs.any {
-                            it.providerTag == current.providerTag && it.connectionKey() == current.connectionKey()
-                        }
-                    }
-                    ?: orderedConfigs.firstOrNull { !autoSwitcher.isBlacklisted(it) }
-                    ?: configs.first()
-                autoSwitcher.selectImmediate(currentConfig, configs)
+                logCollector.warn(TAG, traceMsg("No server passed reachability scan; refusing automatic selection"))
+                null
             }
         } else {
             manuallySelected?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
                 ?: run {
                     val best = serverScanner.bestAvailableServer(live.ifEmpty { scanned })
                     if (best != null) autoSwitcher.selectScanned(best, scanned)
-                    else autoSwitcher.selectImmediate(orderedConfigs.first(), configs)
+                    else null
                 }
         }
     }
