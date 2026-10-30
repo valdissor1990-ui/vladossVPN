@@ -4,26 +4,99 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Optional explicit versionName (X.Y.Z). Leave empty to auto-increment from latest tag."
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_VERSION_NAME: "1.0.793"
-  APP_VERSION_CODE: "10793"
 
 jobs:
   build-and-release:
     if: github.ref == 'refs/heads/main'
     concurrency:
+      # Never cancel a release mid-flight: partial APK upload + missing tag is worse than queueing.
       group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Resolve unique version (fail if tag already exists)
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version_name }}
+        run: |
+          set -euo pipefail
+
+          # Latest semantic tag on this repo (vX.Y.Z). Ignore non-matching tags.
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)
+          if [ -z "${LATEST_TAG}" ]; then
+            BASE_MAJOR=1
+            BASE_MINOR=0
+            BASE_PATCH=0
+            LATEST_CODE=10700
+          else
+            VER="${LATEST_TAG#v}"
+            BASE_MAJOR=$(printf '%s' "$VER" | cut -d. -f1)
+            BASE_MINOR=$(printf '%s' "$VER" | cut -d. -f2)
+            BASE_PATCH=$(printf '%s' "$VER" | cut -d. -f3)
+            # Prefer versionCode from previous release assets when present; else derive.
+            LATEST_CODE=$((10000 + BASE_MAJOR * 1000 + BASE_MINOR * 100 + BASE_PATCH))
+          fi
+
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            if ! printf '%s' "$INPUT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version_name must be X.Y.Z (got: ${INPUT_VERSION})"
+              exit 1
+            fi
+            NEXT_NAME="$INPUT_VERSION"
+            NEXT_MAJOR=$(printf '%s' "$NEXT_NAME" | cut -d. -f1)
+            NEXT_MINOR=$(printf '%s' "$NEXT_NAME" | cut -d. -f2)
+            NEXT_PATCH=$(printf '%s' "$NEXT_NAME" | cut -d. -f3)
+          else
+            NEXT_MAJOR=$BASE_MAJOR
+            NEXT_MINOR=$BASE_MINOR
+            NEXT_PATCH=$((BASE_PATCH + 1))
+            NEXT_NAME="${NEXT_MAJOR}.${NEXT_MINOR}.${NEXT_PATCH}"
+          fi
+
+          NEXT_CODE=$((LATEST_CODE + 1))
+          # Ensure monotonic code even if name was set explicitly below a previous code.
+          if [ "$NEXT_CODE" -le "$LATEST_CODE" ]; then
+            NEXT_CODE=$((LATEST_CODE + 1))
+          fi
+
+          TAG="v${NEXT_NAME}"
+
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::Git tag ${TAG} already exists. Refusing to reuse version. Bump explicitly or delete the tag only if it was never published."
+            exit 1
+          fi
+
+          # Also refuse if a GitHub Release already claims this tag (orphan release edge case).
+          if command -v gh >/dev/null 2>&1; then
+            if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "::error::GitHub Release ${TAG} already exists. Refusing duplicate publish."
+              exit 1
+            fi
+          fi
+
+          echo "name=${NEXT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "code=${NEXT_CODE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version ${NEXT_NAME} (${NEXT_CODE}) tag=${TAG} (previous=${LATEST_TAG:-none})"
+
+          # Export for Gradle (app/build.gradle.kts reads APP_VERSION_* from env).
+          echo "APP_VERSION_NAME=${NEXT_NAME}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=${NEXT_CODE}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v5
         with:
@@ -94,6 +167,7 @@ jobs:
           cat > app/src/main/assets/licenses/SOURCE_COMMIT.txt <<EOF
           VLADOSS VPN source commit: $GITHUB_SHA
           Source: https://github.com/valdissor1990-ui/vladossVPN/tree/$GITHUB_SHA
+          Release version: ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }})
           Bundled libbox source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.23
           Bundled cronet-go wrapper: https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
           Bundled libcronet.a source: https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
@@ -169,6 +243,8 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
+          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
         run: ./gradlew assembleDirectRelease --stacktrace
 
       - name: Verify APK excludes retired native cores and secondary process
@@ -195,6 +271,8 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
+          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
         run: ./gradlew bundlePlayRelease --stacktrace
 
       - name: Verify bundled open-source license assets
@@ -236,30 +314,31 @@ jobs:
           cp -R app/build/reports/license-audit build/release-notices/native-report
           (cd build/release-notices && zip -qr "$GITHUB_WORKSPACE/license-notices.zip" .)
 
-      - name: Extract version info
+      - name: Verify APK version matches resolved version
         id: ver
         run: |
           set -euo pipefail
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
           if [ -z "$AAPT" ]; then
-            echo "❌ aapt2 not found in \$ANDROID_HOME/build-tools"
+            echo "::error::aapt2 not found"
             exit 1
           fi
           APK=app/build/outputs/apk/direct/release/app-direct-universal-release.apk
           if [ ! -f "$APK" ]; then
             APK=$(find app/build/outputs/apk/direct/release -name 'app-direct-*-release.apk' | head -1)
           fi
-          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
-            echo "❌ No release APK found. Directory listing:"
-            ls -la app/build/outputs/apk/direct/release/ || true
-            exit 1
-          fi
-          echo "Using APK: $APK"
+          test -f "$APK"
           VN=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
           VC=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*versionCode='([^']+)'.*/\1/")
+          EXPECT_NAME="${{ steps.version.outputs.name }}"
+          EXPECT_CODE="${{ steps.version.outputs.code }}"
+          if [ "$VN" != "$EXPECT_NAME" ] || [ "$VC" != "$EXPECT_CODE" ]; then
+            echo "::error::APK version mismatch: APK=${VN}/${VC} expected=${EXPECT_NAME}/${EXPECT_CODE}"
+            exit 1
+          fi
           echo "name=$VN" >> "$GITHUB_OUTPUT"
           echo "code=$VC" >> "$GITHUB_OUTPUT"
-          echo "Detected $VN ($VC)"
+          echo "APK version OK: $VN ($VC)"
 
       - name: Generate changelog
         id: changelog
@@ -267,11 +346,7 @@ jobs:
           {
             echo "changelog<<EOF"
             echo "## Что нового"
-            echo "- VPN дольше живёт при блокировке экрана (whitelist батареи)"
-            echo "- Список серверов восстанавливает недавние успешные подключения (не все н/д)"
-            echo "- Выбор сервера учитывает историю успешных подключений"
-            echo "- Порт 10809: фикс гонки после скана"
-            git log -15 --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo "")..HEAD || true
+            git log -20 --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo "")..HEAD || git log -20 --pretty=format:"- %s (%h)"
             echo ""
             echo "**Full SHA:** \`${{ github.sha }}\`"
             echo "EOF"
@@ -283,7 +358,8 @@ jobs:
           cat > release-meta/version.json <<EOF
           {
             "versionCode": ${{ steps.ver.outputs.code }},
-            "versionName": "${{ steps.ver.outputs.name }}"
+            "versionName": "${{ steps.ver.outputs.name }}",
+            "gitSha": "${{ github.sha }}"
           }
           EOF
           cat release-meta/version.json
@@ -320,7 +396,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3.0.3
         with:
-          tag_name: v${{ steps.ver.outputs.name }}
+          tag_name: ${{ steps.version.outputs.tag }}
           name: VPNProxy v${{ steps.ver.outputs.name }}
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
