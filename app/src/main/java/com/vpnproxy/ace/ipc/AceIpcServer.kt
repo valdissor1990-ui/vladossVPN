@@ -6,8 +6,9 @@ import android.os.IBinder
 import android.util.Log
 
 /**
- * Runs in the **main** process. Receives events from `:ace` via Binder.
- * Stage B: log only. No VPN control.
+ * Main-process Binder endpoint for :ace.
+ * Accepts observational events and a reverse telemetry receiver registration.
+ * It exposes no VPN, Libbox, NetworkExecutor, or Smart Connect controls.
  */
 class AceIpcServer : Service() {
 
@@ -19,9 +20,26 @@ class AceIpcServer : Service() {
         override fun onError(message: String?) {
             Log.e(TAG, "error from :ace: ${message.orEmpty()}")
         }
+
+        override fun registerTelemetryReceiver(receiver: IAceTelemetryReceiver?) {
+            if (receiver == null) {
+                Log.w(TAG, "Ignoring null telemetry receiver registration")
+                return
+            }
+            AceTelemetryBridge.attach(receiver)
+        }
+
+        override fun unregisterTelemetryReceiver() {
+            AceTelemetryBridge.detach()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onDestroy() {
+        AceTelemetryBridge.detach()
+        super.onDestroy()
+    }
 
     companion object {
         private const val TAG = "AceIpcServer"
