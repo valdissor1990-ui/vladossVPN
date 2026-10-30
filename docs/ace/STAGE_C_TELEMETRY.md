@@ -1,6 +1,6 @@
 # Stage C — Telemetry Foundation
 
-**Status:** PARTIAL IMPLEMENTATION — Rust admission/buffer and passive Android platform collector are implemented; main-process measurement transport and runtime validation remain open  
+**Status:** PARTIAL IMPLEMENTATION — Rust admission/buffer, passive Android collector, and bounded reverse Binder transport are implemented; source integration and runtime validation remain open  
 **Branch:** `feat/ace-foundation`  
 **Scope:** observation and evidence ingestion only
 
@@ -32,7 +32,10 @@
 - Callback work is dispatched on a dedicated HandlerThread; ingestion uses a bounded in-memory Kotlin Channel (256 records) and an IO worker.
 - Collector shutdown unregisters callbacks/receiver, closes the queue, and safely stops its HandlerThread.
 - No active probes, sockets, VPN commands, Smart Connect calls, or collection of SSID/IP/server identifiers.
-- Android observations are ingested directly into Rust in the ACE process. Main-process HealthMonitor and TrafficValidator measurements are not yet transported.
+- Android observations are ingested directly into Rust in the ACE process.
+- Reverse Binder transport contract is implemented: main process registers an `IAceTelemetryReceiver` with `:ace`; telemetry delivery is one-way, bounded (128 records on each process boundary), non-blocking for producers, and payload-limited to 16 KiB.
+- `AceTelemetryBridge.submitMetric(...)` builds schema-v1 records only when ACE is connected; it does not start ACE and drops observations when ACE is unavailable or the queue is full.
+- The transport is plumbing only at this point. Existing HealthMonitor and TrafficValidator call sites have not yet been connected to it; no claim is made that those measurements are currently flowing.
 
 ## Telemetry record contract (schema_version=1)
 
@@ -64,7 +67,7 @@ This map is a versioned code artifact and must be reviewed when a new source is 
 
 ## Not yet implemented / not yet verified
 
-1. Main-process → `:ace` telemetry transport for existing HealthMonitor RTT/jitter and TrafficValidator outcomes, with bounded backpressure.
+1. Connect the existing TrafficValidator report and HealthMonitor measurements to the new transport without changing their measurement or decision behavior. Smart Connect integration remains explicitly out of scope until separately reviewed.
 2. Verification that all collector metrics and units match the schema contract through runtime ingestion tests.
 3. Lifecycle and process-isolation validation in the installed application, including ACE process termination while VPN remains active.
 4. Tests proving no measurable effect on VPN startup, reconnect, traffic validation, or Smart Connect.
