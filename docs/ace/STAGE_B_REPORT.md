@@ -1,6 +1,6 @@
 # Stage B Report
 
-**Status:** implementation corrections pushed; CI/device acceptance pending  
+**Status:** Stage B acceptance pending; Stage C Rust telemetry foundation partially implemented  
 **Branch:** `feat/ace-foundation`  
 **Current HEAD:** `6292c08b4811c3d2c81d7c7f1de1b827385dae0e`
 
@@ -64,6 +64,10 @@ adb logcat -d | grep -E "AceProcessService|AceIpcServer|AceControlPlane" > logca
 
 Without the Rust target marker, real FFI has not been proven. Without the device process-kill test, ADR-006 process isolation has not been accepted.
 
-## 6. Decision
+## 6. Stage C work started
 
-**Stage B remains IN PROGRESS.** Do not start Stage C until latest CI and required device checks are green and reviewed. This report does not approve the provisional architecture synthesis and does not authorize active Self-Healing or production release.
+A strict Rust telemetry admission API and bounded in-memory buffer have been added. Android collection, IPC transport, source integration, and runtime validation remain open. Details: `STAGE_C_TELEMETRY.md`.
+
+## 7. Decision
+
+**Stage B remains IN PROGRESS. Stage C remains PARTIAL and is not accepted.** Do not start Stage C until latest CI and required device checks are green and reviewed. This report does not approve the provisional architecture synthesis and does not authorize active Self-Healing or production release.
