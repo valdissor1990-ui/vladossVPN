@@ -393,6 +393,30 @@ fun HomeScreen(
         }
     }
 
+    if (uiState.isScanningServers && uiState.connectionState == ConnectionUiState.CONNECTING) {
+        AlertDialog(
+            onDismissRequest = {},
+            containerColor = Color.White,
+            titleContentColor = Color(0xFF172033),
+            textContentColor = Color(0xFF334155),
+            title = { Text("Поиск доступных серверов", color = Color(0xFF172033)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                        Text("Сканируем серверы и измеряем задержку", color = Color(0xFF334155))
+                    }
+                    Text(
+                        text = "Найдено доступных: \${uiState.scannedAvailableServers} из \${uiState.scanTotalServers}. Для подключения ищем минимум 4 надёжных сервера.",
+                        color = Color(0xFF334155)
+                    )
+                    Text("Серверы без подтверждённого отклика не будут выбраны автоматически.", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
     UpdateDialog(
         state = updateState,
         onDownload = { updateViewModel.download() },
