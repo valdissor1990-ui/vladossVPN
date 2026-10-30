@@ -65,8 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-ndk --locked
-          cargo install uniffi_bindgen --version 0.28.3 --locked \
-            || cargo install uniffi --version 0.28.3 --features cli --locked
+          cargo install --git https://github.com/mozilla/uniffi-rs --tag v0.28.3 uniffi-bindgen-cli --locked
           command -v uniffi-bindgen
 
       - name: Run ACE Rust host tests
