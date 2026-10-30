@@ -47,9 +47,13 @@ class TrafficValidator @Inject constructor(
         )
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val READ_TIMEOUT_MS = 5_000
-        private const val PORT_WAIT_TIMEOUT_MS = 3_000L
+        // Mixed inbound can bind a few hundred ms after CommandServer reports started.
+        private const val PORT_WAIT_TIMEOUT_MS = 8_000L
+        private const val PORT_SETTLE_MS = 400L
+        private const val LOCAL_REFUSED_RETRIES = 3
+        private const val LOCAL_REFUSED_RETRY_DELAY_MS = 350L
+        private const val PORT_CONNECT_TIMEOUT_MS = 250
         private const val PORT_POLL_MS = 100L
-        private const val PORT_CONNECT_TIMEOUT_MS = 150
     }
 
     suspend fun checkTraffic(serverName: String? = null): Boolean =
@@ -59,6 +63,43 @@ class TrafficValidator @Inject constructor(
         val startedAll = System.nanoTime()
         val proxyHost = "127.0.0.1"
         val proxyPort = SingboxConfigBuilder.PROXY_PORT
+        var lastReport: TrafficProbeReport? = null
+        repeat(LOCAL_REFUSED_RETRIES) { attempt ->
+            val report = probeTrafficOnce(serverName, proxyHost, proxyPort, startedAll)
+            if (report.success) return@withContext report
+            lastReport = report
+            val onlyLocalRefused = report.portReady && report.targets.isNotEmpty() &&
+                report.targets.all { it.outcome == ProbeOutcome.REFUSED || it.outcome == ProbeOutcome.UNREACHABLE }
+            val localNotReady = !report.portReady
+            if (!onlyLocalRefused && !localNotReady) return@withContext report
+            if (attempt < LOCAL_REFUSED_RETRIES - 1) {
+                logCollector.info(
+                    TAG,
+                    "Local proxy not stable yet; retrying traffic probe",
+                    mapOf(
+                        "server" to (serverName ?: "unknown"),
+                        "attempt" to (attempt + 1),
+                        "portReady" to report.portReady
+                    )
+                )
+                delay(LOCAL_REFUSED_RETRY_DELAY_MS)
+            }
+        }
+        lastReport ?: TrafficProbeReport(
+            success = false,
+            serverName = serverName,
+            portReady = false,
+            targets = emptyList(),
+            durationMs = (System.nanoTime() - startedAll) / 1_000_000L
+        )
+    }
+
+    private suspend fun probeTrafficOnce(
+        serverName: String?,
+        proxyHost: String,
+        proxyPort: Int,
+        startedAll: Long
+    ): TrafficProbeReport {
         if (!waitForPort(proxyHost, proxyPort, PORT_WAIT_TIMEOUT_MS)) {
             logCollector.warn(
                 TAG,
@@ -66,7 +107,7 @@ class TrafficValidator @Inject constructor(
                 mapOf("server" to (serverName ?: "unknown"), "port" to proxyPort)
             )
             val elapsed = (System.nanoTime() - startedAll) / 1_000_000L
-            return@withContext TrafficProbeReport(
+            return TrafficProbeReport(
                 success = false,
                 serverName = serverName,
                 portReady = false,
@@ -74,6 +115,9 @@ class TrafficValidator @Inject constructor(
                 durationMs = elapsed
             )
         }
+
+        // Port is open but mixed inbound may still reject the first few requests.
+        delay(PORT_SETTLE_MS)
 
         val localProxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(proxyHost, proxyPort))
         val results = mutableListOf<TrafficProbeTargetResult>()
@@ -119,7 +163,7 @@ class TrafficValidator @Inject constructor(
                 )
                 if (ok) {
                     val elapsed = (System.nanoTime() - startedAll) / 1_000_000L
-                    return@withContext TrafficProbeReport(
+                    return TrafficProbeReport(
                         success = true,
                         serverName = serverName,
                         portReady = true,
@@ -135,7 +179,7 @@ class TrafficValidator @Inject constructor(
                     outcome = outcome,
                     statusCode = null,
                     elapsedMs = elapsedMs,
-                    detail = e.message?.take(120)
+                    detail = e.message
                 )
                 logCollector.warn(
                     TAG,
@@ -164,7 +208,7 @@ class TrafficValidator @Inject constructor(
                 "failures" to results.joinToString(",") { "${it.host}:${it.outcome.name}" }
             )
         )
-        TrafficProbeReport(
+        return TrafficProbeReport(
             success = false,
             serverName = serverName,
             portReady = true,

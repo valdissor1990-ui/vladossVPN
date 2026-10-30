@@ -94,6 +94,9 @@ class ConnectionCoordinator @Inject constructor(
     private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
+    /** Same-endpoint retries when traffic probe fails due to local proxy churn. */
+    private var localValidationRetries = 0
+    private val maxLocalValidationRetries = 2
     private var trafficValidationGeneration: Long = 0L
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
 
@@ -282,6 +285,7 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 trafficValidationGeneration++ // invalidate any in-flight probe for the previous selection
+                localValidationRetries = 0
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
                 hasServerSelected = true
@@ -427,6 +431,7 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 if (event.success) {
+                    localValidationRetries = 0
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
@@ -434,13 +439,55 @@ class ConnectionCoordinator @Inject constructor(
                     // Feed confirmed data-plane failures back into Smart Connect so
                     // unreliable free-pool nodes rank lower on the next selection.
                     val failedConfig = activeScoredServer?.config
+                    // Connection refused/reset on 127.0.0.1 during start/stop races is local,
+                    // not proof that the remote endpoint is dead.
                     val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
                         detail.contains("unreachable", ignoreCase = true) ||
-                        detail.contains("DNS_ERROR", ignoreCase = true)
+                        detail.contains("DNS_ERROR", ignoreCase = true) ||
+                        detail.contains("REFUSED", ignoreCase = true) ||
+                        detail.contains("connection refused", ignoreCase = true) ||
+                        detail.contains("connection reset", ignoreCase = true) ||
+                        detail.contains("ECONNRESET", ignoreCase = true) ||
+                        detail.contains("ECONNREFUSED", ignoreCase = true)
                     if (failedConfig != null && !failureLooksLocalOrDns) {
                         scoringEngine.recordHardFailure(failedConfig, weight = 2)
                         runCatching { onEndpointHardFailed?.invoke(failedConfig) }
                     }
+                    // Transient local-proxy churn: re-probe the same endpoint before switching.
+                    if (failureLooksLocalOrDns && localValidationRetries < maxLocalValidationRetries &&
+                        event.serverName == pendingServerName) {
+                        localValidationRetries++
+                        val retryId = ++trafficValidationGeneration
+                        logW(
+                            "Local/transient traffic failure; same-server re-probe " +
+                                "$localValidationRetries/$maxLocalValidationRetries for ${event.serverName}"
+                        )
+                        scope.launch {
+                            delay(500L)
+                            if (retryId != trafficValidationGeneration || pendingServerName != event.serverName) return@launch
+                            if (state.value !is ConnectionState.Verifying) return@launch
+                            val report = trafficValidator.probeTraffic(event.serverName)
+                            val summary = if (!report.success) {
+                                if (!report.portReady) {
+                                    "proxy_port_not_ready"
+                                } else {
+                                    report.targets.joinToString(",") { t ->
+                                        "${t.host}:${t.outcome.name}${t.statusCode?.let { "/$it" } ?: ""}"
+                                    }.ifBlank { "no_targets" }
+                                }
+                            } else null
+                            send(
+                                ConnectionEvent.TrafficValidationResult(
+                                    serverName = event.serverName,
+                                    success = report.success,
+                                    failureSummary = summary,
+                                    validationId = retryId
+                                )
+                            )
+                        }
+                        return
+                    }
+                    localValidationRetries = 0
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
                     // Failures are endpoint-specific: never let failures on one free node
                     // accumulate into a global fatal threshold while healthy candidates remain.
@@ -495,6 +542,7 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
                 fallbackIndex = -1
                 trafficValidationGeneration++ // invalidate the failed endpoint's still-running probe
+                localValidationRetries = 0
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
