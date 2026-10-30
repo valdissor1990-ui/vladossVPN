@@ -1,4 +1,4 @@
-name: Ace Build
+name: ACE Native + App Compile
 
 on:
   workflow_dispatch:
@@ -107,21 +107,17 @@ jobs:
           chmod +x scripts/download_libbox.sh
           ./scripts/download_libbox.sh
 
-      - name: Assemble Direct Debug APK
-        run: ./gradlew :app:assembleDirectDebug --stacktrace
+      - name: Compile production Direct variant (no APK packaging)
+        run: ./gradlew :app:compileDirectReleaseKotlin --stacktrace
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: vladoss-ace-stage-b-debug-apk
-          path: app/build/outputs/apk/direct/debug/*.apk
-          retention-days: 14
+      - name: Compile Direct debug Kotlin sources (no APK packaging)
+        run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
 
       - name: Upload logs and native libs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: stage-b-logs
+          name: ace-build-logs
           path: |
             cargo-test.log
             app/src/main/jniLibs/**/*.so
