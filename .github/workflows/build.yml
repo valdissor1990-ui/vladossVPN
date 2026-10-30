@@ -83,7 +83,7 @@ jobs:
             echo "FATAL: Android sdkmanager not found"
             exit 1
           fi
-          yes | "$CMDLINE" --sdk_root="$SDK" "ndk;26.3.11579264"
+          "$CMDLINE" --sdk_root="$SDK" "ndk;26.3.11579264"
           echo "ANDROID_NDK_HOME=$SDK/ndk/26.3.11579264" >> "$GITHUB_ENV"
 
       - name: Build ACE Android native libraries
