@@ -1,6 +1,6 @@
 # Stage B Progress Report
 
-**Status:** implementation corrections pushed; latest CI and device acceptance are not yet confirmed  
+**Status:** Stage B acceptance pending; Stage C Rust telemetry foundation partially implemented  
 **Branch:** `feat/ace-foundation`  
 **Base:** `1dde84b`  
 **Current HEAD:** `6292c08b4811c3d2c81d7c7f1de1b827385dae0e`  
