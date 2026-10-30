@@ -146,6 +146,7 @@ class DeepProbeEngine @Inject constructor(
     suspend fun pingProfiles(
         configs: List<ParsedConfig>,
         stopAfterSuccessfulBatch: Boolean = false,
+        stopAfterSuccessfulCount: Int? = null,
         onBatch: (List<ProfilePingResult>) -> Unit = {}
     ): List<ProfilePingResult> = withContext(Dispatchers.IO) {
         if (configs.isEmpty()) return@withContext emptyList()
@@ -215,6 +216,10 @@ class DeepProbeEngine @Inject constructor(
                     output += batch
                     onBatch(batch)
                     if (stopAfterSuccessfulBatch && batch.any { it.success }) break
+                    if (stopAfterSuccessfulCount != null && output.count { it.success } >= stopAfterSuccessfulCount.coerceAtLeast(1)) {
+                        logCollector.info(TAG, "Early scan stop: ${output.count { it.success }} reachable profiles found (target=$stopAfterSuccessfulCount)")
+                        break
+                    }
                 }
                 return@withContext output
             } finally {
