@@ -1,7 +1,7 @@
 use crate::error::AceError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-/// Catch panics at the FFI boundary.
+/// Catch unwinding panics at the FFI boundary.
 /// Does **not** protect against abort / SIGSEGV / OOM (ADR-006 LIMITATION).
 pub fn guard<F, T>(f: F) -> Result<T, AceError>
 where
@@ -18,7 +18,7 @@ where
                 "unknown panic".to_string()
             };
             log::error!("Panic caught at FFI boundary: {}", message);
-            Err(AceError::Panic(message))
+            Err(AceError::Panic)
         }
     }
 }
@@ -36,7 +36,7 @@ mod tests {
     #[test]
     fn guard_catches_panic() {
         let result: Result<i32, AceError> = guard(|| panic!("boom"));
-        assert!(matches!(result, Err(AceError::Panic(_))));
+        assert!(matches!(result, Err(AceError::Panic)));
     }
 
     #[test]
