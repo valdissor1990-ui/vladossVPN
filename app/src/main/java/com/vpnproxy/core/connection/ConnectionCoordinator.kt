@@ -1,3 +1,1 @@
-package com.vpnproxy.core.connection
-
-// TEMPORARY - will be replaced
+LOAD_FROM_LOCAL_FILE_FAILED_IF_YOU_SEE_THIS
