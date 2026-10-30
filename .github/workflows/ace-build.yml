@@ -46,11 +46,10 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-ndk --locked
-          # Binary is provided by the uniffi crate with feature cli, or uniffi_bindgen package.
-          cargo install uniffi_bindgen --version 0.28.3 --locked \
-            || cargo install uniffi --version 0.28.3 --features cli --locked
+          # uniffi_bindgen is a library crate; its CLI binary requires the cli feature.
+          cargo install uniffi_bindgen --version 0.28.3 --features cli --locked
           command -v uniffi-bindgen
-          uniffi-bindgen --version || true
+          uniffi-bindgen --version
 
       - name: Host Rust unit tests
         run: |
