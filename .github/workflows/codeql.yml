@@ -84,7 +84,7 @@ jobs:
       - name: Install UniFFI bindgen CLI
         run: |
           set -euo pipefail
-          cargo install uniffi_bindgen --version 0.28.3 --features cli --locked
+          cargo install uniffi-bindgen-cli --version 0.28.3 --locked
           command -v uniffi-bindgen
           uniffi-bindgen --version
 
