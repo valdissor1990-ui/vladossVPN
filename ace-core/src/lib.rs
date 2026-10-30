@@ -5,6 +5,7 @@ uniffi::include_scaffolding!("ace_core");
 
 mod error;
 mod panic_guard;
+mod telemetry;
 mod version;
 
 pub use error::AceError;
@@ -74,6 +75,29 @@ pub fn ace_emit_test_event(payload: String) -> Result<(), AceError> {
         listener.on_event("Test".into(), payload);
         Ok(())
     })
+}
+
+
+/// Admit one versioned telemetry record into the bounded Stage C memory window.
+/// No persistence, prediction, or control action is performed.
+pub fn ace_ingest_telemetry(record_json: String) -> Result<(), AceError> {
+    panic_guard::guard(|| telemetry::ingest(&record_json).map_err(|e| {
+        log::warn!("Rejected ACE telemetry record: {}", e);
+        AceError::Internal
+    }))
+}
+
+/// Return the current bounded in-memory telemetry window as JSON.
+pub fn ace_telemetry_snapshot() -> Result<String, AceError> {
+    panic_guard::guard(|| telemetry::snapshot().map_err(|e| {
+        log::error!("ACE telemetry snapshot failed: {}", e);
+        AceError::Internal
+    }))
+}
+
+/// Number of records currently held in the in-memory telemetry window.
+pub fn ace_telemetry_count() -> Result<u32, AceError> {
+    panic_guard::guard(|| Ok(telemetry::count()))
 }
 
 pub fn ace_trigger_test_panic() -> Result<(), AceError> {
