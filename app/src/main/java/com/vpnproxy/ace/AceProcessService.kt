@@ -31,9 +31,11 @@ import uniffi.ace_core.aceVersion
 /**
  * Foreground Service in process `:ace`.
  *
- * Stage B only: Rust smoke calls and one-way Binder events to the main process.
- * All initialization and blocking Binder waits run on Dispatchers.IO, never
- * on the service main thread. This service does not control VPN or Smart Connect.
+ * Stage B control-plane foundation plus passive Stage C platform telemetry.
+ * Binder smoke events and telemetry stay observational; this service does not
+ * control VPN, Libbox, NetworkExecutor, or Smart Connect.
+ * Initialization and blocking Binder waits run on Dispatchers.IO, never on
+ * the service main thread.
  */
 class AceProcessService : Service() {
 
