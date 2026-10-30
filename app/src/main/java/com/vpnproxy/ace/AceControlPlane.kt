@@ -4,11 +4,8 @@ import android.content.Context
 import android.util.Log
 
 /**
- * Main-process facade for ACE.
- *
- * Stage B: start/stop the `:ace` process only.
- * Does **not** send commands to VpnService.
- * Does **not** touch Smart Connect.
+ * Main-process facade for ACE Stage B.
+ * Starts/stops `:ace` only. No VPN / Smart Connect control.
  */
 object AceControlPlane {
 
@@ -22,5 +19,10 @@ object AceControlPlane {
     fun stop(context: Context) {
         Log.i(TAG, "Stopping ACE process (:ace)")
         AceProcessService.stop(context.applicationContext)
+    }
+
+    fun triggerPanic(context: Context) {
+        Log.i(TAG, "Trigger ACE panic test")
+        AceProcessService.triggerPanic(context.applicationContext)
     }
 }

@@ -6,13 +6,11 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.ace.AceControlPlane
-import com.vpnproxy.ace.AceNativeBridge
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.singbox.DiagnosticOptions
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.smartconnect.AutoSwitcher
-import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
@@ -135,19 +133,17 @@ class DebugViewModel @Inject constructor(
         _message.value = "BATTERY snapshot logged"
     }
 
-    /** Stage B: start isolated :ace process (no VPN control). */
     fun startAceStageB() {
         runCatching {
             AceControlPlane.start(context)
-            logCollector.info("AceControlPlane", "Stage B Start ACE requested; nativeLoaded=${AceNativeBridge.isNativeLoaded()}")
-            _message.value = "ACE start requested (see logcat AceProcessService)"
+            logCollector.info("AceControlPlane", "Stage B Start ACE requested")
+            _message.value = "ACE start requested (logcat: AceProcessService)"
         }.onFailure {
             _message.value = "ACE start failed: ${it.message}"
             logCollector.error("AceControlPlane", "Stage B start failed", it)
         }
     }
 
-    /** Stage B: stop :ace process. */
     fun stopAceStageB() {
         runCatching {
             AceControlPlane.stop(context)
@@ -158,17 +154,13 @@ class DebugViewModel @Inject constructor(
         }
     }
 
-    /** Stage B: intentional panic via native bridge (if .so loaded). */
     fun triggerAcePanicStageB() {
-        val result = AceNativeBridge.triggerTestPanic()
-        logCollector.info(
-            "AceControlPlane",
-            "Stage B panic test: success=${result.isSuccess} error=${result.exceptionOrNull()?.message}"
-        )
-        _message.value = if (result.isSuccess) {
-            "Panic returned Ok (unexpected)"
-        } else {
-            "Panic contained or stub: ${result.exceptionOrNull()?.message}"
+        runCatching {
+            AceControlPlane.triggerPanic(context)
+            logCollector.info("AceControlPlane", "Stage B panic requested")
+            _message.value = "ACE panic requested (expect contained error in :ace log)"
+        }.onFailure {
+            _message.value = "ACE panic request failed: ${it.message}"
         }
     }
 
@@ -212,11 +204,7 @@ class DebugViewModel @Inject constructor(
     fun export() {
         viewModelScope.launch {
             val uri = logExporter.exportToDownloads()
-            _message.value = if (uri != null) {
-                "Сохранено в Downloads/"
-            } else {
-                "Не удалось сохранить журнал"
-            }
+            _message.value = if (uri != null) "Сохранено в Downloads/" else "Не удалось сохранить журнал"
         }
     }
 

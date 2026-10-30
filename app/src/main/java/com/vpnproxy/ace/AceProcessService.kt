@@ -13,21 +13,19 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.R
 import com.vpnproxy.ace.ipc.AceIpcClient
+import uniffi.ace_core.AceListener
+import uniffi.ace_core.aceEmitTestEvent
+import uniffi.ace_core.aceInitialize
+import uniffi.ace_core.acePing
+import uniffi.ace_core.aceShutdown
+import uniffi.ace_core.aceTriggerTestPanic
+import uniffi.ace_core.aceVersion
 
 /**
  * Foreground Service in process `:ace`.
  *
- * Stage B responsibilities:
- *  - Own the ACE process lifecycle
- *  - Load native library when available (provisional UniFFI)
- *  - Forward test events to main via Binder
- *
- * Does **not** contain Telemetry, Digital Twin, Prediction,
- * Decision Engine, or NetworkExecutor.
- *
- * Native UniFFI calls are behind [AceNativeBridge] so the service
- * still starts if the .so is not yet packaged (LIMITATION until NDK build
- * is wired in CI).
+ * Stage B: load libace_core.so via UniFFI, prove Rust FFI + Binder path.
+ * Does **not** control VPN or Smart Connect.
  */
 class AceProcessService : Service() {
 
@@ -40,10 +38,21 @@ class AceProcessService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            Log.i(TAG, "ACTION_STOP received")
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                Log.i(TAG, "ACTION_STOP")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_PANIC -> {
+                runCatching {
+                    aceTriggerTestPanic()
+                    Log.w(TAG, "aceTriggerTestPanic returned Ok (unexpected)")
+                }.onFailure {
+                    Log.i(TAG, "aceTriggerTestPanic contained: ${it.javaClass.simpleName}: ${it.message}")
+                }
+                return START_STICKY
+            }
         }
 
         promoteToForeground()
@@ -52,16 +61,32 @@ class AceProcessService : Service() {
         ipcClient = client
 
         runCatching {
-            val version = AceNativeBridge.version()
+            val version = aceVersion()
             Log.i(TAG, "ACE version: $version")
+            require(version.contains("(rust, target=")) {
+                "ACE version missing rust marker — not real FFI: $version"
+            }
 
-            AceNativeBridge.initialize(AceListenerImpl(client))
-            val pong = AceNativeBridge.ping()
+            val listener = object : AceListener {
+                override fun onEvent(event: String, payload: String) {
+                    Log.i(TAG, "ACE event=$event payload=$payload")
+                    if (event == "Test") {
+                        runCatching { client.forwardTestEvent(payload) }
+                            .onFailure { Log.e(TAG, "IPC forward failed", it) }
+                    }
+                }
+            }
+            aceInitialize(listener)
+
+            val pong = acePing()
             Log.i(TAG, "ACE ping: $pong")
+            require(pong.contains("(rust, target=")) {
+                "ACE ping missing rust marker — not real FFI: $pong"
+            }
 
-            AceNativeBridge.emitTestEvent("hello from :ace")
+            aceEmitTestEvent("hello from :ace")
         }.onFailure {
-            Log.e(TAG, "ACE init / smoke path failed (native may be unavailable)", it)
+            Log.e(TAG, "ACE native init failed", it)
             runCatching { client.forwardError(it.message ?: "init failed") }
         }
 
@@ -70,7 +95,7 @@ class AceProcessService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "AceProcessService.onDestroy")
-        runCatching { AceNativeBridge.shutdown() }
+        runCatching { aceShutdown() }
         ipcClient?.disconnect()
         ipcClient = null
         super.onDestroy()
@@ -95,12 +120,9 @@ class AceProcessService : Service() {
         val channelId = "ace_process"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val mgr = getSystemService(NotificationManager::class.java)
-            val channel = NotificationChannel(
-                channelId,
-                "Vladoss ACE",
-                NotificationManager.IMPORTANCE_LOW
+            mgr?.createNotificationChannel(
+                NotificationChannel(channelId, "Vladoss ACE", NotificationManager.IMPORTANCE_LOW)
             )
-            mgr?.createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Vladoss ACE")
@@ -114,6 +136,7 @@ class AceProcessService : Service() {
         private const val TAG = "AceProcessService"
         private const val NOTIFICATION_ID = 0xACE01
         const val ACTION_STOP = "com.vpnproxy.ace.STOP"
+        const val ACTION_PANIC = "com.vpnproxy.ace.PANIC"
 
         fun start(context: Context) {
             val intent = Intent(context, AceProcessService::class.java)
@@ -125,10 +148,15 @@ class AceProcessService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AceProcessService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            context.startService(
+                Intent(context, AceProcessService::class.java).apply { action = ACTION_STOP }
+            )
+        }
+
+        fun triggerPanic(context: Context) {
+            context.startService(
+                Intent(context, AceProcessService::class.java).apply { action = ACTION_PANIC }
+            )
         }
     }
 }
