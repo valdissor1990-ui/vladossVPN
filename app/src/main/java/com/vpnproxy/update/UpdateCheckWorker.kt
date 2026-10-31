@@ -23,10 +23,8 @@ import kotlinx.coroutines.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
- * WorkManager: периодически проверяет обновление и скачивает APK в фоне.
- * После успешной загрузки показывает уведомление «нужно установить».
- * Если пользователь не установил и вышла новая версия — скачивается последняя,
- * старый APK удаляется.
+ * WorkManager only checks for new releases. It never downloads or installs an APK;
+ * downloading requires an explicit tap on the app's "Скачать" button.
  */
 class UpdateCheckWorker(
     context: Context,
@@ -71,20 +69,22 @@ class UpdateCheckWorker(
             val updateManager = deps.updateManager()
             val log = deps.logCollector()
 
-            updateManager.checkAndPrefetch()
+            updateManager.checkForUpdate(force = false)
             when (val state = updateManager.state.value) {
+                is UpdateManager.State.UpdateAvailable -> {
+                    val version = state.release.extractVersionName()
+                    log.info("UpdateCheckWorker", "Update available: $version; waiting for user confirmation")
+                    showUpdateAvailableNotification(version)
+                }
                 is UpdateManager.State.Ready -> {
-                    log.info(
-                        "UpdateCheckWorker",
-                        "APK ready: ${state.release.extractVersionName()}"
-                    )
+                    log.info("UpdateCheckWorker", "Previously downloaded APK ready: ${state.release.extractVersionName()}")
                     showReadyNotification(state.release.extractVersionName())
                 }
                 is UpdateManager.State.UpToDate -> {
                     log.debug("UpdateCheckWorker", "Up to date")
                 }
                 is UpdateManager.State.Error -> {
-                    log.warn("UpdateCheckWorker", "Prefetch error: ${state.message}")
+                    log.warn("UpdateCheckWorker", "Update check error: ${state.message}")
                 }
                 else -> {
                     log.debug("UpdateCheckWorker", "State after prefetch: $state")
@@ -110,6 +110,40 @@ class UpdateCheckWorker(
             } catch (_: Exception) { /* ignore */ }
             Result.retry()
         }
+    }
+
+    private fun showUpdateAvailableNotification(version: String) {
+        val ctx = applicationContext
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Обновления VPNProxy",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Уведомления о доступных обновлениях"
+            }
+            ctx.getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
+        }
+
+        val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+        val pending = android.app.PendingIntent.getActivity(
+            ctx, 0, intent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_vpn)
+            .setContentTitle("Доступно обновление $version")
+            .setContentText("Откройте приложение и нажмите «Скачать», если хотите обновиться.")
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(ctx).notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) { /* нет POST_NOTIFICATIONS */ }
     }
 
     private fun showReadyNotification(version: String) {
