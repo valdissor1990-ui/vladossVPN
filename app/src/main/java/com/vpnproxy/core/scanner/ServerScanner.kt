@@ -146,7 +146,12 @@ class ServerScanner @Inject constructor(
             val savedAt = scanCache().getLong("saved_at", 0L)
             val cachedKeys = _scannedServers.value.map { server -> scanKey(server.config) }.toSet()
             val cacheFresh = savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
-            if (!force && cacheFresh && cachedKeys == requestedKeys && _scannedServers.value.size == unique.size) {
+            val hasReachableCache = _scannedServers.value.any {
+                it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+            }
+            if (!force && cacheFresh && cachedKeys == requestedKeys &&
+                _scannedServers.value.size == unique.size && hasReachableCache
+            ) {
                 scannedConfigKeys = requestedKeys
                 scannedNetworkBucket = networkBucket
                 logCollector.info(TAG, "Reusing ${unique.size} fresh cached server scan results")
