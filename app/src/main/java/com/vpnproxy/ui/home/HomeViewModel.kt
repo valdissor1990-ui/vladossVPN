@@ -342,7 +342,6 @@ class HomeViewModel @Inject constructor(
             connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
             VpnProxyService.clearError()
             _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
-            armConnectingWatchdog()
             vpnPermissionRequester?.invoke()
         } catch (e: Exception) {
             connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
@@ -353,7 +352,6 @@ class HomeViewModel @Inject constructor(
     fun onVpnPermissionGranted() {
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
-        armConnectingWatchdog()
         ensureServiceRunning()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
@@ -429,7 +427,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
-        cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
         VpnProxyService.clearError()
