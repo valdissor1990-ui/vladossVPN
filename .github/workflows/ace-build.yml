@@ -109,8 +109,24 @@ jobs:
       - name: Compile production Direct variant (no APK packaging)
         run: ./gradlew :app:compileDirectReleaseKotlin --stacktrace
 
-      - name: Compile Direct debug Kotlin sources (no APK packaging)
-        run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
+      - name: Assemble installable Direct Debug prototype
+        run: ./gradlew :app:assembleDirectDebug --stacktrace
+
+      - name: Verify prototype APKs
+        run: |
+          set -euo pipefail
+          APK_DIR="app/build/outputs/apk/direct/debug"
+          find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print
+          test -n "$(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          ls -lh "$APK_DIR"/*.apk
+
+      - name: Upload installable prototype APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vladoss-ace-prototype-direct-debug
+          path: app/build/outputs/apk/direct/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload logs and native libs
         if: always()
