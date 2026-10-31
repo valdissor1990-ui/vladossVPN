@@ -76,9 +76,9 @@ class SubscriptionUpdateWorker(
                 return Result.success()
             }
             val repository = deps.subscriptionRepository()
-            val count = repository.refreshAll()
+            val count = repository.refreshAll(skipIfFresh = true)
             val providerConfigCount = repository.getAllConfigs().size
-            deps.serverScanner().scanAfterSubscriptionUpdate(repository.getAllConfigs())
+            deps.serverScanner().scanForConnection(repository.getAllConfigs())
             deps.logCollector().info(
                 "SubUpdateWorker",
                 "Refreshed subscriptions: uniqueConfigs=$count providerConfigs=$providerConfigCount; server scan completed"
