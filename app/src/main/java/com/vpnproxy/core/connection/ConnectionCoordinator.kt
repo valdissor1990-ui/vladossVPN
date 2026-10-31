@@ -349,10 +349,12 @@ class ConnectionCoordinator @Inject constructor(
                 } else logW("BindRetryReady ignored — state=$stateNow hasServerSelected=$hasServerSelected")
             }
             is ConnectionEvent.Timeout -> {
+                invalidateTrafficValidation("connection timeout event")
                 logW("Timeout in state $current (retry=$retryCount)")
                 handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
             }
             is ConnectionEvent.ShowError -> {
+                invalidateTrafficValidation("ShowError event")
                 if (current is ConnectionState.Error) {
                     logD("ShowError ignored — already in Error: ${current.message}")
                     return
@@ -488,6 +490,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
             is ConnectionEvent.ServiceStopped -> {
+                invalidateTrafficValidation("VPN service stopped")
                 when (current) {
                     is ConnectionState.Disconnecting -> setState(ConnectionState.Disconnected, reason = "ServiceStopped")
                     is ConnectionState.Disconnected -> logD("ServiceStopped while already Disconnected")
