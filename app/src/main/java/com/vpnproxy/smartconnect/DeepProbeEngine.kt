@@ -213,7 +213,9 @@ class DeepProbeEngine @Inject constructor(
                 "VPN стал активен до начала проверки профилей"
             }
             check(running.get() && isActive) { "Profile ping cancelled" }
-            val started = SingboxProxyClient.start(context, configJson)
+            val started = runInterruptible(Dispatchers.IO) {
+                SingboxProxyClient.start(context, configJson)
+            }
             check(started) { "Sing-box failed to start for profile ping" }
 
             try {
@@ -296,7 +298,9 @@ class DeepProbeEngine @Inject constructor(
             }
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
-                SingboxProxyClient.start(context, configJson)
+                runInterruptible(Dispatchers.IO) {
+                    SingboxProxyClient.start(context, configJson)
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
