@@ -337,10 +337,19 @@ class DeepProbeEngine @Inject constructor(
     }
 
     private fun allocatePorts(count: Int): List<Int> {
-        val ports = LinkedHashSet<Int>()
-        repeat(count) {
-            ServerSocket(0).use { socket -> ports += socket.localPort }
+        require(count > 0) { "At least one probe port is required" }
+        // Keep every ephemeral socket bound until all ports have been selected.
+        // Closing each socket immediately lets the OS hand the same port out again.
+        val reservations = ArrayList<ServerSocket>(count)
+        try {
+            repeat(count) { reservations += ServerSocket(0) }
+            val ports = reservations.map { it.localPort }
+            check(ports.size == ports.toSet().size) {
+                "OS returned duplicate ephemeral ports for profile probes"
+            }
+            return ports
+        } finally {
+            reservations.forEach { socket -> runCatching { socket.close() } }
         }
-        return ports.toList()
     }
 }
