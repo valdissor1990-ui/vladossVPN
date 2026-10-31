@@ -87,7 +87,7 @@ class UpdateCheckWorker(
                     log.warn("UpdateCheckWorker", "Update check error: ${state.message}")
                 }
                 else -> {
-                    log.debug("UpdateCheckWorker", "State after prefetch: $state")
+                    log.debug("UpdateCheckWorker", "State after update check: $state")
                 }
             }
             Result.success()
@@ -172,7 +172,7 @@ class UpdateCheckWorker(
             .setContentText("Необходимо установить. Откройте приложение и нажмите «Установить».")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    "Обновление $version уже скачано в фоне.\n" +
+                    "Обновление $version уже скачано после подтверждения пользователя.\n" +
                         "Откройте VPNProxy и нажмите «Установить».\n" +
                         "Если выйдет более новая версия до установки — будет сохранён последний APK."
                 )
