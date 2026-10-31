@@ -420,7 +420,8 @@ class ServerScanner @Inject constructor(
 
     private fun restoreCachedResults(configs: List<ParsedConfig>) {
         val savedAt = scanCache().getLong("saved_at", 0L)
-        val cacheFresh = savedAt > 0L && System.currentTimeMillis() - savedAt <= scanCacheMaxAgeMs
+        val cacheFresh = savedAt > 0L &&
+            System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
         val restoredByKey = linkedMapOf<String, ScoredServer>()
         if (cacheFresh) {
             configs.forEach { config ->
