@@ -165,7 +165,8 @@ class ServerScanner @Inject constructor(
             }
         }
 
-    fun cancelScan() {
+    fun cancelScan(preservePendingFullScan: Boolean = false) {
+        if (!preservePendingFullScan) pendingFullScanConfigs = emptyList()
         val wasScanning = _isScanning.value
         scanGeneration.incrementAndGet()
         _isScanning.value = false
@@ -186,7 +187,7 @@ class ServerScanner @Inject constructor(
             if (_isScanning.value && !activeScanIsConnection) {
                 logCollector.info(TAG, "Connection scan preempts background profile scan")
                 if (activeScanConfigs.isNotEmpty()) pendingFullScanConfigs = activeScanConfigs
-                cancelScan()
+                cancelScan(preservePendingFullScan = true)
             }
             return scanMutex.withLock {
         val generationForScan = scanGeneration.get()
