@@ -5,12 +5,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vpnproxy.ace.AceControlPlane
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.singbox.DiagnosticOptions
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.smartconnect.AutoSwitcher
-import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.diagnostics.BatteryMonitor
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
@@ -133,6 +133,37 @@ class DebugViewModel @Inject constructor(
         _message.value = "BATTERY snapshot logged"
     }
 
+    fun startAceStageB() {
+        runCatching {
+            AceControlPlane.start(context)
+            logCollector.info("AceControlPlane", "Stage B Start ACE requested")
+            _message.value = "ACE start requested (logcat: AceProcessService)"
+        }.onFailure {
+            _message.value = "ACE start failed: ${it.message}"
+            logCollector.error("AceControlPlane", "Stage B start failed", it)
+        }
+    }
+
+    fun stopAceStageB() {
+        runCatching {
+            AceControlPlane.stop(context)
+            logCollector.info("AceControlPlane", "Stage B Stop ACE requested")
+            _message.value = "ACE stop requested"
+        }.onFailure {
+            _message.value = "ACE stop failed: ${it.message}"
+        }
+    }
+
+    fun triggerAcePanicStageB() {
+        runCatching {
+            AceControlPlane.triggerPanic(context)
+            logCollector.info("AceControlPlane", "Stage B panic requested")
+            _message.value = "ACE panic requested (expect contained error in :ace log)"
+        }.onFailure {
+            _message.value = "ACE panic request failed: ${it.message}"
+        }
+    }
+
     fun clearCrash() {
         CrashHandler.clearCrashes(context)
         _lastCrash.value = null
@@ -173,11 +204,7 @@ class DebugViewModel @Inject constructor(
     fun export() {
         viewModelScope.launch {
             val uri = logExporter.exportToDownloads()
-            _message.value = if (uri != null) {
-                "Сохранено в Downloads/"
-            } else {
-                "Не удалось сохранить журнал"
-            }
+            _message.value = if (uri != null) "Сохранено в Downloads/" else "Не удалось сохранить журнал"
         }
     }
 

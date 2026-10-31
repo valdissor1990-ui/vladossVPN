@@ -552,6 +552,13 @@ class AutoSwitcher @Inject constructor(
 
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
+        // HealthChecker deliberately uses the active VPN route while a tunnel is running.
+        // Such measurements are not candidate-specific and must never trigger ranking switches.
+        if (VpnProxyService.isRunning.value) {
+            rankingJob?.cancel()
+            logCollector.info(TAG, "Background candidate ranking skipped: active VPN route cannot measure alternative profiles")
+            return
+        }
         if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
         val scopeGeneration = providerScopeGeneration
         rankingJob?.cancel()
@@ -568,8 +575,21 @@ class AutoSwitcher @Inject constructor(
                 val foreign = allowed.filterNot(::isRussian)
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
+                if (VpnProxyService.isRunning.value) {
+                    logCollector.info(TAG, "Discarding candidate ranking: VPN became active during latency probes")
+                    return@launch
+                }
                 // Region is a probe-order hint only; it must not override measured quality.
-                val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                val latencyResults = ruResults + foreignResults
+                val speedCandidates = latencyResults.filter { it.success }.sortedBy { it.latencyMs }.take(5)
+                val speedResults = if (speedCandidates.isNotEmpty()) {
+                    healthChecker.testSpeed(speedCandidates.map { it.config })
+                } else emptyList()
+                if (VpnProxyService.isRunning.value) {
+                    logCollector.info(TAG, "Discarding candidate ranking: VPN became active during throughput probes")
+                    return@launch
+                }
+                val ranked = scoringEngine.computeScore(latencyResults, speedResults)
                 if (scopeGeneration != providerScopeGeneration) {
                     logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
                     return@launch
@@ -678,29 +698,6 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
-    suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
-        if (suppressIfFrozen("selectBest")) return _currentServer.value
-        val allowed = filterUsableServers(configs).filter(::isWithinProviderScope)
-        if (allowed.isEmpty()) {
-            logCollector.warn(TAG, "selectBest: no usable candidates in selected provider scope")
-            return null
-        }
-        val russian = allowed.filter(::isRussian)
-        val foreign = allowed.filterNot(::isRussian)
-        val ordered = russian + foreign
-        val results = healthChecker.testLatency(ordered)
-        // Use the same measured-quality ordering as background ranking; region is not a score.
-        val ranked = scoringEngine.computeScore(results)
-        _rankedServers.value = ranked
-        val best = ranked.firstOrNull() ?: return null
-        _currentServer.value = best
-        baselineRtt = best.latencyMs
-        consecutiveErrors = 0
-        previousRtt = null
-        logCollector.info(TAG, "selectBest -> ${best.config.name} (${best.latencyMs}ms)")
-        return best
-    }
-
     fun forceSelect(server: ScoredServer): Boolean {
         if (suppressIfFrozen("forceSelect", server.config.name)) return false
         if (!isWithinProviderScope(server.config)) {
@@ -762,32 +759,6 @@ class AutoSwitcher @Inject constructor(
         } finally {
             switching.set(false)
         }
-    }
-
-    fun autoReselectIfNeeded() {
-        if (manualSelectionMode) {
-            logCollector.info(TAG, "Automatic reselection suppressed in manual mode")
-            return
-        }
-        if (suppressIfFrozen("ServerSelected", _rankedServers.value.firstOrNull()?.config?.name ?: "unknown")) return
-        val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
-        if (ranked.isEmpty()) return
-        val best = ranked.firstOrNull() ?: return
-        val current = _currentServer.value
-        if (sameServer(current?.config, best.config)) {
-            _currentServer.value = best
-            baselineRtt = best.latencyMs
-            consecutiveErrors = 0
-            logCollector.info(TAG, "Auto re-select skipped — already on ${best.config.name}; metrics refreshed")
-            return
-        }
-        _currentServer.value = best
-        baselineRtt = best.latencyMs
-        consecutiveErrors = 0
-        _switchEvents.value = "Автопереключение на ${best.config.name}"
-        logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
-        connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-        connectionCoordinator.send(ConnectionEvent.ServerSelected(best, connectionCoordinator.activeTraceId))
     }
 
     private fun sameServer(

@@ -41,7 +41,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @HiltViewModel
@@ -50,7 +49,6 @@ class HomeViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val serverScanner: ServerScanner,
     private val autoSwitcher: AutoSwitcher,
-    private val scoringEngine: ScoringEngine,
     private val trafficCollector: TrafficStatsCollector,
     private val pingService: PingService,
     private val logCollector: LogCollector,
@@ -62,8 +60,6 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
-        private const val SERVER_SELECTION_TIMEOUT_MS = 25_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
@@ -103,7 +99,6 @@ class HomeViewModel @Inject constructor(
     val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
 
     private var pingJob: Job? = null
-    private var connectingWatchdogJob: Job? = null
     private var selectionJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
@@ -118,22 +113,18 @@ class HomeViewModel @Inject constructor(
             connectionCoordinator.state.collect { state ->
                 when (state) {
                     is ConnectionState.Disconnected, is ConnectionState.Disconnecting -> {
-                        cancelConnectingWatchdog()
                         cancelSelectionJob("state=$state")
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
                     }
                     is ConnectionState.Connecting, is ConnectionState.Reconnecting -> {
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
-                        armConnectingWatchdog()
                     }
                     is ConnectionState.Verifying -> {
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.VERIFYING, isBusy = true, lastErrorMessage = null)
-                        armConnectingWatchdog()
-                    }
+                                    }
                     is ConnectionState.Connected -> {
                         val diagnosticOptions = DiagnosticSettings.load(context)
                         autoSwitcher.setDiagnosticFreeze(DebugFlags.diagnosticEnabled() && diagnosticOptions.freezeAutoSwitcherAfterConnected)
-                        cancelConnectingWatchdog()
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
                             serverScanner.recordSuccessfulConnection(server)
@@ -153,7 +144,6 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Error -> {
-                        cancelConnectingWatchdog()
                         cancelSelectionJob("Error")
                         pendingRankingConfigs = emptyList()
                         _uiState.value = _uiState.value.copy(
@@ -228,24 +218,6 @@ class HomeViewModel @Inject constructor(
         }
         selectionJob = null
         _uiState.value = _uiState.value.copy(isBusy = false)
-    }
-
-    private fun armConnectingWatchdog() {
-        connectingWatchdogJob?.cancel()
-        connectingWatchdogJob = viewModelScope.launch {
-            delay(CONNECTING_UI_WATCHDOG_MS)
-            val s = connectionCoordinator.state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
-                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
-                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
-            }
-        }
-    }
-
-    private fun cancelConnectingWatchdog() {
-        connectingWatchdogJob?.cancel()
-        connectingWatchdogJob = null
     }
 
     private fun startPinging() {
@@ -369,7 +341,6 @@ class HomeViewModel @Inject constructor(
             connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
             VpnProxyService.clearError()
             _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
-            armConnectingWatchdog()
             vpnPermissionRequester?.invoke()
         } catch (e: Exception) {
             connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
@@ -380,7 +351,6 @@ class HomeViewModel @Inject constructor(
     fun onVpnPermissionGranted() {
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
-        armConnectingWatchdog()
         ensureServiceRunning()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
@@ -393,9 +363,9 @@ class HomeViewModel @Inject constructor(
                 var refreshedSubscription = false
                 if (hasNetwork) {
                     configs = try {
-                        subscriptionRepository.refreshAll()
-                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
-                            serverScanner.scanAfterSubscriptionUpdate(refreshed)
+                        subscriptionRepository.refreshAll(skipIfFresh = true)
+                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also {
+                            // ConnectServerSelector performs the one prioritized scan immediately below.
                             refreshedSubscription = true
                         }
                     } catch (c: CancellationException) {
@@ -412,18 +382,19 @@ class HomeViewModel @Inject constructor(
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
-                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    ConnectServerSelector.select(
-                        configs = configs,
-                        isAutomaticMode = _uiState.value.isAutomaticMode,
-                        manuallySelected = manuallySelectedServer,
-                        lastServerStore = lastServerStore,
-                        serverScanner = serverScanner,
-                        autoSwitcher = autoSwitcher,
-                        logCollector = logCollector,
-                        traceMsg = { tmsg(it) },
-                    )
-                }
+                // Do not impose a shorter UI timeout than the scanner's multi-batch probe.
+                // The ConnectionCoordinator owns the connection deadline; cancelling this scan
+                // after 25 seconds could hide a reachable profile that appears later in the list.
+                val selected = ConnectServerSelector.select(
+                    configs = configs,
+                    isAutomaticMode = _uiState.value.isAutomaticMode,
+                    manuallySelected = manuallySelectedServer,
+                    lastServerStore = lastServerStore,
+                    serverScanner = serverScanner,
+                    autoSwitcher = autoSwitcher,
+                    logCollector = logCollector,
+                    traceMsg = { tmsg(it) },
+                )
                 if (selected == null) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
@@ -446,7 +417,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
-        cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
         VpnProxyService.clearError()
@@ -456,7 +426,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
-        cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
         VpnProxyService.clearError()

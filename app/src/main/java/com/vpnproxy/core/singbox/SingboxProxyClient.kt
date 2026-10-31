@@ -39,7 +39,13 @@ object SingboxProxyClient {
             true
         } catch (t: Throwable) {
             Log.e(TAG, "Temporary Sing-box startup failed", t)
-            runCatching { core.stop() }
+            runCatching { core.stopTemporaryBlocking().getOrThrow() }
+            if (t is InterruptedException) {
+                // runInterruptible() uses thread interruption to stop blocking startup. Do not
+                // convert that cancellation signal into an ordinary "core failed to start" result.
+                Thread.currentThread().interrupt()
+                throw t
+            }
             false
         }
     }
@@ -48,6 +54,7 @@ object SingboxProxyClient {
     fun stop(context: Context? = null) {
         val core = activeCore
         activeCore = null
-        runCatching { core?.stop() }.onFailure { Log.w(TAG, "Failed to stop temporary Sing-box", it) }
+        runCatching { core?.stopTemporaryBlocking()?.getOrThrow() }
+            .onFailure { Log.w(TAG, "Failed to stop temporary Sing-box", it) }
     }
 }

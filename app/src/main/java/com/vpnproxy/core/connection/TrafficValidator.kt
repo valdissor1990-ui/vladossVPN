@@ -3,9 +3,12 @@ package com.vpnproxy.core.connection
 import com.vpnproxy.core.probe.ProbeOutcome
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.logging.LogCollector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -83,6 +86,7 @@ class TrafficValidator @Inject constructor(
             val startedAtNs = System.nanoTime()
             var connection: HttpURLConnection? = null
             try {
+                currentCoroutineContext().ensureActive()
                 connection = (URL(probeUrl).openConnection(localProxy) as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = CONNECT_TIMEOUT_MS
@@ -127,6 +131,8 @@ class TrafficValidator @Inject constructor(
                         durationMs = elapsed
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
                 val outcome = mapException(e)

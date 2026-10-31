@@ -151,6 +151,18 @@ object SingboxConfigBuilder {
                 put("level", "debug")
                 put("timestamp", true)
             })
+            // Probe cores need an explicit Android system resolver; the default
+            // loopback DNS stub is not listening in this temporary proxy-only process.
+            put("dns", buildJsonObject {
+                put("servers", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "local")
+                        put("tag", "probe-dns")
+                    })
+                })
+                put("final", "probe-dns")
+                put("strategy", "prefer_ipv4")
+            })
             put("inbounds", buildJsonArray {
                 configs.forEachIndexed { index, _ ->
                     add(buildJsonObject {

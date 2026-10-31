@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -41,6 +43,7 @@ class ServerScanner @Inject constructor(
 ) {
     companion object {
         private const val TAG = "ServerScanner"
+        private const val CONNECTION_PROBE_BATCH_SIZE = 16
         private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
     }
 
@@ -56,15 +59,69 @@ class ServerScanner @Inject constructor(
     @Volatile private var backgroundJob: Job? = null
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
+    @Volatile private var activeScanIsConnection = false
+    @Volatile private var activeScanConfigs: List<ParsedConfig> = emptyList()
+    private val connectionScanWaiters = AtomicInteger(0)
     @Volatile private var pendingFullScanConfigs: List<ParsedConfig> = emptyList()
     private val scanGeneration = AtomicLong(0L)
     private fun scanCache() = context.getSharedPreferences("server_scan_cache_v2_${autoSwitcher.currentNetworkBucket()}", Context.MODE_PRIVATE)
     private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
     private val scanCacheMaxAgeMs = RESCAN_INTERVAL_MS
 
-    // NOTE: Full body restored from last good revision; behavioral fixes land in HomeViewModel.
+    /** Shared bounded probe loop; a null target means exhaust every profile. */
+    private suspend fun probeProfilesInBatches(
+        probeConfigs: List<ParsedConfig>,
+        resultByKey: MutableMap<String, ScoredServer>,
+        generation: Long,
+        targetAvailableCount: Int? = null
+    ): Int {
+        var probedCount = 0
+        val target = targetAvailableCount?.coerceAtLeast(1)
+        try {
+            for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
+                currentCoroutineContext().ensureActive()
+                if (scanGeneration.get() != generation) break
+                val remainingTarget = target?.let { expected ->
+                    (expected - resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }).coerceAtLeast(1)
+                }
+                val batchResults = deepProbeEngine.pingProfiles(
+                    probeBatch,
+                    stopAfterSuccessfulCount = remainingTarget
+                ) { batch ->
+                    if (scanGeneration.get() == generation) {
+                        batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                        probedCount += batch.size
+                        _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+                    }
+                }
+                batchResults.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                if (target != null) {
+                    val reachableNow = resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }
+                    if (reachableNow >= target) {
+                        logCollector.info(TAG, "Connection scan reached target=$target after $probedCount measured profiles")
+                        break
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logCollector.warn(TAG, "Profile probe batch failed: ${error.message}")
+        }
+        return probedCount
+    }
+
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
+            if (connectionScanWaiters.get() > 0) {
+                pendingFullScanConfigs = configs.distinctBy(::scanKey)
+                logCollector.info(TAG, "Full scan deferred: a connection scan is waiting; latest profile set queued")
+                return@withLock _scannedServers.value
+            }
             val networkBucket = autoSwitcher.currentNetworkBucket()
             if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
                 _scannedServers.value = emptyList()
@@ -89,51 +146,54 @@ class ServerScanner @Inject constructor(
             val savedAt = scanCache().getLong("saved_at", 0L)
             val cachedKeys = _scannedServers.value.map { server -> scanKey(server.config) }.toSet()
             val cacheFresh = savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
-            if (!force && cacheFresh && cachedKeys == requestedKeys && _scannedServers.value.size == unique.size) {
+            val hasReachableCache = _scannedServers.value.any {
+                it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+            }
+            if (!force && cacheFresh && cachedKeys == requestedKeys &&
+                _scannedServers.value.size == unique.size && hasReachableCache
+            ) {
                 scannedConfigKeys = requestedKeys
                 scannedNetworkBucket = networkBucket
                 logCollector.info(TAG, "Reusing ${unique.size} fresh cached server scan results")
                 return@withLock _scannedServers.value
             }
             if (VpnProxyService.isRunning.value) {
-                logCollector.info(TAG, "Profile scan deferred while VPN is active; retaining last known results")
+                pendingFullScanConfigs = unique
+                logCollector.info(TAG, "Profile scan deferred while VPN is active; queued for after disconnect")
                 return@withLock _scannedServers.value
             }
             _isScanning.value = true
             try {
                 activeScanJob = currentCoroutineContext()[Job]
+                activeScanIsConnection = false
+                activeScanConfigs = unique
                 val resultByKey = linkedMapOf<String, ScoredServer>()
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                 val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
-                var probedCount = 0
-                if (probeConfigs.isNotEmpty()) {
-                    try {
-                        deepProbeEngine.pingProfiles(probeConfigs) { batch ->
-                            if (scanGeneration.get() == generation) {
-                                batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                                probedCount += batch.size
-                                _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                            }
-                        }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        logCollector.warn(TAG, "Profile scan failed: ${error.message}")
-                    }
-                }
+                val probedCount = if (probeConfigs.isNotEmpty()) {
+                    probeProfilesInBatches(probeConfigs, resultByKey, generation)
+                } else 0
                 val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
                 if (scanGeneration.get() != generation) {
                     logCollector.info(TAG, "Discarded cancelled scan results")
                     return@withLock _scannedServers.value
                 }
                 val complete = probedCount >= probeConfigs.size
-                scannedConfigKeys = if (complete) requestedKeys else emptySet()
+                val hasReachable = results.any {
+                    it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                }
+                // An exhaustive scan with zero reachable profiles is not a reusable
+                // success cache: the next user connection must retry the probes.
+                scannedConfigKeys = if (complete && hasReachable) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
                 if (complete) {
-                    persistScanResults(results)
-                    pendingFullScanConfigs = emptyList()
+                    if (hasReachable) persistScanResults(results)
+                    else scanCache().edit().putLong("saved_at", 0L).apply()
+                    if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
+                        pendingFullScanConfigs = emptyList()
+                    }
                 } else scanCache().edit().putLong("saved_at", 0L).apply()
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
@@ -141,11 +201,14 @@ class ServerScanner @Inject constructor(
                 results
             } finally {
                 activeScanJob = null
+                activeScanIsConnection = false
+                activeScanConfigs = emptyList()
                 _isScanning.value = false
             }
         }
 
-    fun cancelScan() {
+    fun cancelScan(preservePendingFullScan: Boolean = false) {
+        if (!preservePendingFullScan) pendingFullScanConfigs = emptyList()
         val wasScanning = _isScanning.value
         scanGeneration.incrementAndGet()
         _isScanning.value = false
@@ -155,16 +218,20 @@ class ServerScanner @Inject constructor(
         else logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
     }
 
-    suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
-        val currentKeys = configs.map(::scanKey).toSet()
-        _scannedServers.value = _scannedServers.value.filter { scanKey(it.config) in currentKeys }
-        return scanForConnection(configs)
-    }
-
     suspend fun scanForConnection(
         configs: List<ParsedConfig>,
         targetAvailableCount: Int = 4
-    ): List<ScoredServer> = scanMutex.withLock {
+    ): List<ScoredServer> {
+        connectionScanWaiters.incrementAndGet()
+        try {
+            // A user-initiated connection scan has priority over a background full scan.
+            // Cancel the background owner before waiting for the shared temporary Sing-box core.
+            if (_isScanning.value && !activeScanIsConnection) {
+                logCollector.info(TAG, "Connection scan preempts background profile scan")
+                if (activeScanConfigs.isNotEmpty()) pendingFullScanConfigs = activeScanConfigs
+                cancelScan(preservePendingFullScan = true)
+            }
+            return scanMutex.withLock {
         val generationForScan = scanGeneration.get()
         val networkBucket = autoSwitcher.currentNetworkBucket()
         if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
@@ -181,7 +248,12 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = emptyList()
             return@withLock emptyList()
         }
-        if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers()
+        val hasReachableCachedResult = _scannedServers.value.any {
+            it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+        }
+        if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size && hasReachableCachedResult) {
+            return@withLock availableServers()
+        }
         val alreadyReachable = _scannedServers.value.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         if (scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
             logCollector.info(TAG, "Reusing staged scan: reachable=$alreadyReachable target=$targetAvailableCount")
@@ -190,51 +262,55 @@ class ServerScanner @Inject constructor(
         if (_scannedServers.value.isEmpty()) restoreCachedResults(unique)
         val savedAt = scanCache().getLong("saved_at", 0L)
         val cachedKeys = _scannedServers.value.map { scanKey(it.config) }.toSet()
+        val hasReachableDiskCache = _scannedServers.value.any {
+            it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+        }
         if (savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
-            cachedKeys == requestedKeys && _scannedServers.value.size == unique.size
+            cachedKeys == requestedKeys && _scannedServers.value.size == unique.size && hasReachableDiskCache
         ) {
             scannedConfigKeys = requestedKeys
             scannedNetworkBucket = networkBucket
             return@withLock availableServers()
         }
-        if (VpnProxyService.isRunning.value) return@withLock availableServers()
+        if (VpnProxyService.isRunning.value) {
+            pendingFullScanConfigs = unique
+            logCollector.info(TAG, "Connection scan deferred while VPN is active; queued for after disconnect")
+            return@withLock availableServers()
+        }
 
+        // Keep a full-scan continuation even if the bounded connection scan is cancelled by
+        // the coordinator deadline. A successful exhaustive scan clears this queue below.
+        pendingFullScanConfigs = unique
         _isScanning.value = true
         try {
             activeScanJob = currentCoroutineContext()[Job]
+            activeScanIsConnection = true
             val probeConfigs = unique.filter { config -> !autoSwitcher.isBlacklisted(config) && config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
             val resultByKey = linkedMapOf<String, ScoredServer>()
             unique.forEach { config ->
                 resultByKey[scanKey(config)] = if (config.isValid()) ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f) else unavailable(config)
             }
             _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-            var probedCount = 0
-            try {
-                val results = deepProbeEngine.pingProfiles(
-                    probeConfigs,
-                    stopAfterSuccessfulCount = targetAvailableCount.coerceAtLeast(1)
-                ) { batch ->
-                    if (scanGeneration.get() == generationForScan) {
-                        batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                        probedCount += batch.size
-                        _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                    }
-                }
-                results.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                logCollector.warn(TAG, "Staged connection scan failed: ${error.message}")
-            }
+            val probedCount = probeProfilesInBatches(
+                probeConfigs = probeConfigs,
+                resultByKey = resultByKey,
+                generation = generationForScan,
+                targetAvailableCount = targetAvailableCount
+            )
             val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
             if (scanGeneration.get() == generationForScan) {
                 val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
+                val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                val hasReachable = reachable > 0
                 scannedNetworkBucket = networkBucket
-                scannedConfigKeys = if (complete) requestedKeys else emptySet()
+                scannedConfigKeys = if (complete && hasReachable) requestedKeys else emptySet()
                 _scannedServers.value = results
                 if (complete) {
-                    persistScanResults(results)
-                    pendingFullScanConfigs = emptyList()
+                    if (hasReachable) persistScanResults(results)
+                    else scanCache().edit().putLong("saved_at", 0L).apply()
+                    if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
+                        pendingFullScanConfigs = emptyList()
+                    }
                 } else {
                     pendingFullScanConfigs = unique
                     scanCache().edit().putLong("saved_at", 0L).apply()
@@ -245,7 +321,12 @@ class ServerScanner @Inject constructor(
             results
         } finally {
             activeScanJob = null
+            activeScanIsConnection = false
             _isScanning.value = false
+        }
+            }
+        } finally {
+            connectionScanWaiters.decrementAndGet()
         }
     }
 
@@ -260,9 +341,10 @@ class ServerScanner @Inject constructor(
                     // The temporary profile-probe core cannot coexist with the active VPN core.
                     // Resume the full scan as soon as the tunnel is down instead of dropping it.
                     delay(10_000L)
-                    if (!VpnProxyService.isRunning.value) {
-                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${pending.size}")
-                        scanAll(pending, force = true)
+                    val latestPending = pendingFullScanConfigs
+                    if (latestPending.isNotEmpty() && !VpnProxyService.isRunning.value) {
+                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${latestPending.size}")
+                        scanAll(latestPending, force = true)
                     }
                 } else {
                     delay(RESCAN_INTERVAL_MS)
@@ -338,7 +420,8 @@ class ServerScanner @Inject constructor(
 
     private fun restoreCachedResults(configs: List<ParsedConfig>) {
         val savedAt = scanCache().getLong("saved_at", 0L)
-        val cacheFresh = savedAt > 0L && System.currentTimeMillis() - savedAt <= scanCacheMaxAgeMs
+        val cacheFresh = savedAt > 0L &&
+            System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
         val restoredByKey = linkedMapOf<String, ScoredServer>()
         if (cacheFresh) {
             configs.forEach { config ->
@@ -353,17 +436,9 @@ class ServerScanner @Inject constructor(
                 )
             }
         }
-        val bucket = autoSwitcher.currentNetworkBucket()
-        val now = System.currentTimeMillis()
-        val historyTtlMs = 7L * 24 * 60 * 60 * 1000
-        configs.forEach { config ->
-            val sk = scanKey(config)
-            if (restoredByKey.containsKey(sk)) return@forEach
-            val lastOk = successHistory.getLong(historyKey(config, bucket), 0L)
-            if (lastOk > 0L && now - lastOk in 0..historyTtlMs) {
-                restoredByKey[sk] = ScoredServer(config = config, latencyMs = 1L, speedMbps = 0f, successRate = 0.75f, score = 0.5f)
-            }
-        }
+        // Historical success is used only to prioritize the next live probe in
+        // orderConfigsForCurrentNetwork(). It must never be restored as a successful
+        // scan result: a server that worked days ago may be offline now.
         if (restoredByKey.isNotEmpty()) {
             _scannedServers.value = sortForCurrentNetwork(restoredByKey.values.toList())
             logCollector.info(TAG, "Restored ${restoredByKey.size} cached/history server results (cacheFresh=$cacheFresh)")

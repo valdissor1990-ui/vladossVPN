@@ -1,0 +1,6 @@
+# Ensure unwind tables on Android targets so catch_unwind works (ADR-002 / Stage B).
+[target.aarch64-linux-android]
+rustflags = ["-C", "force-unwind-tables=yes"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "force-unwind-tables=yes"]

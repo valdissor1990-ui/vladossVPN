@@ -77,6 +77,10 @@ class SingboxConfigBuilderTest {
         val inbounds = root["inbounds"]!!.jsonArray
         val outbounds = root["outbounds"]!!.jsonArray
         val rules = root["route"]!!.jsonObject["rules"]!!.jsonArray
+        val dns = root["dns"]!!.jsonObject
+        assertEquals("probe-dns", dns["final"]!!.jsonPrimitive.content)
+        assertEquals("local", dns["servers"]!!.jsonArray.single().jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("prefer_ipv4", dns["strategy"]!!.jsonPrimitive.content)
         assertEquals(2, inbounds.size)
         assertEquals(3, outbounds.size)
         assertEquals(12001, inbounds[0].jsonObject["listen_port"]!!.jsonPrimitive.int)
