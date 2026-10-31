@@ -29,8 +29,9 @@ class AceIpcServer : Service() {
             AceTelemetryBridge.attach(receiver)
         }
 
-        override fun unregisterTelemetryReceiver() {
-            AceTelemetryBridge.detach()
+        override fun unregisterTelemetryReceiver(receiver: IAceTelemetryReceiver?) {
+            if (receiver == null) return
+            AceTelemetryBridge.detach(receiver)
         }
     }
 
