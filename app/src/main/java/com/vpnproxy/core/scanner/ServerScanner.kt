@@ -207,7 +207,6 @@ class ServerScanner @Inject constructor(
                 activeScanIsConnection = false
                 activeScanConfigs = emptyList()
                 _isScanning.value = false
-                _scanProgress.value = 0 to 0
             }
         }
 
@@ -216,7 +215,6 @@ class ServerScanner @Inject constructor(
         val wasScanning = _isScanning.value
         scanGeneration.incrementAndGet()
         _isScanning.value = false
-        _scanProgress.value = 0 to 0
         activeScanJob?.cancel()
         activeScanJob = null
         runCatching { deepProbeEngine.cancel() }
@@ -325,7 +323,6 @@ class ServerScanner @Inject constructor(
                     activeScanJob = null
                     activeScanIsConnection = false
                     _isScanning.value = false
-                    _scanProgress.value = 0 to 0
                 }
             }
         } finally {
