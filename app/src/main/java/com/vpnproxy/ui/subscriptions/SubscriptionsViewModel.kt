@@ -78,7 +78,7 @@ class SubscriptionsViewModel @Inject constructor(
             if (count != null && count > 0) {
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
                 runCatching {
-                    serverScanner.scanAfterSubscriptionUpdate(merged)
+                    serverScanner.scanForConnection(merged)
                 }
             }
         }
@@ -114,7 +114,7 @@ class SubscriptionsViewModel @Inject constructor(
             try {
                 repository.refreshAll()
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
-                val scanResults = serverScanner.scanAfterSubscriptionUpdate(merged)
+                val scanResults = serverScanner.scanForConnection(merged)
                 val tcpResponsiveCount = scanResults.count { it.successRate > 0.5f }
                 _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
                 logCollector.info(
