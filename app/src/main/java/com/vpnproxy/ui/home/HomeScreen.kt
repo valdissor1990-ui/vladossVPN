@@ -79,13 +79,17 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = CosmosSurface) {
-                NavigationBarItem(
-                    selected = showServers,
+            Surface(color = CosmosSurface, tonalElevation = 4.dp) {
+                Button(
                     onClick = { showServers = true },
-                    icon = { Icon(Icons.Default.List, contentDescription = null) },
-                    label = { Text("Серверы") }
-                )
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.List, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Серверы")
+                }
             }
         },
         containerColor = Color.Transparent
