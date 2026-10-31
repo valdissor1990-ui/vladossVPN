@@ -73,6 +73,8 @@ class HomeViewModel @Inject constructor(
         val isRefreshingSubscription: Boolean = false,
         val isScanningServers: Boolean = false,
         val scannedAvailableServers: Int = 0,
+        val scanCheckedServers: Int = 0,
+        val scanFailedServers: Int = 0,
         val scanTotalServers: Int = 0,
         val isAutomaticMode: Boolean = true,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
@@ -193,11 +195,36 @@ class HomeViewModel @Inject constructor(
         }
         viewModelScope.launch {
             serverScanner.scannedServers.collect { servers ->
+                val available = servers.count {
+                    it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                }
+                val checked = serverScanner.scanProgress.value.first
                 _uiState.value = _uiState.value.copy(
-                    scannedAvailableServers = servers.count {
-                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
-                    },
-                    scanTotalServers = servers.size
+                    scannedAvailableServers = available,
+                    scanCheckedServers = checked,
+                    scanFailedServers = (checked - available).coerceAtLeast(0),
+                    scanTotalServers = maxOf(
+                        _uiState.value.serverCount,
+                        serverScanner.scanProgress.value.second,
+                        servers.size
+                    )
+                )
+            }
+        }
+        viewModelScope.launch {
+            serverScanner.scanProgress.collect { progress ->
+                val servers = serverScanner.scannedServers.value
+                val available = servers.count {
+                    it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                }
+                _uiState.value = _uiState.value.copy(
+                    scanCheckedServers = progress.first,
+                    scanFailedServers = (progress.first - available).coerceAtLeast(0),
+                    scanTotalServers = maxOf(
+                        _uiState.value.serverCount,
+                        progress.second,
+                        servers.size
+                    )
                 )
             }
         }
