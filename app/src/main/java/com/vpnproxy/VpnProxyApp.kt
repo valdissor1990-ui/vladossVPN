@@ -135,7 +135,14 @@ class VpnProxyApp : Application(), Configuration.Provider {
         manager?.runningAppProcesses?.firstOrNull { it.pid == android.os.Process.myPid() }?.processName
     }
 
-    private fun isMainProcess(): Boolean = currentProcessName() == packageName
+    private fun isMainProcess(): Boolean {
+        val processName = currentProcessName()
+        if (processName.isNullOrBlank()) {
+            logCollector.warn("VpnProxyApp", "Unable to resolve process name; allowing default startup")
+            return true
+        }
+        return processName == packageName
+    }
 
     override fun onTerminate() {
         applicationScope.cancel()
