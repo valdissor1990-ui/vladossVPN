@@ -45,6 +45,11 @@ class UpdateManager @Inject constructor(
 
     /** If a previously downloaded APK is still newer than installed, surface Ready. */
     fun restoreReadyFromDisk() {
+        // Debug builds are test installations and must never offer or restore production self-updates.
+        if (BuildConfig.DEBUG) {
+            logCollector.debug("UpdateManager", "Skipping pending APK restore in debug build")
+            return
+        }
         val pending = pendingStore.read() ?: return
         val file = pendingStore.readyFile() ?: return
         val synthetic = GitHubRelease(
@@ -64,6 +69,12 @@ class UpdateManager @Inject constructor(
     }
 
     suspend fun checkForUpdate(force: Boolean = false) {
+        // A test APK must not download/install the latest production APK over the test session.
+        if (BuildConfig.DEBUG) {
+            logCollector.info("UpdateManager", "Automatic update checks are disabled for debug builds")
+            _state.value = State.UpToDate
+            return
+        }
         if (!force && System.currentTimeMillis() - lastCheckAt < checkCooldownMs) {
             logCollector.debug("UpdateManager", "Skip check (cooldown)")
             return
@@ -186,11 +197,9 @@ class UpdateManager @Inject constructor(
     }
 
     fun reset() {
-        // Keep file on disk for later install; only clear UI state.
-        restoreReadyFromDisk()
-        if (_state.value !is State.Ready) {
-            _state.value = State.Idle
-        }
+        // "Later" dismisses the dialog but preserves any downloaded APK for a future manual check.
+        // Do not immediately restore Ready here, otherwise the dialog reappears and cannot be dismissed.
+        _state.value = State.Idle
     }
 
     fun markUpToDate() { _state.value = State.UpToDate }
