@@ -78,12 +78,14 @@ class SubscriptionUpdateWorker(
             val repository = deps.subscriptionRepository()
             val count = repository.refreshAll(skipIfFresh = true)
             val providerConfigCount = repository.getAllConfigs().size
-            deps.serverScanner().scanForConnection(repository.getAllConfigs())
+            deps.serverScanner().scanAll(repository.getAllConfigs())
             deps.logCollector().info(
                 "SubUpdateWorker",
                 "Refreshed subscriptions: uniqueConfigs=$count providerConfigs=$providerConfigCount; server scan completed"
             )
             Result.success()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             try {
                 val deps = EntryPointAccessors.fromApplication(
