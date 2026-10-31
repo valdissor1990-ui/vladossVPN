@@ -204,6 +204,8 @@ class SubscriptionRepository @Inject constructor(
             saveToPrefs()
             logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
             true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
             false
