@@ -55,7 +55,6 @@ internal fun allocateProbePorts(count: Int): List<Int> {
  */
 @Singleton
 class DeepProbeEngine @Inject constructor(
-    private val healthChecker: HealthChecker,
     private val logCollector: LogCollector,
     @ApplicationContext private val context: Context
 ) {
