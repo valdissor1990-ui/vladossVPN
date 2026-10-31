@@ -49,7 +49,6 @@ class HomeViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val serverScanner: ServerScanner,
     private val autoSwitcher: AutoSwitcher,
-    private val scoringEngine: ScoringEngine,
     private val trafficCollector: TrafficStatsCollector,
     private val pingService: PingService,
     private val logCollector: LogCollector,
