@@ -68,6 +68,53 @@ class ServerScanner @Inject constructor(
     private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
     private val scanCacheMaxAgeMs = RESCAN_INTERVAL_MS
 
+    /** Shared bounded probe loop; a null target means exhaust every profile. */
+    private suspend fun probeProfilesInBatches(
+        probeConfigs: List<ParsedConfig>,
+        resultByKey: MutableMap<String, ScoredServer>,
+        generation: Long,
+        targetAvailableCount: Int? = null
+    ): Int {
+        var probedCount = 0
+        val target = targetAvailableCount?.coerceAtLeast(1)
+        try {
+            for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
+                currentCoroutineContext().ensureActive()
+                if (scanGeneration.get() != generation) break
+                val remainingTarget = target?.let { expected ->
+                    (expected - resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }).coerceAtLeast(1)
+                }
+                val batchResults = deepProbeEngine.pingProfiles(
+                    probeBatch,
+                    stopAfterSuccessfulCount = remainingTarget
+                ) { batch ->
+                    if (scanGeneration.get() == generation) {
+                        batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                        probedCount += batch.size
+                        _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+                    }
+                }
+                batchResults.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                if (target != null) {
+                    val reachableNow = resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }
+                    if (reachableNow >= target) {
+                        logCollector.info(TAG, "Connection scan reached target=$target after $probedCount measured profiles")
+                        break
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logCollector.warn(TAG, "Profile probe batch failed: ${error.message}")
+        }
+        return probedCount
+    }
+
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
             if (connectionScanWaiters.get() > 0) {
@@ -119,28 +166,9 @@ class ServerScanner @Inject constructor(
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                 val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
-                var probedCount = 0
-                if (probeConfigs.isNotEmpty()) {
-                    try {
-                        // Use the same bounded core size as connection scans. A single core with
-                        // 100+ outbounds can exceed libbox cache-file initialization timeouts.
-                        for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
-                            currentCoroutineContext().ensureActive()
-                            if (scanGeneration.get() != generation) break
-                            deepProbeEngine.pingProfiles(probeBatch) { batch ->
-                                if (scanGeneration.get() == generation) {
-                                    batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                                    probedCount += batch.size
-                                    _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                                }
-                            }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                        }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        logCollector.warn(TAG, "Profile scan failed: ${error.message}")
-                    }
-                }
+                val probedCount = if (probeConfigs.isNotEmpty()) {
+                    probeProfilesInBatches(probeConfigs, resultByKey, generation)
+                } else 0
                 val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
                 if (scanGeneration.get() != generation) {
                     logCollector.info(TAG, "Discarded cancelled scan results")
@@ -241,43 +269,12 @@ class ServerScanner @Inject constructor(
                 resultByKey[scanKey(config)] = if (config.isValid()) ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f) else unavailable(config)
             }
             _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-            var probedCount = 0
-            try {
-                // Avoid initializing one temporary Sing-box core with 100+ outbounds at once.
-                // Large profile sets can time out during libbox cache-file initialization.
-                val target = targetAvailableCount.coerceAtLeast(1)
-                for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
-                    currentCoroutineContext().ensureActive()
-                    if (scanGeneration.get() != generationForScan) break
-                    val remainingTarget = (target - resultByKey.values.count {
-                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
-                    }).coerceAtLeast(1)
-                    val batchResults = deepProbeEngine.pingProfiles(
-                        probeBatch,
-                        stopAfterSuccessfulCount = remainingTarget
-                    ) { batch ->
-                        if (scanGeneration.get() == generationForScan) {
-                            batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                            probedCount += batch.size
-                            _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                        }
-                    }
-                    batchResults.forEach { ping ->
-                        resultByKey[scanKey(ping.config)] = scoredServer(ping)
-                    }
-                    val reachableNow = resultByKey.values.count {
-                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
-                    }
-                    if (reachableNow >= target) {
-                        logCollector.info(TAG, "Connection scan reached target=$target after ${probedCount} measured profiles")
-                        break
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                logCollector.warn(TAG, "Staged connection scan failed: ${error.message}")
-            }
+            val probedCount = probeProfilesInBatches(
+                probeConfigs = probeConfigs,
+                resultByKey = resultByKey,
+                generation = generationForScan,
+                targetAvailableCount = targetAvailableCount
+            )
             val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
             if (scanGeneration.get() == generationForScan) {
                 val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
