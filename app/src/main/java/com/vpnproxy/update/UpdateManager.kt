@@ -191,7 +191,7 @@ class UpdateManager @Inject constructor(
             pendingStore.save(release, file)
             logCollector.info(
                 "UpdateManager",
-                "Prefetched APK ${release.extractVersionName()} → ${file.name}"
+                "Downloaded APK after explicit confirmation: ${release.extractVersionName()} → ${file.name}"
             )
             _state.value = State.Ready(file, release)
         } else {
