@@ -100,7 +100,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
                 logCollector.info("VpnProxyApp", "Startup auto-refresh skipped while VPN active: state=$state")
             } else {
                 try {
-                    val count = subscriptionRepository.refreshAll()
+                    val count = subscriptionRepository.refreshAll(skipIfFresh = true)
                     val providerConfigCount = subscriptionRepository.getAllConfigs().size
                     logCollector.info(
                         "VpnProxyApp",
