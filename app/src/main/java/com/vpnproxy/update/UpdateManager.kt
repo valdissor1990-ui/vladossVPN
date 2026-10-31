@@ -38,6 +38,13 @@ class UpdateManager @Inject constructor(
     private var lastCheckAt = 0L
     private val checkCooldownMs = 60_000L
     private val pendingStore = PendingUpdateStore(context)
+    private val dismissedUpdatePrefs = context.getSharedPreferences(
+        "update_prompt_dismissal_v1",
+        Context.MODE_PRIVATE
+    )
+
+    private fun dismissedReleaseTag(): String? =
+        dismissedUpdatePrefs.getString("dismissed_release_tag", null)
 
     init {
         restoreReadyFromDisk()
@@ -59,7 +66,9 @@ class UpdateManager @Inject constructor(
                 "Обновление ${pending.versionName} уже скачано. Нажмите «Установить»."
             }
         )
-        if (pending.versionCode > BuildConfig.VERSION_CODE) {
+        if (pending.versionCode > BuildConfig.VERSION_CODE &&
+            dismissedReleaseTag() != pending.tagName
+        ) {
             _state.value = State.Ready(file, synthetic)
             logCollector.info(
                 "UpdateManager",
@@ -106,24 +115,37 @@ class UpdateManager @Inject constructor(
                     }
                 }
                 result.hasUpdate && result.release != null -> {
-                    val remoteCode = result.release.extractVersionCode()
-                    val localPending = pendingStore.read()
-                    val pendingFile = pendingStore.readyFile()
-                    when {
-                        pendingFile != null && localPending != null &&
-                            localPending.versionCode >= remoteCode -> {
-                            logCollector.info(
-                                "UpdateManager",
-                                "Pending APK already covers remote code=$remoteCode"
-                            )
-                            State.Ready(
-                                pendingFile,
-                                previousReady?.release?.takeIf {
-                                    previousReady.file.absolutePath == pendingFile.absolutePath
-                                } ?: result.release
-                            )
+                    val release = result.release
+                    val isDismissed = dismissedReleaseTag() == release.tagName
+                    if (isDismissed && !force) {
+                        logCollector.info(
+                            "UpdateManager",
+                            "Suppressing previously dismissed update ${release.tagName}"
+                        )
+                        State.Idle
+                    } else {
+                        if (isDismissed && force) {
+                            dismissedUpdatePrefs.edit().remove("dismissed_release_tag").apply()
                         }
-                        else -> State.UpdateAvailable(result.release)
+                        val remoteCode = release.extractVersionCode()
+                        val localPending = pendingStore.read()
+                        val pendingFile = pendingStore.readyFile()
+                        when {
+                            pendingFile != null && localPending != null &&
+                                localPending.versionCode >= remoteCode -> {
+                                logCollector.info(
+                                    "UpdateManager",
+                                    "Pending APK already covers remote code=$remoteCode"
+                                )
+                                State.Ready(
+                                    pendingFile,
+                                    previousReady?.release?.takeIf {
+                                        previousReady.file.absolutePath == pendingFile.absolutePath
+                                    } ?: release
+                                )
+                            }
+                            else -> State.UpdateAvailable(release)
+                        }
                     }
                 }
                 else -> {
@@ -136,17 +158,12 @@ class UpdateManager @Inject constructor(
         }
     }
 
-    /**
-     * Background path: check → download newest APK → Ready.
-     * If a newer release appears before the user installs, the new APK replaces the old one.
-     */
-    suspend fun checkAndPrefetch() {
-        checkForUpdate(force = true)
-        val available = _state.value as? State.UpdateAvailable ?: return
-        downloadUpdate(available.release)
-    }
-
     suspend fun downloadUpdate(release: GitHubRelease) = downloadMutex.withLock {
+        if (BuildConfig.DEBUG) {
+            logCollector.warn("UpdateManager", "Download blocked in debug build")
+            _state.value = State.UpToDate
+            return@withLock
+        }
         val flavor = if (context.packageName.endsWith(".play")) "play" else "direct"
         val asset = release.findApkAsset(flavor)
         if (asset == null) {
@@ -183,6 +200,11 @@ class UpdateManager @Inject constructor(
     }
 
     fun installReady() {
+        if (BuildConfig.DEBUG) {
+            logCollector.warn("UpdateManager", "Install blocked in debug build")
+            _state.value = State.UpToDate
+            return
+        }
         val ready = _state.value as? State.Ready ?: return
         if (!installer.canInstallPackages()) {
             logCollector.warn("UpdateManager", "Install blocked: unknown-sources permission not granted")
@@ -197,8 +219,19 @@ class UpdateManager @Inject constructor(
     }
 
     fun reset() {
-        // "Later" dismisses the dialog but preserves any downloaded APK for a future manual check.
-        // Do not immediately restore Ready here, otherwise the dialog reappears and cannot be dismissed.
+        // "Later" suppresses this exact release across background checks and app restarts.
+        // A manual forced check may show it again; a newer release is never suppressed.
+        val releaseTag = when (val current = _state.value) {
+            is State.UpdateAvailable -> current.release.tagName
+            is State.Ready -> current.release.tagName
+            else -> null
+        }
+        if (!releaseTag.isNullOrBlank()) {
+            dismissedUpdatePrefs.edit()
+                .putString("dismissed_release_tag", releaseTag)
+                .apply()
+            logCollector.info("UpdateManager", "Dismissed update prompt for $releaseTag")
+        }
         _state.value = State.Idle
     }
 
