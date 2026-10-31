@@ -42,6 +42,10 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
+    /**
+     * @param foreignConfig optional second outbound for AI / selected apps (non-RU exit)
+     * @param foreignPackageNames Android package names routed to foreign outbound
+     */
     fun buildVpn(
         config: ParsedConfig,
         options: DiagnosticOptions = DiagnosticOptions(),
@@ -147,18 +151,13 @@ object SingboxConfigBuilder {
                 put("level", "debug")
                 put("timestamp", true)
             })
-            // Probe cores must not rely on "local" DNS
+            // Probe cores need an explicit Android system resolver; the default
+            // loopback DNS stub is not listening in this temporary proxy-only process.
             put("dns", buildJsonObject {
                 put("servers", buildJsonArray {
                     add(buildJsonObject {
-                        put("type", "udp")
+                        put("type", "local")
                         put("tag", "probe-dns")
-                        put("server", "1.1.1.1")
-                    })
-                    add(buildJsonObject {
-                        put("type", "udp")
-                        put("tag", "probe-dns-fallback")
-                        put("server", "8.8.8.8")
                     })
                 })
                 put("final", "probe-dns")
@@ -203,13 +202,192 @@ object SingboxConfigBuilder {
     }
 
     fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
-        // Full implementation restored from original
+        val transportKey = config.transport.lowercase()
+        val isHy2 = transportKey == "hysteria2" || transportKey == "hy2"
+        val isTuic = transportKey == "tuic"
+        val isShadowsocks = transportKey == "shadowsocks" || transportKey == "ss"
+        val isSocks = transportKey == "socks" || transportKey == "socks5"
+        val isTrojan = transportKey == "trojan"
+        val isVmess = transportKey == "vmess"
+        val isVless = !isHy2 && !isTuic && !isShadowsocks && !isSocks && !isTrojan && !isVmess
+        require(isVless || isHy2 || isTuic || isShadowsocks || isSocks || isTrojan || isVmess) {
+            "Unsupported Sing-box outbound: ${config.transport}"
+        }
+        if (isVless) {
+            require(transportKey in setOf("", "tcp", "raw", "none", "vless", "ws", "grpc", "http", "httpupgrade", "quic", "xhttp")) {
+                "Unsupported VLESS transport for sing-box-lx 1.14.3: ${config.transport}"
+            }
+        }
+
         return buildJsonObject {
-            put("type", "vless")
+            put(
+                "type",
+                when {
+                    isHy2 -> "hysteria2"
+                    isTuic -> "tuic"
+                    isShadowsocks -> "shadowsocks"
+                    isSocks -> "socks"
+                    isTrojan -> "trojan"
+                    isVmess -> "vmess"
+                    else -> "vless"
+                }
+            )
             put("tag", tag)
             put("server", config.address)
             put("server_port", config.port)
-            put("uuid", config.uuid)
+
+            when {
+                isHy2 -> {
+                    put("password", config.password ?: config.uuid)
+                    config.obfsType?.takeIf { it.isNotBlank() }?.let { obfsType ->
+                        put("obfs", buildJsonObject {
+                            put("type", obfsType)
+                            config.obfsPassword?.takeIf { it.isNotBlank() }?.let { put("password", it) }
+                        })
+                    }
+                }
+                isTuic -> {
+                    put("uuid", config.uuid)
+                    put("password", config.password.orEmpty())
+                    put("congestion_control", config.congestionControl.ifBlank { "bbr" })
+                    put("udp_relay_mode", "native")
+                }
+                isShadowsocks -> {
+                    put("method", config.security.ifBlank { "aes-256-gcm" })
+                    put("password", config.password ?: config.uuid)
+                }
+                isSocks -> {
+                    put("version", "5")
+                    config.uuid.takeIf { it.isNotBlank() }?.let { put("username", it) }
+                    config.password?.takeIf { it.isNotBlank() }?.let { put("password", it) }
+                }
+                isTrojan -> put("password", config.password ?: config.uuid)
+                isVmess -> {
+                    put("uuid", config.uuid)
+                    put("security", "auto")
+                    put("alter_id", 0)
+                }
+                else -> {
+                    put("uuid", config.uuid)
+                    config.flow?.takeIf { it.isNotBlank() }?.let { put("flow", it) }
+                }
+            }
+
+            val streamNetwork = when {
+                isVmess || isTrojan -> config.mode?.lowercase()?.takeIf { it.isNotBlank() }
+                isVless -> transportKey
+                else -> null
+            }
+            if (isVless || ((isVmess || isTrojan) && streamNetwork != null && streamNetwork !in setOf("tcp", "raw", "none", ""))) {
+                when (streamNetwork ?: transportKey) {
+                    "ws" -> put("transport", buildJsonObject {
+                        put("type", "ws")
+                        put("path", normalizePath(config.path))
+                        config.host?.takeIf { it.isNotBlank() }?.let { host ->
+                            put("headers", buildJsonObject { put("Host", host) })
+                        }
+                    })
+                    "grpc" -> put("transport", buildJsonObject {
+                        put("type", "grpc")
+                        put("service_name", config.path.orEmpty())
+                    })
+                    "http" -> put("transport", buildJsonObject {
+                        put("type", "http")
+                        config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
+                        config.host?.takeIf { it.isNotBlank() }?.let { host ->
+                            put("host", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(host)) })
+                        }
+                    })
+                    "httpupgrade" -> put("transport", buildJsonObject {
+                        put("type", "httpupgrade")
+                        put("path", normalizePath(config.path))
+                        config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
+                    })
+                    "quic" -> put("transport", buildJsonObject { put("type", "quic") })
+                    "xhttp" -> put("transport", buildJsonObject {
+                        val extraObject = config.extra?.takeIf { it.isNotBlank() }?.let { parseXhttpExtra(it) }
+                        val allowedKeys = setOf(
+                            "host", "path", "mode", "headers",
+                            "x_padding_bytes", "x_padding_obfs_mode", "x_padding_key",
+                            "x_padding_header", "x_padding_placement", "x_padding_method",
+                            "no_grpc_header", "no_sse_header",
+                            "uplink_http_method",
+                            "session_placement", "session_key"
+                        )
+                        val includedKeys = mutableListOf<String>()
+                        val omittedKeys = mutableListOf<String>()
+                        extraObject?.forEach { (key, value) ->
+                            if (key == "type") { omittedKeys += key; return@forEach }
+                            if (value is JsonNull) { omittedKeys += key; return@forEach }
+                            val singBoxKey = when (key) {
+                                "sessionIDPlacement", "sessionIdPlacement", "sessionPlacement",
+                                "session_id_placement" -> "session_placement"
+                                "sessionIDKey", "sessionIdKey", "sessionKey",
+                                "session_id_key" -> "session_key"
+                                "noGRPCHeader", "noGrpcHeader" -> "no_grpc_header"
+                                "noSSEHeader", "noSseHeader" -> "no_sse_header"
+                                "uplinkHTTPMethod" -> "uplink_http_method"
+                                "xPaddingBytes" -> "x_padding_bytes"
+                                "xPaddingObfsMode" -> "x_padding_obfs_mode"
+                                "xPaddingKey" -> "x_padding_key"
+                                "xPaddingHeader" -> "x_padding_header"
+                                "xPaddingPlacement" -> "x_padding_placement"
+                                "xPaddingMethod" -> "x_padding_method"
+                                else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
+                                    "${match.groupValues[1]}_${match.groupValues[2]}"
+                                }.lowercase()
+                            }
+                            if (value is JsonPrimitive && value.isString && value.content.isBlank()) { omittedKeys += key; return@forEach }
+                            if (value is JsonPrimitive && value.booleanOrNull == false) { omittedKeys += key; return@forEach }
+                            if (value is JsonPrimitive && value.intOrNull == 0) { omittedKeys += key; return@forEach }
+                            if (singBoxKey in allowedKeys) {
+                                if (singBoxKey == "path" && value is JsonPrimitive && value.isString) {
+                                    put(singBoxKey, JsonPrimitive(normalizePath(value.content)))
+                                } else {
+                                    put(singBoxKey, value)
+                                }
+                                includedKeys += singBoxKey
+                            } else omittedKeys += key
+                        }
+                        LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP included keys=${includedKeys.distinct().sorted()}")
+                        LogCollectorHolder.get()?.info("SingboxConfigBuilder", "XHTTP omitted keys=${omittedKeys.distinct().sorted()}")
+                        put("type", "xhttp")
+                        config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
+                        config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
+                        put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
+                    })
+                }
+            }
+
+            val needsTls = isHy2 || isTuic || isTrojan ||
+                config.security.equals("tls", true) ||
+                config.security.equals("reality", true)
+            if (needsTls) {
+                put("tls", buildJsonObject {
+                    put("enabled", true)
+                    val sni = config.sni?.takeIf { it.isNotBlank() }
+                    val host = config.host?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9.-]+$").matches(it) && it.contains(".") }
+                    val serverName = sni ?: host ?: config.address
+                    put("server_name", serverName)
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=${if (sni != null) "sni" else if (host != null) "host" else "address"}")
+                    if (config.security.equals("reality", true)) {
+                        put("reality", buildJsonObject {
+                            put("enabled", true)
+                            put("public_key", config.publicKey.orEmpty())
+                            put("short_id", config.shortId.orEmpty())
+                        })
+                        put("utls", buildJsonObject {
+                            put("enabled", true)
+                            put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                        })
+                    } else {
+                        put("insecure", config.insecure)
+                        if (config.alpn.isNotEmpty()) {
+                            put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+                        }
+                    }
+                })
+            }
         }
     }
 }
