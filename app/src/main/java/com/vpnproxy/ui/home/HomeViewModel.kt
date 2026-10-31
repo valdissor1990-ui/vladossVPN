@@ -363,7 +363,7 @@ class HomeViewModel @Inject constructor(
                 var refreshedSubscription = false
                 if (hasNetwork) {
                     configs = try {
-                        subscriptionRepository.refreshAll()
+                        subscriptionRepository.refreshAll(skipIfFresh = true)
                         jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also {
                             // ConnectServerSelector performs the one prioritized scan immediately below.
                             refreshedSubscription = true
