@@ -62,7 +62,7 @@ class AceIpcClient(private val context: Context) {
                     }
                     // disconnect() may race with this IO Binder call. Undo a late registration.
                     if (disconnected && registration.isSuccess) {
-                        runCatching { remote.unregisterTelemetryReceiver() }
+                        runCatching { remote.unregisterTelemetryReceiver(telemetryReceiver) }
                             .onFailure { Log.w(TAG, "Late telemetry registration cleanup failed", it) }
                     }
                 }
