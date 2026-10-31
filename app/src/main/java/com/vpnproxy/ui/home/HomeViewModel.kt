@@ -364,8 +364,8 @@ class HomeViewModel @Inject constructor(
                 if (hasNetwork) {
                     configs = try {
                         subscriptionRepository.refreshAll()
-                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
-                            serverScanner.scanAfterSubscriptionUpdate(refreshed)
+                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also {
+                            // ConnectServerSelector performs the one prioritized scan immediately below.
                             refreshedSubscription = true
                         }
                     } catch (c: CancellationException) {
