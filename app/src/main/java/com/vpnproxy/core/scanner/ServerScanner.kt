@@ -85,7 +85,6 @@ class ServerScanner @Inject constructor(
                 (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer)).distinctBy(::scanKey)
             )
             val requestedKeys = unique.map(::scanKey).toSet()
-            activeScanConfigs = unique
             if (!force && requestedKeys.isNotEmpty() && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) {
                 return@withLock _scannedServers.value
             }
@@ -114,6 +113,7 @@ class ServerScanner @Inject constructor(
             try {
                 activeScanJob = currentCoroutineContext()[Job]
                 activeScanIsConnection = false
+                activeScanConfigs = unique
                 val resultByKey = linkedMapOf<String, ScoredServer>()
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
