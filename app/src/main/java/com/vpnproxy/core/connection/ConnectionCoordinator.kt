@@ -271,14 +271,14 @@ class ConnectionCoordinator @Inject constructor(
             }
             is ConnectionEvent.SetFallbackCandidates -> {
                 val incoming = event.servers.size
-                // Keep Smart Connect's measured score order. Sorting by region here
-                // silently overrode latency/reliability ranking and could send fallback
-                // through many poor endpoints before trying a healthier one.
+                // Keep Smart Connect's measured score order, but never retry an endpoint
+                // that was unmeasured or failed its reachability probe.
                 fallbackCandidates = event.servers
+                    .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .filter { isWithinProviderScope(it) }
                     .distinctBy { it.config.connectionKey() }
                 fallbackAttempts = 0
-                logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
+                logI("Fallback candidates configured: ${fallbackCandidates.size} reachable of $incoming (scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
             is ConnectionEvent.ServerSelected -> {
                 if (event.traceId != null && event.traceId != activeTraceId) {
