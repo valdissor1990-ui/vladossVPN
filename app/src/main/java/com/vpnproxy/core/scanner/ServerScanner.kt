@@ -435,17 +435,9 @@ class ServerScanner @Inject constructor(
                 )
             }
         }
-        val bucket = autoSwitcher.currentNetworkBucket()
-        val now = System.currentTimeMillis()
-        val historyTtlMs = 7L * 24 * 60 * 60 * 1000
-        configs.forEach { config ->
-            val sk = scanKey(config)
-            if (restoredByKey.containsKey(sk)) return@forEach
-            val lastOk = successHistory.getLong(historyKey(config, bucket), 0L)
-            if (lastOk > 0L && now - lastOk in 0..historyTtlMs) {
-                restoredByKey[sk] = ScoredServer(config = config, latencyMs = 1L, speedMbps = 0f, successRate = 0.75f, score = 0.5f)
-            }
-        }
+        // Historical success is used only to prioritize the next live probe in
+        // orderConfigsForCurrentNetwork(). It must never be restored as a successful
+        // scan result: a server that worked days ago may be offline now.
         if (restoredByKey.isNotEmpty()) {
             _scannedServers.value = sortForCurrentNetwork(restoredByKey.values.toList())
             logCollector.info(TAG, "Restored ${restoredByKey.size} cached/history server results (cacheFresh=$cacheFresh)")
