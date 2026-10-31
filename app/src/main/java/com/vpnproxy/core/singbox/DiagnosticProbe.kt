@@ -17,9 +17,10 @@ data class TrafficProbeResult(val success: Boolean, val endpoint: String, val st
 
 object DiagnosticProbe {
     private val endpoints = listOf(
-        "http://cp.cloudflare.com/generate_204",
-        "http://neverssl.com",
-        "https://www.gstatic.com/generate_204"
+        // Android blocks cleartext HTTP by default; only use HTTPS endpoints.
+        "https://www.gstatic.com/generate_204",
+        "https://connectivitycheck.gstatic.com/generate_204",
+        "https://www.google.com/generate_204"
     )
 
     suspend fun runOnce(serverName: String, logCollector: LogCollector): TrafficProbeResult = withContext(Dispatchers.IO) {
