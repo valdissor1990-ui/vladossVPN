@@ -216,7 +216,7 @@ class ServerScanner @Inject constructor(
                 // Large profile sets can time out during libbox cache-file initialization.
                 val target = targetAvailableCount.coerceAtLeast(1)
                 for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
-                    ensureActive()
+                    currentCoroutineContext().ensureActive()
                     if (scanGeneration.get() != generationForScan) break
                     val remainingTarget = (target - resultByKey.values.count {
                         it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
