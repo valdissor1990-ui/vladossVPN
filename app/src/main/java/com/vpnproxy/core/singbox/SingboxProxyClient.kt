@@ -39,7 +39,7 @@ object SingboxProxyClient {
             true
         } catch (t: Throwable) {
             Log.e(TAG, "Temporary Sing-box startup failed", t)
-            runCatching { core.stop() }
+            runCatching { core.stopTemporaryBlocking().getOrThrow() }
             false
         }
     }
