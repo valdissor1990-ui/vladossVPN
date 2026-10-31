@@ -34,7 +34,7 @@ fun UpdateDialog(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Можно скачать сейчас или дождаться фоновой загрузки.",
+                        "Загрузка начнётся только после нажатия «Скачать». Кнопка «Позже» закроет это предложение.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
