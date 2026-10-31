@@ -90,3 +90,20 @@ This map is a versioned code artifact and must be reviewed when a new source is 
 - No active Self-Healing.
 - ACE service is not auto-started by this collector change; its existing explicit start path and foreground notification behavior remain unchanged.
 - Stage C is not accepted until transport, tests, and runtime overhead are verified.
+
+
+## Device integration checklist (not yet executed)
+
+Run these checks on a physical Android device or emulator with the normal app build installed. These are manual acceptance checks, not claims made by the queue unit tests.
+
+1. **Process separation:** start ACE from the existing debug controls; record `adb shell pidof <applicationId>` and `adb shell pidof <applicationId>:ace` (or inspect `ps -A`). Confirm distinct PIDs and that the ACE service logs its PID.
+2. **Telemetry delivery:** while ACE is connected, trigger an ordinary VPN state transition and existing TrafficValidator run. Confirm schema-valid records reach the Rust telemetry buffer using a temporary debug-only inspection path; do not log server names, hosts, IPs, or record payloads.
+3. **ACE unavailable:** stop ACE while leaving the VPN connected. Confirm the VPN remains connected and normal traffic continues; main-process telemetry should be dropped without starting ACE or blocking the UI.
+4. **Reconnect:** restart ACE through the existing debug control. Confirm the Binder connection re-registers the receiver and new observations resume. Do not expect observations dropped while ACE was unavailable to be replayed.
+5. **Registration race:** repeatedly start/stop ACE around connection establishment. Confirm a late cleanup for an old receiver does not detach the current receiver.
+6. **Binder death:** force-stop/kill the ACE process while VPN is active. Confirm the main process catches delivery failure, clears the stale receiver, and keeps the VPN path operational; then restart ACE and verify re-registration.
+7. **Queue pressure:** use a debug-only synthetic producer to exceed 128 records and 16 KiB per record. Confirm rejected observations are counted/logged without blocking Binder callers or changing VPN behavior. Do not add synthetic production telemetry.
+8. **No control path:** inspect logs and behavior to confirm ACE telemetry never calls `NetworkExecutor`, Smart Connect, Libbox, or VPN start/stop methods.
+9. **Lifecycle/UX:** verify the ACE foreground-service notification and explicit stop behavior on supported Android versions before considering any autostart change. Autostart remains disabled.
+
+Record Android version, device model, app build identifier, PIDs, test outcome, and relevant redacted log excerpts. Do not mark Stage B accepted or Stage C complete until the applicable runtime checks pass.
