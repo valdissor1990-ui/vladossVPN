@@ -61,7 +61,6 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "HomeVM"
-        private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
@@ -101,7 +100,6 @@ class HomeViewModel @Inject constructor(
     val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
 
     private var pingJob: Job? = null
-    private var connectingWatchdogJob: Job? = null
     private var selectionJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
@@ -116,22 +114,18 @@ class HomeViewModel @Inject constructor(
             connectionCoordinator.state.collect { state ->
                 when (state) {
                     is ConnectionState.Disconnected, is ConnectionState.Disconnecting -> {
-                        cancelConnectingWatchdog()
                         cancelSelectionJob("state=$state")
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null)
                     }
                     is ConnectionState.Connecting, is ConnectionState.Reconnecting -> {
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
-                        armConnectingWatchdog()
                     }
                     is ConnectionState.Verifying -> {
                         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.VERIFYING, isBusy = true, lastErrorMessage = null)
-                        armConnectingWatchdog()
-                    }
+                                    }
                     is ConnectionState.Connected -> {
                         val diagnosticOptions = DiagnosticSettings.load(context)
                         autoSwitcher.setDiagnosticFreeze(DebugFlags.diagnosticEnabled() && diagnosticOptions.freezeAutoSwitcherAfterConnected)
-                        cancelConnectingWatchdog()
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
                             serverScanner.recordSuccessfulConnection(server)
@@ -151,7 +145,6 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Error -> {
-                        cancelConnectingWatchdog()
                         cancelSelectionJob("Error")
                         pendingRankingConfigs = emptyList()
                         _uiState.value = _uiState.value.copy(
@@ -226,24 +219,6 @@ class HomeViewModel @Inject constructor(
         }
         selectionJob = null
         _uiState.value = _uiState.value.copy(isBusy = false)
-    }
-
-    private fun armConnectingWatchdog() {
-        connectingWatchdogJob?.cancel()
-        connectingWatchdogJob = viewModelScope.launch {
-            delay(CONNECTING_UI_WATCHDOG_MS)
-            val s = connectionCoordinator.state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
-                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
-                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-                connectionCoordinator.send(ConnectionEvent.ShowError("Превышено время подключения"))
-            }
-        }
-    }
-
-    private fun cancelConnectingWatchdog() {
-        connectingWatchdogJob?.cancel()
-        connectingWatchdogJob = null
     }
 
     private fun startPinging() {
@@ -445,7 +420,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
-        cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
         VpnProxyService.clearError()
