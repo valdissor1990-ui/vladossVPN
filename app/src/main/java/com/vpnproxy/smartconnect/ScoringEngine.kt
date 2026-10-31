@@ -115,7 +115,7 @@ class ScoringEngine @Inject constructor(
                 // Missing throughput is unknown, not zero. Redistribute its weight across
                 // the measured latency/reliability dimensions for profiles without a speed sample.
                 val hasSpeedMeasurement = speedMap.containsKey(lr.config.connectionKey())
-                val score = if (hasSpeedMeasurement) {
+                var score = if (hasSpeedMeasurement) {
                     0.40f * normalizedLatency + 0.25f * normalizedSpeed + 0.35f * observedSuccessRate
                 } else {
                     (0.40f / 0.75f) * normalizedLatency + (0.35f / 0.75f) * observedSuccessRate
