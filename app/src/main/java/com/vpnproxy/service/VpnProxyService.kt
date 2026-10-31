@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -424,8 +425,10 @@ class VpnProxyService : VpnService() {
                     graceWaitedMs += 5_000L
                 }
                 if (!_isRunning.value && !(_serviceState.value == ServiceState.Stopping)) {
-                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
-                    connectionCoordinator.send(ConnectionEvent.Timeout)
+                    // The ConnectionCoordinator is the sole owner of the connection deadline.
+                    // This service watchdog is diagnostic only; an early Timeout here raced the
+                    // coordinator's 90-second deadline and could trigger duplicate failure handling.
+                    logCollector.warn(TAG, "Watchdog observed VPN not running; coordinator owns connection timeout")
                 }
             }
 
@@ -722,8 +725,9 @@ class VpnProxyService : VpnService() {
         Log.e(TAG, "forceStopService: $reason")
         logCollector.warn(TAG, "forceStopService: $reason")
 
+        val pendingVpnJob = vpnJob
         try {
-            vpnJob?.cancel()
+            pendingVpnJob?.cancel()
             vpnJob = null
             watchdogJob?.cancel()
             watchdogJob = null
@@ -737,7 +741,12 @@ class VpnProxyService : VpnService() {
 
         scope.launch(Dispatchers.IO) {
             try {
-                stopVpnInternal("forceStop: $reason")
+                // Wait until a cancelled start/restart has left the lifecycle mutex before
+                // touching the native core from the force-stop path.
+                pendingVpnJob?.join()
+                lifecycleController?.withLifecycleLock {
+                    stopVpnInternal("forceStop: $reason")
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "forceStopService stopVpnInternal failed", t)
             }
@@ -774,14 +783,21 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = null
         watchdogJob?.cancel()
         watchdogJob = null
-        vpnJob?.cancel()
+        val pendingVpnJob = vpnJob
+        pendingVpnJob?.cancel()
         vpnJob = null
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
-        try {
-            lifecycleController?.stopCore()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy stopCore failed", t)
+        val controllerToClose = lifecycleController
+        if (controllerToClose != null) {
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    pendingVpnJob?.join()
+                    controllerToClose.withLifecycleLock { controllerToClose.close() }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "onDestroy serialized core cleanup failed", t)
+                }
+            }
         }
         _isRunning.value = false
         scope.cancel()
