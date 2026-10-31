@@ -254,6 +254,7 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.UserDisconnect, is ConnectionEvent.RequestDisconnect -> {
                 val tag = if (event is ConnectionEvent.RequestDisconnect) "RequestDisconnect" else "UserDisconnect"
                 cancelSelectionJob()
+                invalidateTrafficValidation(tag)
                 when (current) {
                     is ConnectionState.Disconnected -> logD("$tag ignored — already Disconnected")
                     is ConnectionState.Disconnecting -> logD("$tag while Disconnecting — stay")
@@ -369,6 +370,7 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.ForceDisconnected -> {
                 val why = event.reason.ifBlank { "ForceDisconnected" }
                 cancelSelectionJob()
+                invalidateTrafficValidation("ForceDisconnected: $why")
                 if (current is ConnectionState.Disconnected) {
                     retryCount = 0
                     logD("ForceDisconnected ($why): already Disconnected; fatal lock is preserved")
