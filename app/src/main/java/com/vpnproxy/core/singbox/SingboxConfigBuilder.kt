@@ -42,10 +42,6 @@ object SingboxConfigBuilder {
         })
     }.toString()
 
-    /**
-     * @param foreignConfig optional second outbound for AI / selected apps (non-RU exit)
-     * @param foreignPackageNames Android package names routed to foreign outbound
-     */
     fun buildVpn(
         config: ParsedConfig,
         options: DiagnosticOptions = DiagnosticOptions(),
@@ -151,13 +147,20 @@ object SingboxConfigBuilder {
                 put("level", "debug")
                 put("timestamp", true)
             })
-            // Probe cores need an explicit Android system resolver; the default
-            // loopback DNS stub is not listening in this temporary proxy-only process.
+            // Probe cores must not rely on "local" DNS — inside a temporary
+            // CommandServer the Android system resolver is often unavailable
+            // (connection refused to [::1]:53). Use public resolvers instead.
             put("dns", buildJsonObject {
                 put("servers", buildJsonArray {
                     add(buildJsonObject {
-                        put("type", "local")
+                        put("type", "udp")
                         put("tag", "probe-dns")
+                        put("server", "1.1.1.1")
+                    })
+                    add(buildJsonObject {
+                        put("type", "udp")
+                        put("tag", "probe-dns-fallback")
+                        put("server", "8.8.8.8")
                     })
                 })
                 put("final", "probe-dns")
@@ -368,41 +371,26 @@ object SingboxConfigBuilder {
                     val sni = config.sni?.takeIf { it.isNotBlank() }
                     val host = config.host?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9.-]+$").matches(it) && it.contains(".") }
                     val serverName = sni ?: host ?: config.address
-                    val source = when { sni != null -> "sni"; host != null -> "host"; else -> "address" }
-                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
                     put("server_name", serverName)
-                    when {
-                        isVless -> {
-                            put("utls", buildJsonObject {
-                                put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=${if (sni != null) "sni" else if (host != null) "host" else "address"}")
+                    if (config.security.equals("reality", true)) {
+                        put("reality", buildJsonObject {
+                            put("enabled", true)
+                            put("public_key", config.publicKey.orEmpty())
+                            put("short_id", config.shortId.orEmpty())
+                        })
+                        put("utls", buildJsonObject {
+                            put("enabled", true)
+                            put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                        })
+                    } else {
+                        put("insecure", config.allowInsecure)
+                        config.alpn?.takeIf { it.isNotBlank() }?.let { alpn ->
+                            put("alpn", buildJsonArray {
+                                alpn.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
+                                    add(JsonPrimitive(it))
+                                }
                             })
-                            if (config.security.equals("reality", true)) {
-                                require(!config.publicKey.isNullOrBlank()) { "VLESS Reality public key (pbk) is missing" }
-                                put("reality", buildJsonObject {
-                                    put("enabled", true)
-                                    put("public_key", config.publicKey)
-                                    put("short_id", config.shortId.orEmpty())
-                                })
-                            }
-                        }
-                        isVmess -> {
-                            put("utls", buildJsonObject {
-                                put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
-                            })
-                            put("insecure", config.insecure)
-                        }
-                        else -> {
-                            put("insecure", config.insecure)
-                            if (config.alpn.isNotEmpty()) {
-                                put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
-                            }
-                            config.pinSHA256?.takeIf { it.isNotBlank() }?.let { pin ->
-                                put("certificate_public_key_sha256", buildJsonArray {
-                                    add(kotlinx.serialization.json.JsonPrimitive(pin))
-                                })
-                            }
                         }
                     }
                 })
