@@ -16,6 +16,7 @@ import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.logging.LogCollectorHolder
 import com.vpnproxy.subscription.SubscriptionRepository
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,7 +110,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
                     if (count == 0) {
                         logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
                     }
-                } catch (t: Throwable) {
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (t: Exception) {
                     logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
                 }
             }
@@ -120,7 +123,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
                 // Start only the background full scan. A second staged connection scan here
                 // duplicated the scan that HomeViewModel performs when the user connects.
                 serverScanner.scanInBackground(applicationScope)
-            } catch (t: Throwable) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Exception) {
                 logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
             }
         }
