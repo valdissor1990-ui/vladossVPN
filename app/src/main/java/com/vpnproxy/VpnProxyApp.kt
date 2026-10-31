@@ -109,7 +109,8 @@ class VpnProxyApp : Application(), Configuration.Provider {
             // Scan the repository's current snapshot even if the network refresh failed;
             // SubscriptionRepository has already loaded its persisted cache on cold start.
             try {
-                serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
+                // Start only the background full scan. A second staged connection scan here
+                // duplicated the scan that HomeViewModel performs when the user connects.
                 serverScanner.scanInBackground(applicationScope)
             } catch (t: Throwable) {
                 logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
