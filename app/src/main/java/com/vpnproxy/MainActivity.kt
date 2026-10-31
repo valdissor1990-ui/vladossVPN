@@ -17,7 +17,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -77,6 +76,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     VPNProxyNavHost(
+                        homeViewModel = homeViewModel,
                         onRequestVpnPermission = { requestVpnPermission() }
                     )
                 }
@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
 
 @androidx.compose.runtime.Composable
 private fun VPNProxyNavHost(
+    homeViewModel: HomeViewModel,
     onRequestVpnPermission: () -> Unit
 ) {
     val navController = rememberNavController()
@@ -107,12 +108,11 @@ private fun VPNProxyNavHost(
 
     NavHost(navController = navController, startDestination = Route.Home.path) {
         composable(Route.Home.path) {
-            val vm: HomeViewModel = hiltViewModel()
             LaunchedEffect(Unit) {
-                vm.setVpnPermissionRequester { currentRequester() }
+                homeViewModel.setVpnPermissionRequester { currentRequester() }
             }
             HomeScreen(
-                viewModel = vm,
+                viewModel = homeViewModel,
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
                 onNavigateToDebug = { navController.navigate(Route.Debug.path) },
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) }
