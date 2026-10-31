@@ -347,11 +347,16 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 val scanned = serverScanner.scanForConnection(configs, targetAvailableCount = 12)
+                // Never turn an unmeasured or failed profile into a "working" selection.
+                // Manual selection uses onServerSelected() and remains a separate user action.
                 val selected = serverScanner.bestAvailableServer(scanned)
-                    ?: autoSwitcher.currentServer.value
-                    ?: scanned.firstOrNull()
                 if (selected == null) {
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
+                    logCollector.warn(TAG, "No server passed reachability probes; refusing automatic connection")
+                    connectionCoordinator.send(
+                        ConnectionEvent.ShowError(
+                            "Не удалось подтвердить доступность серверов. Проверьте интернет или запустите тест серверов."
+                        )
+                    )
                     return@launch
                 }
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
