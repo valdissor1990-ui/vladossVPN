@@ -239,7 +239,8 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun refreshAll(skipIfFresh: Boolean = false): Int = refreshMutex.withLock {
         val now = System.currentTimeMillis()
-        if (skipIfFresh && lastSuccessfulRefreshAtMs > 0L && now - lastSuccessfulRefreshAtMs < REFRESH_FRESHNESS_MS) {
+        val refreshAgeMs = now - lastSuccessfulRefreshAtMs
+        if (skipIfFresh && lastSuccessfulRefreshAtMs > 0L && refreshAgeMs in 0 until REFRESH_FRESHNESS_MS) {
             val cachedCount = _allConfigs.value.distinctBy { it.connectionKey() }.size
             logCollector.info(TAG, "Refresh skipped: successful refresh is still fresh; configs=$cachedCount")
             return@withLock cachedCount
