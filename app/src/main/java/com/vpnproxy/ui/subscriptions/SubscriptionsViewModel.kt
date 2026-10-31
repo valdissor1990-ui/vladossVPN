@@ -77,8 +77,12 @@ class SubscriptionsViewModel @Inject constructor(
             }
             if (count != null && count > 0) {
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
-                runCatching {
+                try {
                     serverScanner.scanForConnection(merged)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Exception) {
+                    logCollector.warn("SubscriptionsVM", "JSON profile scan failed: ${e.message}")
                 }
             }
         }
