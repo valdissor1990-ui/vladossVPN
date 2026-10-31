@@ -36,6 +36,7 @@ import kotlinx.coroutines.delay
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
+    onNavigateToServers: () -> Unit = {},
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
     showDebug: Boolean = true,
@@ -85,7 +86,7 @@ fun HomeScreen(
         bottomBar = {
             Surface(color = CosmosSurface, tonalElevation = 4.dp) {
                 Button(
-                    onClick = { showServers = true },
+                    onClick = onNavigateToServers,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp, vertical = 8.dp)
