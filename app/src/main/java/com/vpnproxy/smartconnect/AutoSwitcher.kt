@@ -552,6 +552,12 @@ class AutoSwitcher @Inject constructor(
 
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
+        // HealthChecker deliberately uses the active VPN route while a tunnel is running.
+        // Such measurements are not candidate-specific and must never trigger ranking switches.
+        if (VpnProxyService.isRunning.value) {
+            logCollector.info(TAG, "Background candidate ranking skipped: active VPN route cannot measure alternative profiles")
+            return
+        }
         if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
         val scopeGeneration = providerScopeGeneration
         rankingJob?.cancel()
@@ -569,7 +575,12 @@ class AutoSwitcher @Inject constructor(
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 // Region is a probe-order hint only; it must not override measured quality.
-                val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                val latencyResults = ruResults + foreignResults
+                val speedCandidates = latencyResults.filter { it.success }.sortedBy { it.latencyMs }.take(5)
+                val speedResults = if (speedCandidates.isNotEmpty()) {
+                    healthChecker.testSpeed(speedCandidates.map { it.config })
+                } else emptyList()
+                val ranked = scoringEngine.computeScore(latencyResults, speedResults)
                 if (scopeGeneration != providerScopeGeneration) {
                     logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
                     return@launch
