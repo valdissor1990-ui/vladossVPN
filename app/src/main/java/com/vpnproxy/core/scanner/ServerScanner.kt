@@ -111,13 +111,19 @@ class ServerScanner @Inject constructor(
                 var probedCount = 0
                 if (probeConfigs.isNotEmpty()) {
                     try {
-                        deepProbeEngine.pingProfiles(probeConfigs) { batch ->
-                            if (scanGeneration.get() == generation) {
-                                batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                                probedCount += batch.size
-                                _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                            }
-                        }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                        // Use the same bounded core size as connection scans. A single core with
+                        // 100+ outbounds can exceed libbox cache-file initialization timeouts.
+                        for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
+                            currentCoroutineContext().ensureActive()
+                            if (scanGeneration.get() != generation) break
+                            deepProbeEngine.pingProfiles(probeBatch) { batch ->
+                                if (scanGeneration.get() == generation) {
+                                    batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                                    probedCount += batch.size
+                                    _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+                                }
+                            }.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
