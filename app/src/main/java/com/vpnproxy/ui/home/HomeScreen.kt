@@ -8,6 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
@@ -199,8 +200,12 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Проверка серверов", color = Color(0xFF172033))
-                    TextButton(onClick = { showScanDialog = false }) {
-                        Text("✕", color = Color(0xFF64748B), style = MaterialTheme.typography.titleMedium)
+                    IconButton(onClick = { showScanDialog = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Закрыть окно сканирования",
+                            tint = Color(0xFF64748B)
+                        )
                     }
                 }
             },
