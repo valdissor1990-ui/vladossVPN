@@ -140,21 +140,4 @@ class ScoringEngine @Inject constructor(
             .sorted()
     }
 
-    /** Latency probe all profiles, speed-test only the five fastest reachable candidates. */
-    suspend fun rankAll(
-        configs: List<ParsedConfig>,
-        healthChecker: HealthChecker
-    ): List<ScoredServer> {
-        val latencyResults = healthChecker.testLatency(configs)
-        val top5 = latencyResults
-            .filter { it.success }
-            .sortedBy { it.latencyMs }
-            .take(5)
-
-        val speedResults = if (top5.isNotEmpty()) {
-            healthChecker.testSpeed(top5.map { it.config })
-        } else emptyList()
-
-        return computeScore(latencyResults, speedResults)
-    }
 }
