@@ -46,16 +46,10 @@ class UpdateViewModel @Inject constructor(
         if (_isCheckingUpdates.value) return@launch
         _isCheckingUpdates.value = true
         try {
-            // Always try background-style prefetch: check → download latest → Ready
-            if (force) {
-                updateManager.checkAndPrefetch()
-            } else {
-                updateManager.checkForUpdate(force = false)
-                val available = updateManager.state.value
-                if (available is UpdateManager.State.UpdateAvailable) {
-                    updateManager.downloadUpdate(available.release)
-                }
-            }
+            // A normal check only announces an update. Download starts only after the user taps "Скачать".
+            // Forced background prefetch remains available to the explicitly scheduled worker path.
+            if (force) updateManager.checkAndPrefetch()
+            else updateManager.checkForUpdate(force = false)
             when (val s = updateManager.state.value) {
                 is UpdateManager.State.UpToDate ->
                     _feedback.emit(Feedback.UpToDate)
