@@ -96,6 +96,7 @@ class ConnectionCoordinator @Inject constructor(
     private var fallbackAttempts: Int = 0
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
     private var trafficValidationGeneration: Long = 0L
+    private var trafficValidationJob: Job? = null
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
 
     @Volatile private var allowedProviderTag: String? = null
@@ -200,6 +201,13 @@ class ConnectionCoordinator @Inject constructor(
         setState(ConnectionState.Error(reason.userMessage()), reason = reason.toString())
     }
 
+    private fun invalidateTrafficValidation(reason: String) {
+        trafficValidationGeneration++
+        trafficValidationJob?.cancel()
+        trafficValidationJob = null
+        logD("Traffic validation cancelled: $reason; generation=$trafficValidationGeneration")
+    }
+
     private fun cancelSelectionJob() {
         try { selectionCancel?.invoke() } catch (_: Throwable) {}
     }
@@ -282,7 +290,7 @@ class ConnectionCoordinator @Inject constructor(
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
                 }
-                trafficValidationGeneration++ // invalidate any in-flight probe for the previous selection
+                invalidateTrafficValidation("new server selected")
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
                 hasServerSelected = true
@@ -388,7 +396,8 @@ class ConnectionCoordinator @Inject constructor(
                     }
                 }
                 retryCount = 0
-                val validationId = ++trafficValidationGeneration
+                invalidateTrafficValidation("new ServiceReady")
+                val validationId = trafficValidationGeneration
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
@@ -397,8 +406,16 @@ class ConnectionCoordinator @Inject constructor(
                     send(ConnectionEvent.TrafficValidationResult(event.serverName, success = true, validationId = validationId))
                     return
                 }
-                scope.launch {
-                    val report = trafficValidator.probeTraffic(event.serverName)
+                trafficValidationJob = scope.launch {
+                    val report = try {
+                        trafficValidator.probeTraffic(event.serverName)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        logE("Traffic validation crashed for ${event.serverName}: ${error.message}")
+                        send(ConnectionEvent.TrafficValidationResult(event.serverName, success = false, validationId = validationId, failureSummary = error.message))
+                        return@launch
+                    }
                     // Passive ACE observation of the existing validation result.
                     // This does not start probes, change validation, or feed Smart Connect.
                     AceTelemetryBridge.submitMetric(
@@ -447,6 +464,7 @@ class ConnectionCoordinator @Inject constructor(
                     logW("TrafficValidationResult ignored — fatal lock")
                     return
                 }
+                trafficValidationJob = null
                 if (event.success) {
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
