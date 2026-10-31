@@ -31,6 +31,25 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * Reserve all ephemeral ports at once. Closing each ServerSocket immediately after
+ * reading its port can cause the OS to return that same port for the next profile.
+ */
+internal fun allocateProbePorts(count: Int): List<Int> {
+    require(count > 0) { "At least one probe port is required" }
+    val reservations = ArrayList<ServerSocket>(count)
+    try {
+        repeat(count) { reservations += ServerSocket(0) }
+        val ports = reservations.map { it.localPort }
+        check(ports.size == ports.toSet().size) {
+            "OS returned duplicate ephemeral ports for profile probes"
+        }
+        return ports
+    } finally {
+        reservations.forEach { socket -> runCatching { socket.close() } }
+    }
+}
+
+/**
  * Deep probe runs entirely on Sing-box in proxy-only mode. It refuses to replace an active VPN
  * configuration and always closes the temporary CommandServer after collecting measurements.
  */
@@ -336,20 +355,5 @@ class DeepProbeEngine @Inject constructor(
         }
     }
 
-    private fun allocatePorts(count: Int): List<Int> {
-        require(count > 0) { "At least one probe port is required" }
-        // Keep every ephemeral socket bound until all ports have been selected.
-        // Closing each socket immediately lets the OS hand the same port out again.
-        val reservations = ArrayList<ServerSocket>(count)
-        try {
-            repeat(count) { reservations += ServerSocket(0) }
-            val ports = reservations.map { it.localPort }
-            check(ports.size == ports.toSet().size) {
-                "OS returned duplicate ephemeral ports for profile probes"
-            }
-            return ports
-        } finally {
-            reservations.forEach { socket -> runCatching { socket.close() } }
-        }
-    }
+    private fun allocatePorts(count: Int): List<Int> = allocateProbePorts(count)
 }
