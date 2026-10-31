@@ -112,9 +112,14 @@ class ScoringEngine @Inject constructor(
                 val observedSuccessRate = successRate(lr.config)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
-                var score = 0.40f * normalizedLatency +
-                    0.25f * normalizedSpeed +
-                    0.35f * observedSuccessRate
+                // Missing throughput is unknown, not zero. Redistribute its weight across
+                // the measured latency/reliability dimensions for profiles without a speed sample.
+                val hasSpeedMeasurement = speedMap.containsKey(lr.config.connectionKey())
+                val score = if (hasSpeedMeasurement) {
+                    0.40f * normalizedLatency + 0.25f * normalizedSpeed + 0.35f * observedSuccessRate
+                } else {
+                    (0.40f / 0.75f) * normalizedLatency + (0.35f / 0.75f) * observedSuccessRate
+                }
                 val hist = history.computeIfAbsent(lr.config.connectionKey()) { loadHistory(lr.config) }
                 val attempts = synchronized(hist) { hist.attempts }
                 if (attempts >= 5L && observedSuccessRate < 0.4f) {
