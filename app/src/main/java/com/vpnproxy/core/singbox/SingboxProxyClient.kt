@@ -48,6 +48,7 @@ object SingboxProxyClient {
     fun stop(context: Context? = null) {
         val core = activeCore
         activeCore = null
-        runCatching { core?.stop() }.onFailure { Log.w(TAG, "Failed to stop temporary Sing-box", it) }
+        runCatching { core?.stopTemporaryBlocking()?.getOrThrow() }
+            .onFailure { Log.w(TAG, "Failed to stop temporary Sing-box", it) }
     }
 }
