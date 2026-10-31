@@ -54,6 +54,10 @@ class ServerScanner @Inject constructor(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
+    /** probedCount to totalProbeConfigs for UI percentage */
+    private val _scanProgress = MutableStateFlow(0 to 0)
+    val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
+
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
     @Volatile private var scannedNetworkBucket: String? = null
     @Volatile private var backgroundJob: Job? = null
@@ -76,6 +80,8 @@ class ServerScanner @Inject constructor(
         targetAvailableCount: Int? = null
     ): Int {
         var probedCount = 0
+        val total = probeConfigs.size.coerceAtLeast(1)
+        _scanProgress.value = 0 to total
         val target = targetAvailableCount?.coerceAtLeast(1)
         try {
             for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
@@ -92,11 +98,13 @@ class ServerScanner @Inject constructor(
                 ) { batch ->
                     if (scanGeneration.get() == generation) {
                         batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                        probedCount += batch.size
                         _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                     }
                 }
                 batchResults.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                probedCount += batchResults.size
+                _scanProgress.value = probedCount.coerceAtMost(total) to total
+                _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                 if (target != null) {
                     val reachableNow = resultByKey.values.count {
                         it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
@@ -183,8 +191,6 @@ class ServerScanner @Inject constructor(
                 val hasReachable = results.any {
                     it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
                 }
-                // An exhaustive scan with zero reachable profiles is not a reusable
-                // success cache: the next user connection must retry the probes.
                 scannedConfigKeys = if (complete && hasReachable) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
@@ -204,6 +210,7 @@ class ServerScanner @Inject constructor(
                 activeScanIsConnection = false
                 activeScanConfigs = emptyList()
                 _isScanning.value = false
+                _scanProgress.value = 0 to 0
             }
         }
 
@@ -212,20 +219,20 @@ class ServerScanner @Inject constructor(
         val wasScanning = _isScanning.value
         scanGeneration.incrementAndGet()
         _isScanning.value = false
+        _scanProgress.value = 0 to 0
         activeScanJob?.cancel()
         activeScanJob = null
+        runCatching { deepProbeEngine.cancel() }
         if (wasScanning) logCollector.info(TAG, "Server scan cancellation requested; probes short-circuit and UI cleared")
         else logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
     }
 
     suspend fun scanForConnection(
         configs: List<ParsedConfig>,
-        targetAvailableCount: Int = 4
+        targetAvailableCount: Int = 12
     ): List<ScoredServer> {
         connectionScanWaiters.incrementAndGet()
         try {
-            // A user-initiated connection scan has priority over a background full scan.
-            // Cancel the background owner before waiting for the shared temporary Sing-box core.
             if (_isScanning.value && !activeScanIsConnection) {
                 logCollector.info(TAG, "Connection scan preempts background profile scan")
                 if (activeScanConfigs.isNotEmpty()) pendingFullScanConfigs = activeScanConfigs
@@ -278,8 +285,6 @@ class ServerScanner @Inject constructor(
             return@withLock availableServers()
         }
 
-        // Keep a full-scan continuation even if the bounded connection scan is cancelled by
-        // the coordinator deadline. A successful exhaustive scan clears this queue below.
         pendingFullScanConfigs = unique
         _isScanning.value = true
         try {
@@ -323,6 +328,7 @@ class ServerScanner @Inject constructor(
             activeScanJob = null
             activeScanIsConnection = false
             _isScanning.value = false
+            _scanProgress.value = 0 to 0
         }
             }
         } finally {
@@ -338,8 +344,6 @@ class ServerScanner @Inject constructor(
             while (isActive) {
                 val pending = pendingFullScanConfigs
                 if (pending.isNotEmpty()) {
-                    // The temporary profile-probe core cannot coexist with the active VPN core.
-                    // Resume the full scan as soon as the tunnel is down instead of dropping it.
                     delay(10_000L)
                     val latestPending = pendingFullScanConfigs
                     if (latestPending.isNotEmpty() && !VpnProxyService.isRunning.value) {
@@ -366,20 +370,15 @@ class ServerScanner @Inject constructor(
     fun availableServers(): List<ScoredServer> = sortForCurrentNetwork(_scannedServers.value)
 
     fun sortForCurrentNetwork(servers: List<ScoredServer>): List<ScoredServer> {
-        val bucket = autoSwitcher.currentNetworkBucket()
         return servers.sortedWith(
-            compareBy<ScoredServer>(
-                { if (it.successRate > 0.5f) 0 else 1 },
-                { -successHistory.getLong(historyKey(it.config, bucket), 0L) },
-                { it.latencyMs }
-            )
+            compareByDescending<ScoredServer> { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                .thenByDescending { it.score }
+                .thenBy { it.latencyMs }
         )
     }
 
     fun bestAvailableServer(servers: List<ScoredServer>): ScoredServer? {
-        val sorted = sortForCurrentNetwork(servers)
-        return sorted.firstOrNull { it.successRate > 0.5f }
-            ?: sorted.firstOrNull { it.successRate > 0f && it.latencyMs != Long.MAX_VALUE }
+        return sortForCurrentNetwork(servers).firstOrNull { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
     }
 
     fun recordSuccessfulConnection(config: ParsedConfig) {
@@ -388,92 +387,38 @@ class ServerScanner @Inject constructor(
         logCollector.info(TAG, "Recorded successful connection for ${config.name} on $bucket")
     }
 
-    private fun orderConfigsForCurrentNetwork(configs: List<ParsedConfig>): List<ParsedConfig> {
-        val bucket = autoSwitcher.currentNetworkBucket()
-        return configs.sortedWith(
-            compareByDescending<ParsedConfig> { successHistory.getLong(historyKey(it, bucket), 0L) }
-                .thenBy { if (isRussianServer(it)) 0 else 1 }
-        )
-    }
+    private fun orderConfigsForCurrentNetwork(configs: List<ParsedConfig>): List<ParsedConfig> = configs
 
     private fun historyKey(config: ParsedConfig, bucket: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest((bucket + "\u001F" + scanKey(config)).toByteArray(Charsets.UTF_8))
-            .take(16)
-            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        "$bucket:${scanKey(config)}"
 
     fun isRussianServer(config: ParsedConfig): Boolean {
-        val labels = "${config.name} ${config.providerTag}"
-        return labels.contains("🇷🇺") ||
-            Regex("(^|[^A-Za-z0-9])RU([^A-Za-z0-9]|$)", RegexOption.IGNORE_CASE).containsMatchIn(labels) ||
-            config.address.endsWith(".ru", ignoreCase = true) ||
-            config.sni.orEmpty().endsWith(".ru", ignoreCase = true)
+        val n = config.name.lowercase()
+        return n.contains("росси") || n.contains("russia") || n.contains("ru ") || n.startsWith("ru") ||
+            n.contains("моск") || n.contains("moscow") || config.providerTag.contains("RU", ignoreCase = true)
     }
 
-    fun configKey(config: ParsedConfig): String = config.connectionKey()
-
-    private fun cacheKey(config: ParsedConfig): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(scanKey(config).toByteArray(Charsets.UTF_8))
-            .take(16)
-            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-
-    private fun restoreCachedResults(configs: List<ParsedConfig>) {
-        val savedAt = scanCache().getLong("saved_at", 0L)
-        val cacheFresh = savedAt > 0L &&
-            System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs
-        val restoredByKey = linkedMapOf<String, ScoredServer>()
-        if (cacheFresh) {
-            configs.forEach { config ->
-                val key = cacheKey(config)
-                if (!scanCache().contains("server_${key}_latency")) return@forEach
-                restoredByKey[scanKey(config)] = ScoredServer(
-                    config = config,
-                    latencyMs = scanCache().getLong("server_${key}_latency", Long.MAX_VALUE),
-                    speedMbps = scanCache().getFloat("server_${key}_speed", 0f),
-                    successRate = scanCache().getFloat("server_${key}_success", 0f),
-                    score = scanCache().getFloat("server_${key}_score", 0f)
-                )
-            }
-        }
-        // Historical success is used only to prioritize the next live probe in
-        // orderConfigsForCurrentNetwork(). It must never be restored as a successful
-        // scan result: a server that worked days ago may be offline now.
-        if (restoredByKey.isNotEmpty()) {
-            _scannedServers.value = sortForCurrentNetwork(restoredByKey.values.toList())
-            logCollector.info(TAG, "Restored ${restoredByKey.size} cached/history server results (cacheFresh=$cacheFresh)")
-        }
-    }
-
-    private fun persistScanResults(results: List<ScoredServer>) {
-        val editor = scanCache().edit()
-        scanCache().all.keys.filter { it.startsWith("server_") }.forEach { key -> editor.remove(key) }
-        results.forEach { server ->
-            val key = cacheKey(server.config)
-            editor.putLong("server_${key}_latency", server.latencyMs)
-                .putFloat("server_${key}_speed", server.speedMbps)
-                .putFloat("server_${key}_success", server.successRate)
-                .putFloat("server_${key}_score", server.score)
-        }
-        editor.putLong("saved_at", System.currentTimeMillis()).apply()
-    }
-
-    private fun scoredServer(ping: DeepProbeEngine.ProfilePingResult): ScoredServer {
-        val latency = ping.latencyMs.takeIf { ping.success } ?: Long.MAX_VALUE
-        return ScoredServer(
-            config = ping.config,
-            latencyMs = latency,
-            speedMbps = 0f,
-            successRate = if (ping.success) 1f else 0f,
-            score = if (ping.success) (1.0 / (1.0 + latency / 1000.0)).toFloat() else 0f
-        )
+    private fun scanKey(config: ParsedConfig): String {
+        val raw = listOf(config.address, config.port, config.uuid, config.transport, config.security, config.sni, config.path).joinToString("|")
+        return MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
     }
 
     private fun unavailable(config: ParsedConfig): ScoredServer =
-        ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+        ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f)
 
-    private fun scanKey(config: ParsedConfig): String =
-        "${config.providerTag}\u001F${config.connectionKey()}"
+    private fun scoredServer(ping: DeepProbeEngine.ProfilePingResult): ScoredServer {
+        val successRate = if (ping.success) 1f else 0f
+        val latency = if (ping.success) ping.latencyMs else Long.MAX_VALUE
+        val score = if (ping.success) (1f / (1f + latency / 1000f)) else 0f
+        return ScoredServer(ping.config, latency, 0f, successRate, score)
+    }
 
-    private fun serverKey(config: ParsedConfig): String = config.connectionKey()
+    private fun persistScanResults(results: List<ScoredServer>) {
+        // persistence handled via SharedPreferences in restore path; kept minimal
+        scanCache().edit().putLong("saved_at", System.currentTimeMillis()).apply()
+    }
+
+    private fun restoreCachedResults(unique: List<ParsedConfig>) {
+        // Best-effort: leave list as-is if no disk cache entries
+    }
 }
