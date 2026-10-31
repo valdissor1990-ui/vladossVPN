@@ -3,19 +3,14 @@ package com.vpnproxy.ui.home
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,12 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vpnproxy.R
 import com.vpnproxy.ui.components.ConnectionStatsCard
 import com.vpnproxy.ui.components.GlowPowerButton
 import com.vpnproxy.ui.servers.ServerListContent
@@ -51,8 +43,6 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
-    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
-    var subscriptionMenuExpanded by remember { mutableStateOf(false) }
 
     var showServers by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
@@ -61,16 +51,11 @@ fun HomeScreen(
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
 
     val bgBrush = remember {
-        Brush.radialGradient(
-            colors = listOf(DeepSpaceBlue, DeepSpaceVoid),
-            radius = 1600f
-        )
+        Brush.radialGradient(colors = listOf(DeepSpaceBlue, DeepSpaceVoid), radius = 1600f)
     }
     val stars = remember {
         val rnd = Random(42)
-        List(50) {
-            Offset(rnd.nextFloat(), rnd.nextFloat()) to rnd.nextFloat() * 0.4f + 0.15f
-        }
+        List(50) { Offset(rnd.nextFloat(), rnd.nextFloat()) to rnd.nextFloat() * 0.4f + 0.15f }
     }
 
     Scaffold(
@@ -78,33 +63,19 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("vladossVPN") },
                 actions = {
-                    IconButton(onClick = { showServers = true }) {
-                        Icon(Icons.Default.List, "Servers")
-                    }
-                    IconButton(onClick = onNavigateToSubscriptions) {
-                        Icon(Icons.Default.Cloud, "Subscriptions")
-                    }
+                    IconButton(onClick = { showServers = true }) { Icon(Icons.Default.List, "Servers") }
+                    IconButton(onClick = onNavigateToSubscriptions) { Icon(Icons.Default.Cloud, "Subscriptions") }
                     if (showDebug) {
-                        IconButton(onClick = onNavigateToDebug) {
-                            Icon(Icons.Default.BugReport, "Журнал логов")
-                        }
+                        IconButton(onClick = onNavigateToDebug) { Icon(Icons.Default.BugReport, "Журнал логов") }
                     }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, "Settings")
-                    }
+                    IconButton(onClick = onNavigateToSettings) { Icon(Icons.Default.Settings, "Settings") }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         containerColor = Color.Transparent
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(bgBrush)
-        ) {
+        Box(modifier = Modifier.fillMaxSize().background(bgBrush)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 stars.forEach { (offset, alpha) ->
                     drawCircle(
@@ -114,7 +85,6 @@ fun HomeScreen(
                     )
                 }
             }
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -124,7 +94,6 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Spacer(Modifier.height(16.dp))
-
                 Text(
                     text = when (uiState.connectionState) {
                         ConnectionUiState.CONNECTED -> "Подключено"
@@ -136,47 +105,35 @@ fun HomeScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     color = OnDark
                 )
-
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = uiState.currentServerName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OnDarkSecondary
-                )
-
+                Text(text = uiState.currentServerName, style = MaterialTheme.typography.bodyMedium, color = OnDarkSecondary)
                 Spacer(Modifier.height(28.dp))
-
                 GlowPowerButton(
                     state = uiState.connectionState,
                     isBusy = uiState.isBusy,
                     isScanning = uiState.isScanningServers,
                     onClick = {
                         if (uiState.isScanningServers) {
-                            Log.i("HomeScreen", "HomeScreen: stop scan from main button")
+                            Log.i("HomeScreen", "stop scan from main button")
                             viewModel.cancelServerScan()
                         } else {
                             viewModel.toggleConnection()
                         }
                     }
                 )
-
                 if (uiState.isScanningServers) {
                     Spacer(Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Text(
-                            text = "Поиск доступных серверов: ${uiState.scanProgressPercent}%",
+                            text = "Поиск серверов: ${uiState.scannedAvailableServers}" +
+                                if (uiState.scanTotalServers > 0) " / ${uiState.scanTotalServers}" else "",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
-
                 Spacer(Modifier.height(18.dp))
-
                 ConnectionStatsCard(
                     state = uiState.connectionState,
                     serverName = uiState.currentServerName,
@@ -184,12 +141,9 @@ fun HomeScreen(
                     traffic = traffic,
                     sessionStartedAt = uiState.sessionStartedAt
                 )
-
                 Spacer(Modifier.height(16.dp))
-
                 uiState.lastErrorMessage?.let {
                     Text(it, color = Color(0xFFF87171), style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -240,19 +194,13 @@ fun HomeScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(
-                            progress = uiState.scanProgressPercent.coerceIn(0, 100) / 100f,
-                            color = Color(0xFF2563EB),
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(28.dp)
+                        CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                        Text(
+                            "Найдено: ${uiState.scannedAvailableServers}" +
+                                if (uiState.scanTotalServers > 0) " / ${uiState.scanTotalServers}" else "",
+                            color = Color(0xFF334155)
                         )
-                        Text("Сканирование: ${uiState.scanProgressPercent}%", color = Color(0xFF334155))
                     }
-                    Text(
-                        text = "Найдено доступных: ${uiState.scannedAvailableServers}" +
-                            if (uiState.scanTotalServers > 0) " из ${uiState.scanTotalServers}" else "",
-                        color = Color(0xFF334155)
-                    )
                     Text(
                         "Крестик или «Остановить» — сканирование прерывается.",
                         color = Color(0xFF64748B),
