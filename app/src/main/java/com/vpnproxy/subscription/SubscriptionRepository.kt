@@ -33,6 +33,7 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -126,8 +127,10 @@ class SubscriptionRepository @Inject constructor(
 
     private val refreshMutex = Mutex()
     @Volatile private var lastSuccessfulRefreshAtMs = 0L
+    private val subscriptionConfigGeneration = AtomicLong(0L)
 
     private fun invalidateRefreshFreshness() {
+        subscriptionConfigGeneration.incrementAndGet()
         lastSuccessfulRefreshAtMs = 0L
     }
 
@@ -241,6 +244,7 @@ class SubscriptionRepository @Inject constructor(
             logCollector.info(TAG, "Refresh skipped: successful refresh is still fresh; configs=$cachedCount")
             return@withLock cachedCount
         }
+        val generationAtStart = subscriptionConfigGeneration.get()
         val refreshResult = withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
             val subs = _subscriptions.value.filter { it.enabled }
@@ -298,7 +302,9 @@ class SubscriptionRepository @Inject constructor(
             )
             globallyUniqueCount to anyNetworkSuccess
         }
-        if (refreshResult.second) lastSuccessfulRefreshAtMs = System.currentTimeMillis()
+        if (refreshResult.second && subscriptionConfigGeneration.get() == generationAtStart) {
+            lastSuccessfulRefreshAtMs = System.currentTimeMillis()
+        }
         refreshResult.first
     }
 
