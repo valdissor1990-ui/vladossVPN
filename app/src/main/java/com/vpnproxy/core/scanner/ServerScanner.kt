@@ -259,6 +259,9 @@ class ServerScanner @Inject constructor(
             return@withLock availableServers()
         }
 
+        // Keep a full-scan continuation even if the bounded connection scan is cancelled by
+        // the coordinator deadline. A successful exhaustive scan clears this queue below.
+        pendingFullScanConfigs = unique
         _isScanning.value = true
         try {
             activeScanJob = currentCoroutineContext()[Job]
