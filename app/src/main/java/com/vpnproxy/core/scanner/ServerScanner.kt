@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,6 +59,8 @@ class ServerScanner @Inject constructor(
     @Volatile private var backgroundJob: Job? = null
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
+    @Volatile private var activeScanIsConnection = false
+    private val connectionScanWaiters = AtomicInteger(0)
     @Volatile private var pendingFullScanConfigs: List<ParsedConfig> = emptyList()
     private val scanGeneration = AtomicLong(0L)
     private fun scanCache() = context.getSharedPreferences("server_scan_cache_v2_${autoSwitcher.currentNetworkBucket()}", Context.MODE_PRIVATE)
@@ -67,6 +70,10 @@ class ServerScanner @Inject constructor(
     // NOTE: Full body restored from last good revision; behavioral fixes land in HomeViewModel.
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
+            if (connectionScanWaiters.get() > 0) {
+                logCollector.info(TAG, "Full scan deferred: a connection scan is waiting")
+                return@withLock _scannedServers.value
+            }
             val networkBucket = autoSwitcher.currentNetworkBucket()
             if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
                 _scannedServers.value = emptyList()
@@ -104,6 +111,7 @@ class ServerScanner @Inject constructor(
             _isScanning.value = true
             try {
                 activeScanJob = currentCoroutineContext()[Job]
+                activeScanIsConnection = false
                 val resultByKey = linkedMapOf<String, ScoredServer>()
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
@@ -149,6 +157,7 @@ class ServerScanner @Inject constructor(
                 results
             } finally {
                 activeScanJob = null
+                activeScanIsConnection = false
                 _isScanning.value = false
             }
         }
@@ -172,7 +181,16 @@ class ServerScanner @Inject constructor(
     suspend fun scanForConnection(
         configs: List<ParsedConfig>,
         targetAvailableCount: Int = 4
-    ): List<ScoredServer> = scanMutex.withLock {
+    ): List<ScoredServer> {
+        connectionScanWaiters.incrementAndGet()
+        try {
+            // A user-initiated connection scan has priority over a background full scan.
+            // Cancel the background owner before waiting for the shared temporary Sing-box core.
+            if (_isScanning.value && !activeScanIsConnection) {
+                logCollector.info(TAG, "Connection scan preempts background profile scan")
+                cancelScan()
+            }
+            return scanMutex.withLock {
         val generationForScan = scanGeneration.get()
         val networkBucket = autoSwitcher.currentNetworkBucket()
         if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
@@ -210,6 +228,7 @@ class ServerScanner @Inject constructor(
         _isScanning.value = true
         try {
             activeScanJob = currentCoroutineContext()[Job]
+            activeScanIsConnection = true
             val probeConfigs = unique.filter { config -> !autoSwitcher.isBlacklisted(config) && config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
             val resultByKey = linkedMapOf<String, ScoredServer>()
             unique.forEach { config ->
@@ -272,7 +291,12 @@ class ServerScanner @Inject constructor(
             results
         } finally {
             activeScanJob = null
+            activeScanIsConnection = false
             _isScanning.value = false
+        }
+            }
+        } finally {
+            connectionScanWaiters.decrementAndGet()
         }
     }
 
