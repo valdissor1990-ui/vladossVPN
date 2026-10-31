@@ -41,6 +41,7 @@ class ServerScanner @Inject constructor(
 ) {
     companion object {
         private const val TAG = "ServerScanner"
+        private const val CONNECTION_PROBE_BATCH_SIZE = 16
         private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
     }
 
@@ -210,17 +211,36 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
             var probedCount = 0
             try {
-                val results = deepProbeEngine.pingProfiles(
-                    probeConfigs,
-                    stopAfterSuccessfulCount = targetAvailableCount.coerceAtLeast(1)
-                ) { batch ->
-                    if (scanGeneration.get() == generationForScan) {
-                        batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
-                        probedCount += batch.size
-                        _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+                // Avoid initializing one temporary Sing-box core with 100+ outbounds at once.
+                // Large profile sets can time out during libbox cache-file initialization.
+                val target = targetAvailableCount.coerceAtLeast(1)
+                for (probeBatch in probeConfigs.chunked(CONNECTION_PROBE_BATCH_SIZE)) {
+                    ensureActive()
+                    if (scanGeneration.get() != generationForScan) break
+                    val remainingTarget = (target - resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }).coerceAtLeast(1)
+                    val batchResults = deepProbeEngine.pingProfiles(
+                        probeBatch,
+                        stopAfterSuccessfulCount = remainingTarget
+                    ) { batch ->
+                        if (scanGeneration.get() == generationForScan) {
+                            batch.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
+                            probedCount += batch.size
+                            _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
+                        }
+                    }
+                    batchResults.forEach { ping ->
+                        resultByKey[scanKey(ping.config)] = scoredServer(ping)
+                    }
+                    val reachableNow = resultByKey.values.count {
+                        it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                    }
+                    if (reachableNow >= target) {
+                        logCollector.info(TAG, "Connection scan reached target=$target after ${probedCount} measured profiles")
+                        break
                     }
                 }
-                results.forEach { ping -> resultByKey[scanKey(ping.config)] = scoredServer(ping) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
