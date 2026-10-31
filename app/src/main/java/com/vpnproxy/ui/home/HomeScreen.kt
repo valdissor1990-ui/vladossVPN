@@ -47,12 +47,16 @@ fun HomeScreen(
 
     var showServers by remember { mutableStateOf(false) }
     var showScanDialog by remember { mutableStateOf(false) }
+    var scanStoppedByUser by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
     LaunchedEffect(uiState.isScanningServers) {
-        showScanDialog = uiState.isScanningServers
+        if (uiState.isScanningServers) {
+            showScanDialog = true
+            scanStoppedByUser = false
+        }
     }
 
     val bgBrush = remember {
@@ -191,7 +195,7 @@ fun HomeScreen(
         }
     }
 
-    if (uiState.isScanningServers && showScanDialog) {
+    if (showScanDialog) {
         AlertDialog(
             onDismissRequest = { showScanDialog = false },
             containerColor = Color.White,
@@ -203,7 +207,7 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Проверка серверов", color = Color(0xFF172033))
+                    Text(if (uiState.isScanningServers) "Проверка серверов" else "Результаты проверки", color = Color(0xFF172033))
                     IconButton(onClick = { showScanDialog = false }) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -215,10 +219,14 @@ fun HomeScreen(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                    if (uiState.isScanningServers) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                            Text("Проверка выполняется…", color = Color(0xFF334155))
+                        }
+                    } else {
                         Text(
-                            "Проверка выполняется…",
+                            if (scanStoppedByUser) "Проверка остановлена." else "Проверка завершена.",
                             color = Color(0xFF334155)
                         )
                     }
@@ -228,18 +236,24 @@ fun HomeScreen(
                     Text("Доступно: ${uiState.scannedAvailableServers}", color = Color(0xFF166534))
                     Text("Не прошло проверку: ${uiState.scanFailedServers}", color = Color(0xFFB91C1C))
                     Text(
-                        "Крестик закрывает окно, но не останавливает проверку.",
+                        if (uiState.isScanningServers) "Крестик закрывает окно, но не останавливает проверку." else "Можно закрыть это окно; результаты уже сохранены в списке.",
                         color = Color(0xFF64748B),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.cancelServerScan()
-                    showScanDialog = false
-                }) {
-                    Text("Остановить тест", color = Color(0xFFB91C1C))
+                if (uiState.isScanningServers) {
+                    TextButton(onClick = {
+                        scanStoppedByUser = true
+                        viewModel.cancelServerScan()
+                    }) {
+                        Text("Остановить тест", color = Color(0xFFB91C1C))
+                    }
+                } else {
+                    TextButton(onClick = { showScanDialog = false }) {
+                        Text("Закрыть", color = Color(0xFF2563EB))
+                    }
                 }
             }
         )
