@@ -102,19 +102,31 @@ class ScoringEngine @Inject constructor(
             .filter { it.success && it.speedMbps.isFinite() && it.speedMbps > 0f }
             .associateBy { it.config.connectionKey() }
         val maxSpeed = speedMap.values.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
+        val neutralSpeedScore = speedMap.values
+            .map { it.speedMbps / maxSpeed }
+            .average()
+            .toFloat()
+            .takeIf { it.isFinite() }
+            ?: 0.5f
 
         return latencyResults
             .filter { it.success && it.latencyMs != Long.MAX_VALUE }
             .map { lr ->
-                val speed = speedMap[lr.config.connectionKey()]?.speedMbps ?: 0f
+                val measuredSpeed = speedMap[lr.config.connectionKey()]
+                val speed = measuredSpeed?.speedMbps ?: 0f
                 val normalizedLatency = 1.0f / (lr.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
-                val normalizedSpeed = speed / maxSpeed
+                val normalizedSpeed = measuredSpeed?.let { it.speedMbps / maxSpeed } ?: neutralSpeedScore
                 val observedSuccessRate = successRate(lr.config)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
-                var score = 0.40f * normalizedLatency +
-                    0.25f * normalizedSpeed +
-                    0.35f * observedSuccessRate
+                // Missing throughput is unknown, not zero. Redistribute its weight across
+                // the measured latency/reliability dimensions for profiles without a speed sample.
+                var score = if (speedMap.isNotEmpty()) {
+                    // Unknown throughput is imputed at the mean of measured candidates, not zero.
+                    0.40f * normalizedLatency + 0.25f * normalizedSpeed + 0.35f * observedSuccessRate
+                } else {
+                    (0.40f / 0.75f) * normalizedLatency + (0.35f / 0.75f) * observedSuccessRate
+                }
                 val hist = history.computeIfAbsent(lr.config.connectionKey()) { loadHistory(lr.config) }
                 val attempts = synchronized(hist) { hist.attempts }
                 if (attempts >= 5L && observedSuccessRate < 0.4f) {
@@ -135,21 +147,4 @@ class ScoringEngine @Inject constructor(
             .sorted()
     }
 
-    /** Latency probe all profiles, speed-test only the five fastest reachable candidates. */
-    suspend fun rankAll(
-        configs: List<ParsedConfig>,
-        healthChecker: HealthChecker
-    ): List<ScoredServer> {
-        val latencyResults = healthChecker.testLatency(configs)
-        val top5 = latencyResults
-            .filter { it.success }
-            .sortedBy { it.latencyMs }
-            .take(5)
-
-        val speedResults = if (top5.isNotEmpty()) {
-            healthChecker.testSpeed(top5.map { it.config })
-        } else emptyList()
-
-        return computeScore(latencyResults, speedResults)
-    }
 }

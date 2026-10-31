@@ -57,7 +57,7 @@ internal object ConnectServerSelector {
                         (last.uuid.isBlank() || it.config.uuid == last.uuid)
                 }
             } else null
-            val best = lastLive ?: serverScanner.bestAvailableServer(live.ifEmpty { scanned })
+            val best = lastLive ?: serverScanner.bestAvailableServer(live)
             if (best != null) {
                 autoSwitcher.selectScanned(best, scanned)
             } else {
@@ -67,7 +67,7 @@ internal object ConnectServerSelector {
         } else {
             manuallySelected?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
                 ?: run {
-                    val best = serverScanner.bestAvailableServer(live.ifEmpty { scanned })
+                    val best = serverScanner.bestAvailableServer(live)
                     if (best != null) autoSwitcher.selectScanned(best, scanned)
                     else null
                 }

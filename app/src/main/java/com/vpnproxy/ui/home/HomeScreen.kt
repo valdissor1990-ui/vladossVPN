@@ -3,19 +3,15 @@ package com.vpnproxy.ui.home
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,12 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vpnproxy.R
 import com.vpnproxy.ui.components.ConnectionStatsCard
 import com.vpnproxy.ui.components.GlowPowerButton
 import com.vpnproxy.ui.servers.ServerListContent
@@ -43,6 +36,7 @@ import kotlinx.coroutines.delay
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
+    onNavigateToServers: () -> Unit = {},
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
     showDebug: Boolean = true,
@@ -51,26 +45,27 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
-    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
-    var subscriptionMenuExpanded by remember { mutableStateOf(false) }
 
     var showServers by remember { mutableStateOf(false) }
+    var showScanDialog by remember { mutableStateOf(false) }
+    var scanStoppedByUser by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
+    LaunchedEffect(uiState.isScanningServers) {
+        if (uiState.isScanningServers) {
+            showScanDialog = true
+            scanStoppedByUser = false
+        }
+    }
 
     val bgBrush = remember {
-        Brush.radialGradient(
-            colors = listOf(DeepSpaceBlue, DeepSpaceVoid),
-            radius = 1600f
-        )
+        Brush.radialGradient(colors = listOf(DeepSpaceBlue, DeepSpaceVoid), radius = 1600f)
     }
     val stars = remember {
         val rnd = Random(42)
-        List(50) {
-            Offset(rnd.nextFloat(), rnd.nextFloat()) to rnd.nextFloat() * 0.4f + 0.15f
-        }
+        List(50) { Offset(rnd.nextFloat(), rnd.nextFloat()) to rnd.nextFloat() * 0.4f + 0.15f }
     }
 
     Scaffold(
@@ -78,33 +73,33 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("vladossVPN") },
                 actions = {
-                    IconButton(onClick = { showServers = true }) {
-                        Icon(Icons.Default.List, "Servers")
-                    }
-                    IconButton(onClick = onNavigateToSubscriptions) {
-                        Icon(Icons.Default.Cloud, "Subscriptions")
-                    }
+                    IconButton(onClick = { showServers = true }) { Icon(Icons.Default.List, "Servers") }
+                    IconButton(onClick = onNavigateToSubscriptions) { Icon(Icons.Default.Cloud, "Subscriptions") }
                     if (showDebug) {
-                        IconButton(onClick = onNavigateToDebug) {
-                            Icon(Icons.Default.BugReport, "Журнал логов")
-                        }
+                        IconButton(onClick = onNavigateToDebug) { Icon(Icons.Default.BugReport, "Журнал логов") }
                     }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, "Settings")
-                    }
+                    IconButton(onClick = onNavigateToSettings) { Icon(Icons.Default.Settings, "Settings") }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
+        },
+        bottomBar = {
+            Surface(color = CosmosSurface, tonalElevation = 4.dp) {
+                Button(
+                    onClick = onNavigateToServers,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.List, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Серверы")
+                }
+            }
         },
         containerColor = Color.Transparent
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(bgBrush)
-        ) {
+        Box(modifier = Modifier.fillMaxSize().background(bgBrush)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 stars.forEach { (offset, alpha) ->
                     drawCircle(
@@ -114,7 +109,6 @@ fun HomeScreen(
                     )
                 }
             }
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -124,247 +118,56 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Spacer(Modifier.height(16.dp))
-
-                if (uiState.connectionState == ConnectionUiState.ERROR) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF5C1010).copy(alpha = 0.92f)
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFF8A80)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = uiState.lastErrorMessage?.takeIf { it.isNotBlank() }
-                                        ?: "Не удалось подключиться. Проверьте сеть или смените сервер.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFFFCDD2),
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = {
-                                    Log.i("HomeScreen", "HomeScreen: User pressed Retry button")
-                                    viewModel.retryConnect()
-                                },
-                                enabled = !uiState.isBusy,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFE53935),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("Повторить")
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-
+                Text(
+                    text = when (uiState.connectionState) {
+                        ConnectionUiState.CONNECTED -> "Подключено"
+                        ConnectionUiState.UNSTABLE -> "Нестабильно"
+                        ConnectionUiState.CONNECTING, ConnectionUiState.VERIFYING -> "Подключение…"
+                        ConnectionUiState.ERROR -> "Ошибка"
+                        else -> "Отключено"
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = OnDark
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(text = uiState.currentServerName, style = MaterialTheme.typography.bodyMedium, color = OnDarkSecondary)
+                Spacer(Modifier.height(28.dp))
                 GlowPowerButton(
                     state = uiState.connectionState,
-                    // The main button must always remain available to stop an active
-                    // or stuck connection, even while a server scan is in progress.
-                    enabled = true,
                     isScanning = uiState.isScanningServers,
                     onClick = {
-                        when (uiState.connectionState) {
-                            ConnectionUiState.CONNECTED,
-                            ConnectionUiState.UNSTABLE,
-                            ConnectionUiState.CONNECTING,
-                            ConnectionUiState.VERIFYING -> viewModel.toggleConnection()
-                            ConnectionUiState.DISCONNECTED,
-                            ConnectionUiState.ERROR -> {
-                                if (uiState.isScanningServers) {
-                                    Log.i("HomeScreen", "HomeScreen: stop scan from main button")
-                                    viewModel.cancelServerScan()
-                                } else {
-                                    viewModel.toggleConnection()
-                                }
-                            }
+                        if (uiState.isScanningServers) {
+                            Log.i("HomeScreen", "stop scan from main button")
+                            viewModel.cancelServerScan()
+                        } else {
+                            viewModel.toggleConnection()
                         }
                     }
                 )
-
-                val canSwitchServer = uiState.connectionState == ConnectionUiState.CONNECTED ||
-                    uiState.connectionState == ConnectionUiState.UNSTABLE
-                if (canSwitchServer) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.switchServer() },
-                        enabled = !uiState.isBusy,
-                        modifier = Modifier.fillMaxWidth(0.72f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SwapHoriz,
-                            contentDescription = null,
-                            tint = OnDark
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.switch_server),
-                            color = OnDark
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        Text("Подписка для автоподбора серверов", style = MaterialTheme.typography.labelMedium, color = OnDarkSecondary)
-                        Box {
-                            TextButton(
-                                onClick = { subscriptionMenuExpanded = true },
-                                enabled = !uiState.isBusy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                val selectedName = when {
-                                    !uiState.isAutomaticMode -> "Ручной выбор"
-                                    uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID -> "Все подписки"
-                                    else -> subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
-                                        ?.let { "Только: $it" }
-                                        ?: "Подписка недоступна"
-                                }
-                                Text(selectedName, color = OnDark, modifier = Modifier.weight(1f))
-                                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = OnDark)
-                            }
-                            DropdownMenu(
-                                expanded = subscriptionMenuExpanded,
-                                onDismissRequest = { subscriptionMenuExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Все подписки") },
-                                    onClick = {
-                                        viewModel.setAutomaticSubscription(HomeViewModel.ALL_SUBSCRIPTIONS_ID)
-                                        subscriptionMenuExpanded = false
-                                    }
-                                )
-                                subscriptions.forEach { subscription ->
-                                    DropdownMenuItem(
-                                        text = { Text(subscription.name) },
-                                        onClick = {
-                                            viewModel.setAutomaticSubscription(subscription.id)
-                                            subscriptionMenuExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
                 if (uiState.isScanningServers) {
                     Spacer(Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Text(
-                            text = "Поиск доступных серверов...",
+                            text = "Поиск серверов: ${uiState.scannedAvailableServers}" +
+                                if (uiState.scanTotalServers > 0) " / ${uiState.scanTotalServers}" else "",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
-
-                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = OnDarkSecondary
-                    )
-                }
-
                 Spacer(Modifier.height(18.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (uiState.isAutomaticMode) "Автоматический режим" else "Ручной выбор сервера",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = OnDark
-                            )
-                            Text(
-                                text = if (uiState.isAutomaticMode) "Приложение выберет сервер само" else "Выберите сервер в списке ниже",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = OnDarkSecondary
-                            )
-                        }
-                        Switch(
-                            checked = uiState.isAutomaticMode,
-                            onCheckedChange = viewModel::setAutomaticMode,
-                            enabled = !uiState.isBusy
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
                 ConnectionStatsCard(
                     state = uiState.connectionState,
-                    sessionStartedAt = uiState.sessionStartedAt,
                     serverName = uiState.currentServerName,
                     serverRtt = uiState.currentRtt,
-                    traffic = traffic
+                    traffic = traffic,
+                    sessionStartedAt = uiState.sessionStartedAt
                 )
-
-                Spacer(Modifier.height(24.dp))
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showServers = true },
-                    colors = CardDefaults.cardColors(
-                        containerColor = CosmosSurface.copy(alpha = 0.9f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("🌐", fontSize = 40.sp)
-                        Spacer(Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = uiState.currentServerName.ifBlank { "Не выбран" },
-                                style = MaterialTheme.typography.titleMedium,
-                                color = OnDark
-                            )
-                            Text(
-                                text = "Нажмите, чтобы сменить",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = OnDarkSecondary
-                            )
-                        }
-                    }
+                Spacer(Modifier.height(16.dp))
+                uiState.lastErrorMessage?.let {
+                    Text(it, color = Color(0xFFF87171), style = MaterialTheme.typography.bodySmall)
                 }
-
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -393,27 +196,67 @@ fun HomeScreen(
         }
     }
 
-    if (uiState.isScanningServers && uiState.connectionState == ConnectionUiState.CONNECTING) {
+    if (showScanDialog) {
         AlertDialog(
-            onDismissRequest = {},
+            onDismissRequest = { showScanDialog = false },
             containerColor = Color.White,
             titleContentColor = Color(0xFF172033),
             textContentColor = Color(0xFF334155),
-            title = { Text("Поиск доступных серверов", color = Color(0xFF172033)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
-                        Text("Сканируем серверы и измеряем задержку", color = Color(0xFF334155))
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(if (uiState.isScanningServers) "Проверка серверов" else "Результаты проверки", color = Color(0xFF172033))
+                    IconButton(onClick = { showScanDialog = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Закрыть окно сканирования",
+                            tint = Color(0xFF64748B)
+                        )
                     }
-                    Text(
-                        text = "Найдено доступных: ${uiState.scannedAvailableServers} из ${uiState.scanTotalServers}. Для подключения ищем минимум 4 надёжных сервера.",
-                        color = Color(0xFF334155)
-                    )
-                    Text("Серверы без подтверждённого отклика не будут выбраны автоматически.", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
                 }
             },
-            confirmButton = {}
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (uiState.isScanningServers) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                            Text("Проверка выполняется…", color = Color(0xFF334155))
+                        }
+                    } else {
+                        Text(
+                            if (scanStoppedByUser) "Проверка остановлена." else "Проверка завершена.",
+                            color = Color(0xFF334155)
+                        )
+                    }
+                    HorizontalDivider(color = Color(0xFFE2E8F0))
+                    Text("Всего серверов: ${uiState.scanTotalServers}", color = Color(0xFF172033))
+                    Text("Проверено: ${uiState.scanCheckedServers}", color = Color(0xFF334155))
+                    Text("Доступно: ${uiState.scannedAvailableServers}", color = Color(0xFF166534))
+                    Text("Не прошло проверку: ${uiState.scanFailedServers}", color = Color(0xFFB91C1C))
+                    Text(
+                        if (uiState.isScanningServers) "Крестик закрывает окно, но не останавливает проверку." else "Можно закрыть это окно; результаты уже сохранены в списке.",
+                        color = Color(0xFF64748B),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                if (uiState.isScanningServers) {
+                    TextButton(onClick = {
+                        scanStoppedByUser = true
+                        viewModel.cancelServerScan()
+                    }) {
+                        Text("Остановить тест", color = Color(0xFFB91C1C))
+                    }
+                } else {
+                    TextButton(onClick = { showScanDialog = false }) {
+                        Text("Закрыть", color = Color(0xFF2563EB))
+                    }
+                }
+            }
         )
     }
 

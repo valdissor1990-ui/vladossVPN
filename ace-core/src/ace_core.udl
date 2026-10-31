@@ -1,0 +1,41 @@
+// Stage B foundation + Stage C telemetry ingestion API.
+namespace ace_core {
+    string ace_version();
+
+    [Throws=AceError]
+    void ace_initialize(AceListener? listener);
+
+    [Throws=AceError]
+    void ace_shutdown();
+
+    [Throws=AceError]
+    string ace_ping();
+
+    [Throws=AceError]
+    void ace_emit_test_event(string payload);
+
+    [Throws=AceError]
+    void ace_trigger_test_panic();
+
+    // Accepts one versioned JSON TelemetryRecord. No commands or VPN control.
+    [Throws=AceError]
+    void ace_ingest_telemetry(string record_json);
+
+    // Returns the bounded in-memory telemetry window; this is not persistent storage.
+    [Throws=AceError]
+    string ace_telemetry_snapshot();
+
+    [Throws=AceError]
+    u32 ace_telemetry_count();
+};
+
+[Error]
+enum AceError {
+    "NotInitialized",
+    "Panic",
+    "Internal",
+};
+
+callback interface AceListener {
+    void on_event(string event, string payload);
+};

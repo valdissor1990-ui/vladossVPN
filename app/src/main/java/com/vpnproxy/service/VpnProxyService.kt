@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vpnproxy.MainActivity
+import com.vpnproxy.ace.ipc.AceTelemetryBridge
 import com.vpnproxy.R
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -294,8 +295,28 @@ class VpnProxyService : VpnService() {
     }
 
     private fun transitionServiceState(next: ServiceState) {
+        val previous = _serviceState.value
+        if (previous == next) return
         _serviceState.value = next
         logCollector.debug(TAG, "Service lifecycle state -> $next")
+
+        // Passive ACE observation of the actual VPN service lifecycle.
+        // Numeric codes avoid exporting failure reasons or other user/server data.
+        val stateCode = when (next) {
+            ServiceState.Idle -> 0.0
+            ServiceState.Starting -> 1.0
+            ServiceState.Active -> 2.0
+            ServiceState.Verifying -> 3.0
+            ServiceState.Stopping -> 4.0
+            is ServiceState.Failed -> 5.0
+        }
+        AceTelemetryBridge.submitMetric(
+            metric = "vpn_state",
+            value = stateCode,
+            unit = "service_state_code",
+            outcome = "observed",
+            source = "vpn_service"
+        )
     }
 
     private fun scheduleIdleStop() {
@@ -403,8 +424,10 @@ class VpnProxyService : VpnService() {
                     graceWaitedMs += 5_000L
                 }
                 if (!_isRunning.value && !(_serviceState.value == ServiceState.Stopping)) {
-                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
-                    connectionCoordinator.send(ConnectionEvent.Timeout)
+                    // The ConnectionCoordinator is the sole owner of the connection deadline.
+                    // This service watchdog is diagnostic only; an early Timeout here raced the
+                    // coordinator's 90-second deadline and could trigger duplicate failure handling.
+                    logCollector.warn(TAG, "Watchdog observed VPN not running; coordinator owns connection timeout")
                 }
             }
 
@@ -701,8 +724,9 @@ class VpnProxyService : VpnService() {
         Log.e(TAG, "forceStopService: $reason")
         logCollector.warn(TAG, "forceStopService: $reason")
 
+        val pendingVpnJob = vpnJob
         try {
-            vpnJob?.cancel()
+            pendingVpnJob?.cancel()
             vpnJob = null
             watchdogJob?.cancel()
             watchdogJob = null
@@ -716,7 +740,12 @@ class VpnProxyService : VpnService() {
 
         scope.launch(Dispatchers.IO) {
             try {
-                stopVpnInternal("forceStop: $reason")
+                // Wait until a cancelled start/restart has left the lifecycle mutex before
+                // touching the native core from the force-stop path.
+                pendingVpnJob?.join()
+                lifecycleController?.withLifecycleLock {
+                    stopVpnInternal("forceStop: $reason")
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "forceStopService stopVpnInternal failed", t)
             }
@@ -753,14 +782,21 @@ class VpnProxyService : VpnService() {
         stateCollectorJob = null
         watchdogJob?.cancel()
         watchdogJob = null
-        vpnJob?.cancel()
+        val pendingVpnJob = vpnJob
+        pendingVpnJob?.cancel()
         vpnJob = null
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
-        try {
-            lifecycleController?.stopCore()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy stopCore failed", t)
+        val controllerToClose = lifecycleController
+        if (controllerToClose != null) {
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    pendingVpnJob?.join()
+                    controllerToClose.withLifecycleLock { controllerToClose.close() }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "onDestroy serialized core cleanup failed", t)
+                }
+            }
         }
         _isRunning.value = false
         scope.cancel()

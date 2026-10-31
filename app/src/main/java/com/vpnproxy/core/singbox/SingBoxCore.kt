@@ -94,7 +94,6 @@ class SingBoxCore(
     private val handler = object : CommandServerHandler {
         override fun serviceStop() {
             logCollector?.info(TAG, "Native callback: serviceStop")
-            // Keep native callbacks non-blocking; cleanup is serialized with all other lifecycle work.
             lifecycleScope.launch {
                 stopAsync().await().onFailure {
                     logCollector?.error(TAG, "serviceStop failed: ${it.message}")
@@ -103,7 +102,6 @@ class SingBoxCore(
         }
 
         override fun serviceReload() {
-            // Diagnostic build: only VpnProxyService may initiate a lifecycle transition.
             logCollector?.warn(TAG, "Native callback: serviceReload — ignored")
         }
 
@@ -119,7 +117,6 @@ class SingBoxCore(
 
         override fun writeDebugMessage(message: String?) {
             val line = message.orEmpty()
-            // This callback crosses JNI; collector/logcat failures must never escape into libbox.
             try {
                 logCollector?.debug("LIBBOX", "[LIBBOX] $line")
                 if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
@@ -131,7 +128,6 @@ class SingBoxCore(
             try {
                 Log.d(TAG, line)
             } catch (_: Throwable) {
-                // Android logging must not escape the native callback either.
             }
         }
 
@@ -141,7 +137,6 @@ class SingBoxCore(
         }
     }
 
-    /** Queues a complete stop/wait/start transition on the single lifecycle executor. */
     fun startAsync(configJson: String): Deferred<Result<Unit>> {
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
@@ -152,7 +147,6 @@ class SingBoxCore(
         }
     }
 
-    /** Queues a serialized stop without blocking the caller/native callback. */
     fun stopAsync(): Deferred<Result<Unit>> {
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
@@ -163,7 +157,6 @@ class SingBoxCore(
         }
     }
 
-    /** Compatibility API for existing synchronous call sites. */
     fun startBlocking(configJson: String): Result<Unit> {
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
@@ -172,7 +165,6 @@ class SingBoxCore(
         }
     }
 
-    /** Compatibility API for existing synchronous call sites. */
     fun stopBlocking(): Result<Unit> {
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
@@ -181,14 +173,88 @@ class SingBoxCore(
         }
     }
 
-    /** Legacy source-compatible wrapper; lifecycle serialization is owned here. */
+    fun stopTemporaryBlocking(): Result<Unit> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Temporary-core stop requested generation=$generation")
+        return runBlocking {
+            lifecycleMutex.withLock { runCatching { stopSuspended(waitForPort = false) } }
+        }
+    }
+
+    /**
+     * Start path exclusively for temporary multi-profile / probe cores.
+     * Never waits on the main VPN port (10809). Temporary configs use
+     * ephemeral ports allocated by DeepProbeEngine.allocateProbePorts().
+     */
+    fun startTemporaryBlocking(configJson: String): Result<Unit> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Temporary-core start requested generation=$generation")
+        return runBlocking {
+            lifecycleMutex.withLock {
+                runCatching { startSuspendedTemporary(configJson, generation) }
+            }
+        }
+    }
+
     fun start(configJson: String) {
         startBlocking(configJson).getOrThrow()
     }
 
-    /** Legacy source-compatible wrapper; lifecycle serialization is owned here. */
     fun stop() {
         stopBlocking().getOrThrow()
+    }
+
+    /**
+     * Lightweight start used only by temporary probe cores.
+     * Skips all waits on PROXY_PORT (10809).
+     */
+    private suspend fun startSuspendedTemporary(configJson: String, generation: Long) {
+        require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            logCollector?.warn(TAG, "Lifecycle skip stale temporary start generation=$generation current=${lifecycleGeneration.current()}")
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle temporary start generation=$generation")
+        }
+        logCollector?.info(TAG, "Temporary core lifecycle: stop phase begin generation=$generation")
+        // Critical: do NOT wait for port 10809
+        stopSuspended(waitForPort = false)
+
+        if (!lifecycleGeneration.isCurrent(generation)) {
+            throw kotlinx.coroutines.CancellationException("Stale lifecycle temporary start generation=$generation")
+        }
+
+        logCollector?.info(TAG, "Temporary core lifecycle: start phase begin generation=$generation")
+        var server: CommandServer? = null
+        try {
+            setup(context)
+            if (!lifecycleGeneration.isCurrent(generation)) {
+                throw kotlinx.coroutines.CancellationException("Stale lifecycle temporary start generation=$generation")
+            }
+            val createdServer = CommandServer(handler, platform)
+            server = createdServer
+            createdServer.start()
+            createdServer.startOrReloadService(configJson, OverrideOptions())
+            currentServer = createdServer
+            activeConfig = configJson
+            logCollector?.info(TAG, "Temporary core lifecycle: started successfully generation=$generation")
+            Log.i(TAG, "libbox temporary probe core started")
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            server?.let { created ->
+                runCatching { created.closeService() }
+                runCatching { created.close() }
+            }
+            currentServer = null
+            activeConfig = null
+            throw c
+        } catch (t: Throwable) {
+            logCollector?.error(TAG, "Temporary core start failed: ${t.message}")
+            server?.let { created ->
+                runCatching { created.closeService() }
+                runCatching { created.close() }
+            }
+            currentServer = null
+            activeConfig = null
+            throw IllegalStateException("Unable to start temporary libbox: ${t.message}", t)
+        }
     }
 
     private suspend fun startSuspended(configJson: String, generation: Long) {
@@ -198,16 +264,12 @@ class SingBoxCore(
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
-        // Always wait for the mixed inbound port. Skipping the wait caused
-        // "Port 10809 still in use after retry" when a temporary profile-ping
-        // core had just stopped and forceSelect immediately started the VPN.
         stopSuspended(waitForPort = true)
 
         var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
             logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; force-close and retry once")
             stopSuspended(waitForPort = true)
-            // Brief extra settle time after forced close (TIME_WAIT / delayed FIN).
             delay(400)
             portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         }
@@ -310,11 +372,6 @@ class SingBoxCore(
         logCollector?.info(TAG, "Core lifecycle: stop completed at ${lastStopAtMs}")
     }
 
-    /**
-     * Tests whether a TCP listener is still accepting connections on the proxy port.
-     * A refused/failed connect means no listener is reachable; TIME_WAIT is not directly observable
-     * by this probe, so bind failures remain guarded by the start error path.
-     */
     private suspend fun waitForPortFree(host: String, port: Int, timeoutMs: Long): Boolean {
         val startedAtMs = System.currentTimeMillis()
         val deadline = startedAtMs + timeoutMs

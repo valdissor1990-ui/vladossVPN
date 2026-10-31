@@ -1,0 +1,127 @@
+package com.vpnproxy.ace.ipc
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import uniffi.ace_core.aceIngestTelemetry
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+
+/**
+ * Runs in `:ace`. Binds to the main-process [AceIpcServer].
+ * Main → ACE telemetry is one-way, observational, bounded, and size-limited.
+ */
+class AceIpcClient(private val context: Context) {
+    private val remoteRef = AtomicReference<IAceEventReceiver?>(null)
+    private val connected = CountDownLatch(1)
+    private val telemetryQueue = BoundedTelemetryQueue()
+    private val telemetryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var disconnected = false
+
+    private val telemetryReceiver = object : IAceTelemetryReceiver.Stub() {
+        override fun onTelemetryRecord(recordJson: String?) {
+            val record = recordJson ?: return
+            if (disconnected || !telemetryQueue.offer(record)) {
+                Log.w(TAG, "ACE telemetry queue full, oversized, or client stopped; observation dropped")
+            }
+        }
+    }
+
+    init {
+        telemetryScope.launch {
+            while (true) {
+                val record = telemetryQueue.receive() ?: break
+                runCatching { aceIngestTelemetry(record) }
+                    .onFailure { Log.w(TAG, "Rust rejected telemetry record", it) }
+            }
+        }
+    }
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val remote = IAceEventReceiver.Stub.asInterface(service)
+            remoteRef.set(remote)
+            Log.i(TAG, "Connected to AceIpcServer")
+            if (remote != null) {
+                telemetryScope.launch {
+                    if (disconnected) return@launch
+                    val registration = runCatching {
+                        remote.registerTelemetryReceiver(telemetryReceiver)
+                    }
+                    registration.onFailure {
+                        Log.w(TAG, "Telemetry receiver registration failed", it)
+                    }
+                    // disconnect() may race with this IO Binder call. Undo a late registration.
+                    if (disconnected && registration.isSuccess) {
+                        runCatching { remote.unregisterTelemetryReceiver(telemetryReceiver) }
+                            .onFailure { Log.w(TAG, "Late telemetry registration cleanup failed", it) }
+                    }
+                }
+            }
+            connected.countDown()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            remoteRef.set(null)
+            Log.w(TAG, "Disconnected from AceIpcServer")
+        }
+    }
+
+    /** Bind and wait up to [timeoutMs] for onServiceConnected. */
+    fun connectBlocking(timeoutMs: Long = 5_000L): Boolean {
+        if (disconnected) return false
+        val ok = runCatching {
+            context.bindService(
+                Intent(ACTION_BIND).setPackage(context.packageName),
+                connection,
+                Context.BIND_AUTO_CREATE
+            )
+        }.getOrElse {
+            Log.e(TAG, "bind failed", it)
+            false
+        }
+        if (!ok) return false
+        val ready = connected.await(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!ready) Log.e(TAG, "bind timeout after ${timeoutMs}ms")
+        return ready && remoteRef.get() != null
+    }
+
+    fun disconnect() {
+        if (disconnected) return
+        disconnected = true
+        runCatching { context.unbindService(connection) }
+        remoteRef.set(null)
+        telemetryQueue.close()
+        telemetryScope.cancel()
+    }
+
+    fun forwardTestEvent(payload: String) {
+        val remote = remoteRef.get()
+        if (remote == null) {
+            Log.w(TAG, "forwardTestEvent dropped: not connected")
+            return
+        }
+        runCatching { remote.onTestEvent(payload) }
+            .onFailure { Log.e(TAG, "forwardTestEvent failed", it) }
+    }
+
+    fun forwardError(message: String) {
+        val remote = remoteRef.get() ?: return
+        runCatching { remote.onError(message) }
+            .onFailure { Log.e(TAG, "forwardError failed", it) }
+    }
+
+    companion object {
+        private const val TAG = "AceIpcClient"
+        const val ACTION_BIND = "com.vpnproxy.ace.BIND_RECEIVER"
+    }
+}

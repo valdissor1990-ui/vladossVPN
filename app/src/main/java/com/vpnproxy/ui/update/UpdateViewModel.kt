@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -37,8 +38,7 @@ class UpdateViewModel @Inject constructor(
     fun checkOnce() {
         if (checkedThisSession) return
         checkedThisSession = true
-        // Restore any previously downloaded APK, then check and prefetch if needed.
-        updateManager.restoreReadyFromDisk()
+        // UpdateManager restores any pending APK once during singleton initialization.
         check(force = false)
     }
 
@@ -46,16 +46,9 @@ class UpdateViewModel @Inject constructor(
         if (_isCheckingUpdates.value) return@launch
         _isCheckingUpdates.value = true
         try {
-            // Always try background-style prefetch: check → download latest → Ready
-            if (force) {
-                updateManager.checkAndPrefetch()
-            } else {
-                updateManager.checkForUpdate(force = false)
-                val available = updateManager.state.value
-                if (available is UpdateManager.State.UpdateAvailable) {
-                    updateManager.downloadUpdate(available.release)
-                }
-            }
+            // Manual and automatic checks only announce updates. Download starts exclusively
+            // from download(), which is called by the explicit "Скачать" button.
+            updateManager.checkForUpdate(force = force)
             when (val s = updateManager.state.value) {
                 is UpdateManager.State.UpToDate ->
                     _feedback.emit(Feedback.UpToDate)
@@ -72,6 +65,8 @@ class UpdateViewModel @Inject constructor(
                 // UpdateAvailable / Downloading / Ready → UpdateDialog
                 else -> Unit
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             _feedback.emit(
                 Feedback.Error("Не удалось проверить обновления. Проверьте интернет.")

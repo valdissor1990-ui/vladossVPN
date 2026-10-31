@@ -33,6 +33,7 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,6 +50,7 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val REFRESH_FRESHNESS_MS = 120_000L
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
@@ -124,6 +126,13 @@ class SubscriptionRepository @Inject constructor(
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
     private val refreshMutex = Mutex()
+    @Volatile private var lastSuccessfulRefreshAtMs = 0L
+    private val subscriptionConfigGeneration = AtomicLong(0L)
+
+    private fun invalidateRefreshFreshness() {
+        subscriptionConfigGeneration.incrementAndGet()
+        lastSuccessfulRefreshAtMs = 0L
+    }
 
     init {
         loadFromPrefs()
@@ -191,9 +200,12 @@ class SubscriptionRepository @Inject constructor(
                 id = id, url = url, name = name, tag = tag.ifBlank { name }
             )
             _subscriptions.value = _subscriptions.value + sub
+            invalidateRefreshFreshness()
             saveToPrefs()
             logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
             true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
             false
@@ -201,6 +213,7 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun updateSubscriptionTag(id: String, tag: String) {
+        invalidateRefreshFreshness()
         _subscriptions.value = _subscriptions.value.map {
             if (it.id == id) it.copy(tag = tag.ifBlank { it.name }) else it
         }
@@ -213,19 +226,29 @@ class SubscriptionRepository @Inject constructor(
             return
         }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
+        invalidateRefreshFreshness()
         saveToPrefs()
     }
 
     /** Built-in sources can be disabled without deleting their saved entry. */
     fun setSubscriptionEnabled(id: String, enabled: Boolean) {
+        invalidateRefreshFreshness()
         _subscriptions.value = _subscriptions.value.map {
             if (it.id == id) it.copy(enabled = enabled) else it
         }
         saveToPrefs()
     }
 
-    suspend fun refreshAll(): Int = refreshMutex.withLock {
-        withContext(Dispatchers.IO) {
+    suspend fun refreshAll(skipIfFresh: Boolean = false): Int = refreshMutex.withLock {
+        val now = System.currentTimeMillis()
+        val refreshAgeMs = now - lastSuccessfulRefreshAtMs
+        if (skipIfFresh && lastSuccessfulRefreshAtMs > 0L && refreshAgeMs in 0 until REFRESH_FRESHNESS_MS) {
+            val cachedCount = _allConfigs.value.distinctBy { it.connectionKey() }.size
+            logCollector.info(TAG, "Refresh skipped: successful refresh is still fresh; configs=$cachedCount")
+            return@withLock cachedCount
+        }
+        val generationAtStart = subscriptionConfigGeneration.get()
+        val refreshResult = withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
@@ -238,9 +261,9 @@ class SubscriptionRepository @Inject constructor(
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
-                    val updated = sub.copy(lastUpdated = System.currentTimeMillis())
-                    _subscriptions.value = _subscriptions.value.map {
-                        if (it.id == sub.id) updated else it
+                    val updatedAt = System.currentTimeMillis()
+                    _subscriptions.value = _subscriptions.value.map { current ->
+                        if (current.id == sub.id) current.copy(lastUpdated = updatedAt) else current
                     }
                     logCollector.info(TAG, "Refreshed ${sub.name}: ${configs.size} configs")
                 } catch (c: kotlinx.coroutines.CancellationException) {
@@ -259,7 +282,10 @@ class SubscriptionRepository @Inject constructor(
 
             // Preserve attribution per provider while removing duplicate profiles within each
             // provider. Global scanning/counts use connectionKey() without providerTag.
-            val providerUniqueConfigs = allConfigsList.distinctBy {
+            val currentlyEnabledProviderNames = _subscriptions.value.filter { it.enabled }.map { it.name }.toSet()
+            val providerUniqueConfigs = allConfigsList
+                .filter { it.providerTag in currentlyEnabledProviderNames }
+                .distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
             val globallyUniqueCount = providerUniqueConfigs.distinctBy {
@@ -280,8 +306,12 @@ class SubscriptionRepository @Inject constructor(
                 TAG,
                 "Refresh complete: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
             )
-            globallyUniqueCount
+            globallyUniqueCount to anyNetworkSuccess
         }
+        if (refreshResult.second && subscriptionConfigGeneration.get() == generationAtStart) {
+            lastSuccessfulRefreshAtMs = System.currentTimeMillis()
+        }
+        refreshResult.first
     }
 
     suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
@@ -369,13 +399,16 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-            val vpnState = connectionCoordinator.state.value
-            val vpnActive = vpnState is ConnectionState.Connecting ||
-                vpnState is ConnectionState.Verifying ||
-                vpnState is ConnectionState.Connected ||
-                vpnState is ConnectionState.Reconnecting
-            if (vpnActive) {
-                logCollector.warn(TAG, "SubRepo refresh failed while VPN active — ignored; transportFailure=$sawTransportFailure")
+            val connectionState = connectionCoordinator.state.value
+            val connectionInProgress = connectionState is ConnectionState.Connecting ||
+                connectionState is ConnectionState.Verifying ||
+                connectionState is ConnectionState.Connected ||
+                connectionState is ConnectionState.Reconnecting
+            if (connectionInProgress) {
+                logCollector.warn(
+                    TAG,
+                    "SubRepo refresh failed while connection state=${connectionState.javaClass.simpleName} — ignored; transportFailure=$sawTransportFailure"
+                )
             }
             throw IOException("All sources failed", lastFailure)
         }

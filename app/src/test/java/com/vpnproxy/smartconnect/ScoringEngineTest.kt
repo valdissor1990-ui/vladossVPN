@@ -74,6 +74,23 @@ class ScoringEngineTest {
     }
 
     @Test
+    fun missingSpeedMeasurementIsNotTreatedAsZeroThroughput() {
+        val engine = ScoringEngine(null)
+        val measured = config("measured")
+        val unmeasured = config("unmeasured", "ws")
+
+        val ranked = engine.computeScore(
+            listOf(
+                HealthChecker.LatencyResult(measured, 80L, true),
+                HealthChecker.LatencyResult(unmeasured, 80L, true)
+            ),
+            listOf(HealthChecker.SpeedResult(measured, 10f, true))
+        ).associateBy { it.config.name }
+
+        assertEquals(ranked.getValue("measured").score, ranked.getValue("unmeasured").score, 0.0001f)
+    }
+
+    @Test
     fun failedSpeedProbeDoesNotCountAsMeasuredThroughput() {
         val engine = ScoringEngine(null)
         val profile = config("profile")

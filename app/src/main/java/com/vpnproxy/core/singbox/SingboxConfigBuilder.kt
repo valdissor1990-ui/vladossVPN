@@ -151,6 +151,27 @@ object SingboxConfigBuilder {
                 put("level", "debug")
                 put("timestamp", true)
             })
+            // Do not use the "local" resolver in temporary probe cores: on some Android
+            // devices it falls back to the Go resolver at [::1]:53, where no DNS stub listens.
+            // Use DoH at a literal IP so resolving the DNS server itself needs no DNS lookup.
+            put("dns", buildJsonObject {
+                put("servers", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "https")
+                        put("tag", "probe-dns")
+                        put("server", "1.1.1.1")
+                        put("server_port", 443)
+                        put("path", "/dns-query")
+                        put("tls", buildJsonObject {
+                            put("enabled", true)
+                            put("server_name", "cloudflare-dns.com")
+                        })
+                        put("detour", "direct")
+                    })
+                })
+                put("final", "probe-dns")
+                put("strategy", "prefer_ipv4")
+            })
             put("inbounds", buildJsonArray {
                 configs.forEachIndexed { index, _ ->
                     add(buildJsonObject {
@@ -356,41 +377,22 @@ object SingboxConfigBuilder {
                     val sni = config.sni?.takeIf { it.isNotBlank() }
                     val host = config.host?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9.-]+$").matches(it) && it.contains(".") }
                     val serverName = sni ?: host ?: config.address
-                    val source = when { sni != null -> "sni"; host != null -> "host"; else -> "address" }
-                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
                     put("server_name", serverName)
-                    when {
-                        isVless -> {
-                            put("utls", buildJsonObject {
-                                put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
-                            })
-                            if (config.security.equals("reality", true)) {
-                                require(!config.publicKey.isNullOrBlank()) { "VLESS Reality public key (pbk) is missing" }
-                                put("reality", buildJsonObject {
-                                    put("enabled", true)
-                                    put("public_key", config.publicKey)
-                                    put("short_id", config.shortId.orEmpty())
-                                })
-                            }
-                        }
-                        isVmess -> {
-                            put("utls", buildJsonObject {
-                                put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
-                            })
-                            put("insecure", config.insecure)
-                        }
-                        else -> {
-                            put("insecure", config.insecure)
-                            if (config.alpn.isNotEmpty()) {
-                                put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
-                            }
-                            config.pinSHA256?.takeIf { it.isNotBlank() }?.let { pin ->
-                                put("certificate_public_key_sha256", buildJsonArray {
-                                    add(kotlinx.serialization.json.JsonPrimitive(pin))
-                                })
-                            }
+                    LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=${if (sni != null) "sni" else if (host != null) "host" else "address"}")
+                    if (config.security.equals("reality", true)) {
+                        put("reality", buildJsonObject {
+                            put("enabled", true)
+                            put("public_key", config.publicKey.orEmpty())
+                            put("short_id", config.shortId.orEmpty())
+                        })
+                        put("utls", buildJsonObject {
+                            put("enabled", true)
+                            put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                        })
+                    } else {
+                        put("insecure", config.insecure)
+                        if (config.alpn.isNotEmpty()) {
+                            put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
                         }
                     }
                 })
