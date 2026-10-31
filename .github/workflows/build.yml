@@ -109,4 +109,23 @@ jobs:
       - name: Compile Direct Debug Kotlin
         run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
 
+      - name: Assemble installable Direct Debug test APK
+        run: ./gradlew :app:assembleDirectDebug --stacktrace
+
+      - name: Verify Direct Debug test APK
+        run: |
+          set -euo pipefail
+          APK_DIR="app/build/outputs/apk/direct/debug"
+          find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print
+          test -n "$(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          ls -lh "$APK_DIR"/*.apk
+
+      - name: Upload Direct Debug test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vladoss-vpn-direct-debug-test
+          path: app/build/outputs/apk/direct/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
 
