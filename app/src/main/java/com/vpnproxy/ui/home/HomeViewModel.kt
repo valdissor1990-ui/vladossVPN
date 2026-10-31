@@ -41,7 +41,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @HiltViewModel
@@ -63,7 +62,6 @@ class HomeViewModel @Inject constructor(
     companion object {
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
-        private const val SERVER_SELECTION_TIMEOUT_MS = 25_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
@@ -412,18 +410,19 @@ class HomeViewModel @Inject constructor(
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
-                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    ConnectServerSelector.select(
-                        configs = configs,
-                        isAutomaticMode = _uiState.value.isAutomaticMode,
-                        manuallySelected = manuallySelectedServer,
-                        lastServerStore = lastServerStore,
-                        serverScanner = serverScanner,
-                        autoSwitcher = autoSwitcher,
-                        logCollector = logCollector,
-                        traceMsg = { tmsg(it) },
-                    )
-                }
+                // Do not impose a shorter UI timeout than the scanner's multi-batch probe.
+                // The ConnectionCoordinator owns the connection deadline; cancelling this scan
+                // after 25 seconds could hide a reachable profile that appears later in the list.
+                val selected = ConnectServerSelector.select(
+                    configs = configs,
+                    isAutomaticMode = _uiState.value.isAutomaticMode,
+                    manuallySelected = manuallySelectedServer,
+                    lastServerStore = lastServerStore,
+                    serverScanner = serverScanner,
+                    autoSwitcher = autoSwitcher,
+                    logCollector = logCollector,
+                    traceMsg = { tmsg(it) },
+                )
                 if (selected == null) {
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
