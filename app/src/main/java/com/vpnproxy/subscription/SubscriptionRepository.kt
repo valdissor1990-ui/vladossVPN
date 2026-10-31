@@ -49,6 +49,7 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val REFRESH_FRESHNESS_MS = 120_000L
         const val DEFAULT_SUBSCRIPTION_URL =
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
         const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
@@ -124,6 +125,7 @@ class SubscriptionRepository @Inject constructor(
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
     private val refreshMutex = Mutex()
+    @Volatile private var lastSuccessfulRefreshAtMs = 0L
 
     init {
         loadFromPrefs()
@@ -224,8 +226,14 @@ class SubscriptionRepository @Inject constructor(
         saveToPrefs()
     }
 
-    suspend fun refreshAll(): Int = refreshMutex.withLock {
-        withContext(Dispatchers.IO) {
+    suspend fun refreshAll(skipIfFresh: Boolean = false): Int = refreshMutex.withLock {
+        val now = System.currentTimeMillis()
+        if (skipIfFresh && lastSuccessfulRefreshAtMs > 0L && now - lastSuccessfulRefreshAtMs < REFRESH_FRESHNESS_MS) {
+            val cachedCount = _allConfigs.value.distinctBy { it.connectionKey() }.size
+            logCollector.info(TAG, "Refresh skipped: successful refresh is still fresh; configs=$cachedCount")
+            return@withLock cachedCount
+        }
+        val refreshResult = withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
@@ -280,8 +288,10 @@ class SubscriptionRepository @Inject constructor(
                 TAG,
                 "Refresh complete: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
             )
-            globallyUniqueCount
+            globallyUniqueCount to anyNetworkSuccess
         }
+        if (refreshResult.second) lastSuccessfulRefreshAtMs = System.currentTimeMillis()
+        refreshResult.first
     }
 
     suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
