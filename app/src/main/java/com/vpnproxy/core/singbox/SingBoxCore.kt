@@ -181,6 +181,18 @@ class SingBoxCore(
         }
     }
 
+    /**
+     * Stop a temporary proxy-only core. Its inbounds use allocated ephemeral ports, so waiting
+     * for the main VPN mixed-inbound port (10809) is unrelated and can stall scans for 12 seconds.
+     */
+    fun stopTemporaryBlocking(): Result<Unit> {
+        val generation = lifecycleGeneration.next()
+        logCollector?.info(TAG, "Temporary-core stop requested generation=$generation")
+        return runBlocking {
+            lifecycleMutex.withLock { runCatching { stopSuspended(waitForPort = false) } }
+        }
+    }
+
     /** Legacy source-compatible wrapper; lifecycle serialization is owned here. */
     fun start(configJson: String) {
         startBlocking(configJson).getOrThrow()
