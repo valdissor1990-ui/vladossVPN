@@ -175,11 +175,17 @@ class ServerScanner @Inject constructor(
                     return@withLock _scannedServers.value
                 }
                 val complete = probedCount >= probeConfigs.size
-                scannedConfigKeys = if (complete) requestedKeys else emptySet()
+                val hasReachable = results.any {
+                    it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+                }
+                // An exhaustive scan with zero reachable profiles is not a reusable
+                // success cache: the next user connection must retry the probes.
+                scannedConfigKeys = if (complete && hasReachable) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
                 if (complete) {
-                    persistScanResults(results)
+                    if (hasReachable) persistScanResults(results)
+                    else scanCache().edit().putLong("saved_at", 0L).apply()
                     if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
                         pendingFullScanConfigs = emptyList()
                     }
@@ -237,7 +243,12 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = emptyList()
             return@withLock emptyList()
         }
-        if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers()
+        val hasReachableCachedResult = _scannedServers.value.any {
+            it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+        }
+        if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size && hasReachableCachedResult) {
+            return@withLock availableServers()
+        }
         val alreadyReachable = _scannedServers.value.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         if (scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
             logCollector.info(TAG, "Reusing staged scan: reachable=$alreadyReachable target=$targetAvailableCount")
@@ -246,8 +257,11 @@ class ServerScanner @Inject constructor(
         if (_scannedServers.value.isEmpty()) restoreCachedResults(unique)
         val savedAt = scanCache().getLong("saved_at", 0L)
         val cachedKeys = _scannedServers.value.map { scanKey(it.config) }.toSet()
+        val hasReachableDiskCache = _scannedServers.value.any {
+            it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+        }
         if (savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
-            cachedKeys == requestedKeys && _scannedServers.value.size == unique.size
+            cachedKeys == requestedKeys && _scannedServers.value.size == unique.size && hasReachableDiskCache
         ) {
             scannedConfigKeys = requestedKeys
             scannedNetworkBucket = networkBucket
@@ -281,11 +295,14 @@ class ServerScanner @Inject constructor(
             val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
             if (scanGeneration.get() == generationForScan) {
                 val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
+                val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                val hasReachable = reachable > 0
                 scannedNetworkBucket = networkBucket
-                scannedConfigKeys = if (complete) requestedKeys else emptySet()
+                scannedConfigKeys = if (complete && hasReachable) requestedKeys else emptySet()
                 _scannedServers.value = results
                 if (complete) {
-                    persistScanResults(results)
+                    if (hasReachable) persistScanResults(results)
+                    else scanCache().edit().putLong("saved_at", 0L).apply()
                     if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
                         pendingFullScanConfigs = emptyList()
                     }
