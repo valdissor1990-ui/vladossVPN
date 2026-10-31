@@ -60,6 +60,7 @@ class ServerScanner @Inject constructor(
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
     @Volatile private var activeScanIsConnection = false
+    @Volatile private var activeScanConfigs: List<ParsedConfig> = emptyList()
     private val connectionScanWaiters = AtomicInteger(0)
     @Volatile private var pendingFullScanConfigs: List<ParsedConfig> = emptyList()
     private val scanGeneration = AtomicLong(0L)
@@ -84,6 +85,7 @@ class ServerScanner @Inject constructor(
                 (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer)).distinctBy(::scanKey)
             )
             val requestedKeys = unique.map(::scanKey).toSet()
+            activeScanConfigs = unique
             if (!force && requestedKeys.isNotEmpty() && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) {
                 return@withLock _scannedServers.value
             }
@@ -158,6 +160,7 @@ class ServerScanner @Inject constructor(
             } finally {
                 activeScanJob = null
                 activeScanIsConnection = false
+                activeScanConfigs = emptyList()
                 _isScanning.value = false
             }
         }
@@ -182,6 +185,7 @@ class ServerScanner @Inject constructor(
             // Cancel the background owner before waiting for the shared temporary Sing-box core.
             if (_isScanning.value && !activeScanIsConnection) {
                 logCollector.info(TAG, "Connection scan preempts background profile scan")
+                if (activeScanConfigs.isNotEmpty()) pendingFullScanConfigs = activeScanConfigs
                 cancelScan()
             }
             return scanMutex.withLock {
