@@ -50,7 +50,21 @@ internal object AceTelemetryBridge {
     }
 
     fun detach(target: IAceTelemetryReceiver? = null) {
-        if (target == null) receiver.set(null) else receiver.compareAndSet(target, null)
+        if (target == null) {
+            receiver.set(null)
+            return
+        }
+
+        // AIDL may materialize a different Java proxy wrapper for the same remote
+        // Binder on a later transaction. Compare the Binder identity, not wrapper
+        // object identity, and CAS the exact observed reference to avoid detaching
+        // a receiver attached concurrently after this one.
+        val targetBinder = target.asBinder()
+        while (true) {
+            val current = receiver.get() ?: return
+            if (current.asBinder() != targetBinder) return
+            if (receiver.compareAndSet(current, null)) return
+        }
     }
 
     fun submitMetric(
