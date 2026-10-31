@@ -355,8 +355,8 @@ class ConnectionCoordinator @Inject constructor(
                 } else logW("BindRetryReady ignored — state=$stateNow hasServerSelected=$hasServerSelected")
             }
             is ConnectionEvent.Timeout -> {
-                invalidateTrafficValidation("connection timeout event")
                 if (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting || current is ConnectionState.Verifying) {
+                    invalidateTrafficValidation("connection timeout event")
                     logW("Timeout in state $current — applying fatal connection deadline")
                     applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
                 } else {
