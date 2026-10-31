@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
+import javax.inject.Provider
 
 /**
  * Application-класс.
@@ -39,19 +40,19 @@ import javax.inject.Inject
 class VpnProxyApp : Application(), Configuration.Provider {
 
     @Inject lateinit var logCollector: LogCollector
-    @Inject lateinit var workerFactory: HiltWorkerFactory
-    @Inject lateinit var batteryLogger: BatteryLogger
-    @Inject lateinit var batteryMonitor: BatteryMonitor
-    @Inject lateinit var subscriptionRepository: SubscriptionRepository
-    @Inject lateinit var serverScanner: ServerScanner
-    @Inject lateinit var connectionCoordinator: ConnectionCoordinator
+    @Inject lateinit var workerFactoryProvider: Provider<HiltWorkerFactory>
+    @Inject lateinit var batteryLoggerProvider: Provider<BatteryLogger>
+    @Inject lateinit var batteryMonitorProvider: Provider<BatteryMonitor>
+    @Inject lateinit var subscriptionRepositoryProvider: Provider<SubscriptionRepository>
+    @Inject lateinit var serverScannerProvider: Provider<ServerScanner>
+    @Inject lateinit var connectionCoordinatorProvider: Provider<ConnectionCoordinator>
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var batteryMonitorRegistered = false
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
-            .setWorkerFactory(workerFactory)
+            .setWorkerFactory(workerFactoryProvider.get())
             .setMinimumLoggingLevel(android.util.Log.INFO)
             .build()
 
@@ -77,6 +78,8 @@ class VpnProxyApp : Application(), Configuration.Provider {
             return
         }
 
+        val batteryMonitor = batteryMonitorProvider.get()
+        val batteryLogger = batteryLoggerProvider.get()
         try {
             batteryMonitor.register(this)
             batteryMonitorRegistered = true
@@ -87,6 +90,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
         // Try a fresh subscription immediately on every process start; repository keeps the cache on failure.
         applicationScope.launch {
+            val connectionCoordinator = connectionCoordinatorProvider.get()
+            val subscriptionRepository = subscriptionRepositoryProvider.get()
+            val serverScanner = serverScannerProvider.get()
             val state = connectionCoordinator.state.value
             val vpnActive = state is ConnectionState.Connecting || state is ConnectionState.Verifying ||
                 state is ConnectionState.Connected || state is ConnectionState.Reconnecting
@@ -150,7 +156,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
         applicationScope.cancel()
         if (batteryMonitorRegistered) {
             try {
-                batteryMonitor.unregister(this)
+                batteryMonitorProvider.get().unregister(this)
             } catch (_: Throwable) {
             }
             batteryMonitorRegistered = false
