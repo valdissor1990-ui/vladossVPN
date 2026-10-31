@@ -152,7 +152,9 @@ class ServerScanner @Inject constructor(
                 _scannedServers.value = results
                 if (complete) {
                     persistScanResults(results)
-                    pendingFullScanConfigs = emptyList()
+                    if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
+                        pendingFullScanConfigs = emptyList()
+                    }
                 } else scanCache().edit().putLong("saved_at", 0L).apply()
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
@@ -284,7 +286,9 @@ class ServerScanner @Inject constructor(
                 _scannedServers.value = results
                 if (complete) {
                     persistScanResults(results)
-                    pendingFullScanConfigs = emptyList()
+                    if (pendingFullScanConfigs.map(::scanKey).toSet() == requestedKeys) {
+                        pendingFullScanConfigs = emptyList()
+                    }
                 } else {
                     pendingFullScanConfigs = unique
                     scanCache().edit().putLong("saved_at", 0L).apply()
@@ -315,9 +319,10 @@ class ServerScanner @Inject constructor(
                     // The temporary profile-probe core cannot coexist with the active VPN core.
                     // Resume the full scan as soon as the tunnel is down instead of dropping it.
                     delay(10_000L)
-                    if (!VpnProxyService.isRunning.value) {
-                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${pending.size}")
-                        scanAll(pending, force = true)
+                    val latestPending = pendingFullScanConfigs
+                    if (latestPending.isNotEmpty() && !VpnProxyService.isRunning.value) {
+                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${latestPending.size}")
+                        scanAll(latestPending, force = true)
                     }
                 } else {
                     delay(RESCAN_INTERVAL_MS)
