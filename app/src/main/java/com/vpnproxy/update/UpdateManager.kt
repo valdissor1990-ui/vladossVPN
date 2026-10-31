@@ -51,7 +51,7 @@ class UpdateManager @Inject constructor(
     }
 
     /** If a previously downloaded APK is still newer than installed, surface Ready. */
-    fun restoreReadyFromDisk() {
+    private fun restoreReadyFromDisk() {
         // Debug builds are test installations and must never offer or restore production self-updates.
         if (BuildConfig.DEBUG) {
             logCollector.debug("UpdateManager", "Skipping pending APK restore in debug build")
@@ -234,6 +234,4 @@ class UpdateManager @Inject constructor(
         }
         _state.value = State.Idle
     }
-
-    fun markUpToDate() { _state.value = State.UpToDate }
 }
