@@ -92,7 +92,6 @@ class ConnectionCoordinator @Inject constructor(
     @Volatile private var hasServerSelected: Boolean = false
     private var retryCount: Int = 0
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
-    private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
     private var trafficValidationGeneration: Long = 0L
@@ -123,7 +122,6 @@ class ConnectionCoordinator @Inject constructor(
         providerScopeBlocked = blocked
         val before = fallbackCandidates.size
         fallbackCandidates = fallbackCandidates.filter { isWithinProviderScope(it) }
-        fallbackIndex = -1
         val scopeLabel = if (blocked) "BLOCKED" else (normalized ?: "ALL")
         logCollector.info(TAG, "Provider scope changed: $scopeLabel; fallback candidates $before -> ${fallbackCandidates.size}")
     }
@@ -272,7 +270,6 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackCandidates = event.servers
                     .filter { isWithinProviderScope(it) }
                     .distinctBy { it.config.connectionKey() }
-                fallbackIndex = -1
                 fallbackAttempts = 0
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
@@ -535,7 +532,7 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
                 fallbackIndex = -1
-                trafficValidationGeneration++ // invalidate the failed endpoint's still-running probe
+                invalidateTrafficValidation("fallback to next endpoint")
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
                 hasServerSelected = true
