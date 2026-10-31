@@ -4,6 +4,7 @@ import com.vpnproxy.ace.ipc.AceTelemetryBridge
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
