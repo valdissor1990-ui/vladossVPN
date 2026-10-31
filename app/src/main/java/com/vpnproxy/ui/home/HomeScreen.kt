@@ -45,10 +45,14 @@ fun HomeScreen(
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
 
     var showServers by remember { mutableStateOf(false) }
+    var showScanDialog by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
+    LaunchedEffect(uiState.isScanningServers) {
+        showScanDialog = uiState.isScanningServers
+    }
 
     val bgBrush = remember {
         Brush.radialGradient(colors = listOf(DeepSpaceBlue, DeepSpaceVoid), radius = 1600f)
@@ -72,6 +76,16 @@ fun HomeScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
+        },
+        bottomBar = {
+            NavigationBar(containerColor = CosmosSurface) {
+                NavigationBarItem(
+                    selected = showServers,
+                    onClick = { showServers = true },
+                    icon = { Icon(Icons.Default.List, contentDescription = null) },
+                    label = { Text("Серверы") }
+                )
+            }
         },
         containerColor = Color.Transparent
     ) { padding ->
@@ -172,9 +186,9 @@ fun HomeScreen(
         }
     }
 
-    if (uiState.isScanningServers) {
+    if (uiState.isScanningServers && showScanDialog) {
         AlertDialog(
-            onDismissRequest = { viewModel.cancelServerScan() },
+            onDismissRequest = { showScanDialog = false },
             containerColor = Color.White,
             titleContentColor = Color(0xFF172033),
             textContentColor = Color(0xFF334155),
@@ -184,8 +198,8 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Поиск доступных серверов", color = Color(0xFF172033))
-                    TextButton(onClick = { viewModel.cancelServerScan() }) {
+                    Text("Проверка серверов", color = Color(0xFF172033))
+                    TextButton(onClick = { showScanDialog = false }) {
                         Text("✕", color = Color(0xFF64748B), style = MaterialTheme.typography.titleMedium)
                     }
                 }
@@ -195,21 +209,28 @@ fun HomeScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
                         Text(
-                            "Найдено: ${uiState.scannedAvailableServers}" +
-                                if (uiState.scanTotalServers > 0) " / ${uiState.scanTotalServers}" else "",
+                            "Проверка выполняется…",
                             color = Color(0xFF334155)
                         )
                     }
+                    HorizontalDivider(color = Color(0xFFE2E8F0))
+                    Text("Всего серверов: ${uiState.scanTotalServers}", color = Color(0xFF172033))
+                    Text("Проверено: ${uiState.scanCheckedServers}", color = Color(0xFF334155))
+                    Text("Доступно: ${uiState.scannedAvailableServers}", color = Color(0xFF166534))
+                    Text("Не прошло проверку: ${uiState.scanFailedServers}", color = Color(0xFFB91C1C))
                     Text(
-                        "Крестик или «Остановить» — сканирование прерывается.",
+                        "Крестик закрывает окно, но не останавливает проверку.",
                         color = Color(0xFF64748B),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.cancelServerScan() }) {
-                    Text("Остановить", color = Color(0xFF2563EB))
+                TextButton(onClick = {
+                    viewModel.cancelServerScan()
+                    showScanDialog = false
+                }) {
+                    Text("Остановить тест", color = Color(0xFFB91C1C))
                 }
             }
         )
