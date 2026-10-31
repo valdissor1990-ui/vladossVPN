@@ -261,9 +261,9 @@ class SubscriptionRepository @Inject constructor(
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
-                    val updated = sub.copy(lastUpdated = System.currentTimeMillis())
-                    _subscriptions.value = _subscriptions.value.map {
-                        if (it.id == sub.id) updated else it
+                    val updatedAt = System.currentTimeMillis()
+                    _subscriptions.value = _subscriptions.value.map { current ->
+                        if (current.id == sub.id) current.copy(lastUpdated = updatedAt) else current
                     }
                     logCollector.info(TAG, "Refreshed ${sub.name}: ${configs.size} configs")
                 } catch (c: kotlinx.coroutines.CancellationException) {
@@ -282,7 +282,10 @@ class SubscriptionRepository @Inject constructor(
 
             // Preserve attribution per provider while removing duplicate profiles within each
             // provider. Global scanning/counts use connectionKey() without providerTag.
-            val providerUniqueConfigs = allConfigsList.distinctBy {
+            val currentlyEnabledProviderNames = _subscriptions.value.filter { it.enabled }.map { it.name }.toSet()
+            val providerUniqueConfigs = allConfigsList
+                .filter { it.providerTag in currentlyEnabledProviderNames }
+                .distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
             val globallyUniqueCount = providerUniqueConfigs.distinctBy {
