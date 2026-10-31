@@ -357,8 +357,8 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.Timeout -> {
                 if (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting || current is ConnectionState.Verifying) {
                     invalidateTrafficValidation("connection timeout event")
-                    logW("Timeout in state $current — applying fatal connection deadline")
-                    applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
+                    logW("Timeout in state $current — applying retry policy")
+                    handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
                 } else {
                     logD("Ignoring stale timeout event in state $current")
                 }
