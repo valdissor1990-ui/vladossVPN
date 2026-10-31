@@ -176,6 +176,7 @@ class ServerScanner @Inject constructor(
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
                 val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
+                _scanProgress.value = 0 to probeConfigs.size
                 val probedCount = if (probeConfigs.isNotEmpty()) {
                     probeProfilesInBatches(probeConfigs, resultByKey, generation)
                 } else 0
@@ -286,6 +287,7 @@ class ServerScanner @Inject constructor(
                     activeScanJob = currentCoroutineContext()[Job]
                     activeScanIsConnection = true
                     val probeConfigs = unique.filter { config -> !autoSwitcher.isBlacklisted(config) && config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
+                    _scanProgress.value = 0 to probeConfigs.size
                     val resultByKey = linkedMapOf<String, ScoredServer>()
                     unique.forEach { config ->
                         resultByKey[scanKey(config)] = if (config.isValid()) ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f) else unavailable(config)
