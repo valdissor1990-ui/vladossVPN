@@ -106,7 +106,8 @@ class ServerScanner @Inject constructor(
                 return@withLock _scannedServers.value
             }
             if (VpnProxyService.isRunning.value) {
-                logCollector.info(TAG, "Profile scan deferred while VPN is active; retaining last known results")
+                pendingFullScanConfigs = unique
+                logCollector.info(TAG, "Profile scan deferred while VPN is active; queued for after disconnect")
                 return@withLock _scannedServers.value
             }
             _isScanning.value = true
@@ -222,7 +223,11 @@ class ServerScanner @Inject constructor(
             scannedNetworkBucket = networkBucket
             return@withLock availableServers()
         }
-        if (VpnProxyService.isRunning.value) return@withLock availableServers()
+        if (VpnProxyService.isRunning.value) {
+            pendingFullScanConfigs = unique
+            logCollector.info(TAG, "Connection scan deferred while VPN is active; queued for after disconnect")
+            return@withLock availableServers()
+        }
 
         _isScanning.value = true
         try {
