@@ -71,7 +71,8 @@ class ServerScanner @Inject constructor(
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
             if (connectionScanWaiters.get() > 0) {
-                logCollector.info(TAG, "Full scan deferred: a connection scan is waiting")
+                pendingFullScanConfigs = configs.distinctBy(::scanKey)
+                logCollector.info(TAG, "Full scan deferred: a connection scan is waiting; latest profile set queued")
                 return@withLock _scannedServers.value
             }
             val networkBucket = autoSwitcher.currentNetworkBucket()
