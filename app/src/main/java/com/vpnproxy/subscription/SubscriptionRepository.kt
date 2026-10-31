@@ -127,6 +127,10 @@ class SubscriptionRepository @Inject constructor(
     private val refreshMutex = Mutex()
     @Volatile private var lastSuccessfulRefreshAtMs = 0L
 
+    private fun invalidateRefreshFreshness() {
+        lastSuccessfulRefreshAtMs = 0L
+    }
+
     init {
         loadFromPrefs()
         ensureBuiltInSubscriptions()
@@ -193,6 +197,7 @@ class SubscriptionRepository @Inject constructor(
                 id = id, url = url, name = name, tag = tag.ifBlank { name }
             )
             _subscriptions.value = _subscriptions.value + sub
+            invalidateRefreshFreshness()
             saveToPrefs()
             logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
             true
@@ -203,6 +208,7 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun updateSubscriptionTag(id: String, tag: String) {
+        invalidateRefreshFreshness()
         _subscriptions.value = _subscriptions.value.map {
             if (it.id == id) it.copy(tag = tag.ifBlank { it.name }) else it
         }
@@ -215,11 +221,13 @@ class SubscriptionRepository @Inject constructor(
             return
         }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
+        invalidateRefreshFreshness()
         saveToPrefs()
     }
 
     /** Built-in sources can be disabled without deleting their saved entry. */
     fun setSubscriptionEnabled(id: String, enabled: Boolean) {
+        invalidateRefreshFreshness()
         _subscriptions.value = _subscriptions.value.map {
             if (it.id == id) it.copy(enabled = enabled) else it
         }
