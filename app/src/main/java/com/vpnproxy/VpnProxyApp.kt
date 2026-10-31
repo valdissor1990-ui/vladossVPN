@@ -47,6 +47,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var batteryMonitorRegistered = false
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -78,6 +79,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
         try {
             batteryMonitor.register(this)
+            batteryMonitorRegistered = true
             batteryLogger.logSnapshot("app_start")
         } catch (t: Throwable) {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
@@ -146,9 +148,12 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
     override fun onTerminate() {
         applicationScope.cancel()
-        try {
-            batteryMonitor.unregister(this)
-        } catch (_: Throwable) {
+        if (batteryMonitorRegistered) {
+            try {
+                batteryMonitor.unregister(this)
+            } catch (_: Throwable) {
+            }
+            batteryMonitorRegistered = false
         }
         super.onTerminate()
     }
