@@ -198,7 +198,7 @@ class HomeViewModel @Inject constructor(
                 val available = servers.count {
                     it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
                 }
-                val checked = serverScanner.scanProgress.value.first
+                val checked = maxOf(serverScanner.scanProgress.value.first, available)
                 _uiState.value = _uiState.value.copy(
                     scannedAvailableServers = available,
                     scanCheckedServers = checked,
@@ -218,8 +218,8 @@ class HomeViewModel @Inject constructor(
                     it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
                 }
                 _uiState.value = _uiState.value.copy(
-                    scanCheckedServers = progress.first,
-                    scanFailedServers = (progress.first - available).coerceAtLeast(0),
+                    scanCheckedServers = maxOf(progress.first, available),
+                    scanFailedServers = (maxOf(progress.first, available) - available).coerceAtLeast(0),
                     scanTotalServers = maxOf(
                         _uiState.value.serverCount,
                         progress.second,
