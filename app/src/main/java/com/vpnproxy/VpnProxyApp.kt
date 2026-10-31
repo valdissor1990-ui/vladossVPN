@@ -1,6 +1,8 @@
 package com.vpnproxy
 
 import android.app.Application
+import android.app.ActivityManager
+import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.vpnproxy.core.scanner.ServerScanner
@@ -66,6 +68,14 @@ class VpnProxyApp : Application(), Configuration.Provider {
         LogCollectorHolder.install(logCollector)
         logCollector.info("VpnProxyApp", "Application started, version=${BuildConfig.VERSION_NAME}")
 
+        // Android creates Application independently in every process. Keep VPN,
+        // WorkManager and subscription startup strictly in the default process;
+        // :ace is an observation-only process and must not launch duplicate scans.
+        if (!isMainProcess()) {
+            logCollector.info("VpnProxyApp", "Skipping main-process startup in ${currentProcessName()}")
+            return
+        }
+
         try {
             batteryMonitor.register(this)
             batteryLogger.logSnapshot("app_start")
@@ -116,6 +126,15 @@ class VpnProxyApp : Application(), Configuration.Provider {
         // Если нужен фоновый периодический чек — раскомментируйте:
         // UpdateCheckWorker.schedule(this, intervalHours = 6)
     }
+
+    private fun currentProcessName(): String? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        Application.getProcessName()
+    } else {
+        val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+        manager?.runningAppProcesses?.firstOrNull { it.pid == android.os.Process.myPid() }?.processName
+    }
+
+    private fun isMainProcess(): Boolean = currentProcessName() == packageName
 
     override fun onTerminate() {
         applicationScope.cancel()
