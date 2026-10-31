@@ -181,8 +181,8 @@ class ConnectionCoordinator @Inject constructor(
             delay(CONNECTING_TIMEOUT_MS)
             val s = _state.value
             if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
-                logE("Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — FATAL lock + Error")
-                applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
+                logE("Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — enqueue fatal timeout")
+                send(ConnectionEvent.Timeout)
             }
         }
     }
@@ -350,8 +350,8 @@ class ConnectionCoordinator @Inject constructor(
             }
             is ConnectionEvent.Timeout -> {
                 invalidateTrafficValidation("connection timeout event")
-                logW("Timeout in state $current (retry=$retryCount)")
-                handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
+                logW("Timeout in state $current — applying fatal connection deadline")
+                applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
             }
             is ConnectionEvent.ShowError -> {
                 invalidateTrafficValidation("ShowError event")
