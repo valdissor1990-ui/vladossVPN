@@ -399,13 +399,16 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
                 }
             }
-            val vpnState = connectionCoordinator.state.value
-            val vpnActive = vpnState is ConnectionState.Connecting ||
-                vpnState is ConnectionState.Verifying ||
-                vpnState is ConnectionState.Connected ||
-                vpnState is ConnectionState.Reconnecting
-            if (vpnActive) {
-                logCollector.warn(TAG, "SubRepo refresh failed while VPN active — ignored; transportFailure=$sawTransportFailure")
+            val connectionState = connectionCoordinator.state.value
+            val connectionInProgress = connectionState is ConnectionState.Connecting ||
+                connectionState is ConnectionState.Verifying ||
+                connectionState is ConnectionState.Connected ||
+                connectionState is ConnectionState.Reconnecting
+            if (connectionInProgress) {
+                logCollector.warn(
+                    TAG,
+                    "SubRepo refresh failed while connection state=${connectionState.javaClass.simpleName} — ignored; transportFailure=$sawTransportFailure"
+                )
             }
             throw IOException("All sources failed", lastFailure)
         }
