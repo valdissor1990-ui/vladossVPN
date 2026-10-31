@@ -151,13 +151,22 @@ object SingboxConfigBuilder {
                 put("level", "debug")
                 put("timestamp", true)
             })
-            // Probe cores need an explicit Android system resolver; the default
-            // loopback DNS stub is not listening in this temporary proxy-only process.
+            // Do not use the "local" resolver in temporary probe cores: on some Android
+            // devices it falls back to the Go resolver at [::1]:53, where no DNS stub listens.
+            // Use DoH at a literal IP so resolving the DNS server itself needs no DNS lookup.
             put("dns", buildJsonObject {
                 put("servers", buildJsonArray {
                     add(buildJsonObject {
-                        put("type", "local")
+                        put("type", "https")
                         put("tag", "probe-dns")
+                        put("server", "1.1.1.1")
+                        put("server_port", 443)
+                        put("path", "/dns-query")
+                        put("tls", buildJsonObject {
+                            put("enabled", true)
+                            put("server_name", "cloudflare-dns.com")
+                        })
+                        put("detour", "direct")
                     })
                 })
                 put("final", "probe-dns")
