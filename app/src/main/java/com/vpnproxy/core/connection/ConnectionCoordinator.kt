@@ -130,7 +130,6 @@ class ConnectionCoordinator @Inject constructor(
         manualSelectionMode = enabled
         if (enabled) {
             fallbackCandidates = emptyList()
-            fallbackIndex = -1
             fallbackAttempts = 0
         }
         logCollector.info(TAG, "Manual selection mode=${if (enabled) "ON" else "OFF"}")
@@ -193,6 +192,7 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     private fun applyFatal(reason: VpnFailureReason) {
+        invalidateTrafficValidation("fatal failure: $reason")
         retryCount = 0
         isFatalErrorLocked = true
         cancelSelectionJob()
@@ -296,7 +296,6 @@ class ConnectionCoordinator @Inject constructor(
                 val selectedKey = event.server.config.connectionKey()
                 val selectedWasFallback = fallbackCandidates.any { it.config.connectionKey() == selectedKey }
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == selectedKey }
-                fallbackIndex = -1
                 if (!selectedWasFallback) fallbackAttempts = 0
                 logI("ServerSelected: ${event.server.config.name}")
                 when (current) {
@@ -518,7 +517,6 @@ class ConnectionCoordinator @Inject constructor(
         if (failedKey != null) {
             fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == failedKey }
         }
-        fallbackIndex = -1
         var nextIndex = 0
         while (nextIndex < fallbackCandidates.size) {
             val candidate = fallbackCandidates[nextIndex]
@@ -531,7 +529,6 @@ class ConnectionCoordinator @Inject constructor(
             if (active == null || candidate.config.connectionKey() != active.connectionKey()) {
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
-                fallbackIndex = -1
                 invalidateTrafficValidation("fallback to next endpoint")
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name
@@ -561,6 +558,7 @@ class ConnectionCoordinator @Inject constructor(
                 } else {
                     val msg = "Connection failed after $MAX_RETRIES attempts: ${reason.userMessage()}"
                     logE(msg)
+                    invalidateTrafficValidation("retry limit reached")
                     retryCount = 0
                     if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
                         setState(ConnectionState.Error(msg), reason = "maxRetries:$reason")
