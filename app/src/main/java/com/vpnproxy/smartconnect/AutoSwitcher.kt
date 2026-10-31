@@ -689,29 +689,6 @@ class AutoSwitcher @Inject constructor(
         }
     }
 
-    suspend fun selectBest(configs: List<ParsedConfig>): ScoredServer? {
-        if (suppressIfFrozen("selectBest")) return _currentServer.value
-        val allowed = filterUsableServers(configs).filter(::isWithinProviderScope)
-        if (allowed.isEmpty()) {
-            logCollector.warn(TAG, "selectBest: no usable candidates in selected provider scope")
-            return null
-        }
-        val russian = allowed.filter(::isRussian)
-        val foreign = allowed.filterNot(::isRussian)
-        val ordered = russian + foreign
-        val results = healthChecker.testLatency(ordered)
-        // Use the same measured-quality ordering as background ranking; region is not a score.
-        val ranked = scoringEngine.computeScore(results)
-        _rankedServers.value = ranked
-        val best = ranked.firstOrNull() ?: return null
-        _currentServer.value = best
-        baselineRtt = best.latencyMs
-        consecutiveErrors = 0
-        previousRtt = null
-        logCollector.info(TAG, "selectBest -> ${best.config.name} (${best.latencyMs}ms)")
-        return best
-    }
-
     fun forceSelect(server: ScoredServer): Boolean {
         if (suppressIfFrozen("forceSelect", server.config.name)) return false
         if (!isWithinProviderScope(server.config)) {
@@ -773,32 +750,6 @@ class AutoSwitcher @Inject constructor(
         } finally {
             switching.set(false)
         }
-    }
-
-    fun autoReselectIfNeeded() {
-        if (manualSelectionMode) {
-            logCollector.info(TAG, "Automatic reselection suppressed in manual mode")
-            return
-        }
-        if (suppressIfFrozen("ServerSelected", _rankedServers.value.firstOrNull()?.config?.name ?: "unknown")) return
-        val ranked = _rankedServers.value.filter { !isBlacklisted(it.config) }
-        if (ranked.isEmpty()) return
-        val best = ranked.firstOrNull() ?: return
-        val current = _currentServer.value
-        if (sameServer(current?.config, best.config)) {
-            _currentServer.value = best
-            baselineRtt = best.latencyMs
-            consecutiveErrors = 0
-            logCollector.info(TAG, "Auto re-select skipped — already on ${best.config.name}; metrics refreshed")
-            return
-        }
-        _currentServer.value = best
-        baselineRtt = best.latencyMs
-        consecutiveErrors = 0
-        _switchEvents.value = "Автопереключение на ${best.config.name}"
-        logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
-        connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-        connectionCoordinator.send(ConnectionEvent.ServerSelected(best, connectionCoordinator.activeTraceId))
     }
 
     private fun sameServer(
