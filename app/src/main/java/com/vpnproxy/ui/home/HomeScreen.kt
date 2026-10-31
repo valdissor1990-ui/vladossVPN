@@ -110,7 +110,6 @@ fun HomeScreen(
                 Spacer(Modifier.height(28.dp))
                 GlowPowerButton(
                     state = uiState.connectionState,
-                    isBusy = uiState.isBusy,
                     isScanning = uiState.isScanningServers,
                     onClick = {
                         if (uiState.isScanningServers) {
