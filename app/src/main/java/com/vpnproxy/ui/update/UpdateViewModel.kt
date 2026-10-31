@@ -37,7 +37,7 @@ class UpdateViewModel @Inject constructor(
     fun checkOnce() {
         if (checkedThisSession) return
         checkedThisSession = true
-        // Restore any previously downloaded APK, then check and prefetch if needed.
+        // Restore a previously downloaded APK, then check for a newer release.
         updateManager.restoreReadyFromDisk()
         check(force = false)
     }
@@ -46,10 +46,9 @@ class UpdateViewModel @Inject constructor(
         if (_isCheckingUpdates.value) return@launch
         _isCheckingUpdates.value = true
         try {
-            // A normal check only announces an update. Download starts only after the user taps "Скачать".
-            // Forced background prefetch remains available to the explicitly scheduled worker path.
-            if (force) updateManager.checkAndPrefetch()
-            else updateManager.checkForUpdate(force = false)
+            // Manual and automatic checks only announce updates. Download starts exclusively
+            // from download(), which is called by the explicit "Скачать" button.
+            updateManager.checkForUpdate(force = force)
             when (val s = updateManager.state.value) {
                 is UpdateManager.State.UpToDate ->
                     _feedback.emit(Feedback.UpToDate)
