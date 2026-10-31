@@ -68,7 +68,6 @@ class ServerScanner @Inject constructor(
     private val successHistory by lazy { context.getSharedPreferences("server_success_history_v1", Context.MODE_PRIVATE) }
     private val scanCacheMaxAgeMs = RESCAN_INTERVAL_MS
 
-    // NOTE: Full body restored from last good revision; behavioral fixes land in HomeViewModel.
     suspend fun scanAll(configs: List<ParsedConfig>, force: Boolean = false): List<ScoredServer> =
         scanMutex.withLock {
             if (connectionScanWaiters.get() > 0) {
