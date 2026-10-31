@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -37,8 +38,7 @@ class UpdateViewModel @Inject constructor(
     fun checkOnce() {
         if (checkedThisSession) return
         checkedThisSession = true
-        // Restore a previously downloaded APK, then check for a newer release.
-        updateManager.restoreReadyFromDisk()
+        // UpdateManager restores any pending APK once during singleton initialization.
         check(force = false)
     }
 
@@ -65,6 +65,8 @@ class UpdateViewModel @Inject constructor(
                 // UpdateAvailable / Downloading / Ready → UpdateDialog
                 else -> Unit
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             _feedback.emit(
                 Feedback.Error("Не удалось проверить обновления. Проверьте интернет.")
