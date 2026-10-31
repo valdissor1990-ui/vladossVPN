@@ -172,12 +172,6 @@ class ServerScanner @Inject constructor(
         else logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
     }
 
-    suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
-        val currentKeys = configs.map(::scanKey).toSet()
-        _scannedServers.value = _scannedServers.value.filter { scanKey(it.config) in currentKeys }
-        return scanForConnection(configs)
-    }
-
     suspend fun scanForConnection(
         configs: List<ParsedConfig>,
         targetAvailableCount: Int = 4
