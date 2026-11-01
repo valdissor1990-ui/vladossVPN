@@ -76,18 +76,24 @@ android {
         }
     }
 
-    // Never produce a release variant signed with the publicly known debug key.
-    // Fail closed when a release task is requested without a configured release keystore.
+    // Only fail closed for actual release-oriented tasks. Debug/compile/assembleDirectDebug
+    // should remain runnable in CI and local development until a signing key is configured.
     val releaseTaskRequested = gradle.startParameter.taskNames.any { requested ->
-        val taskName = requested.substringAfterLast(':')
-        taskName.equals("assemble", ignoreCase = true) ||
-            taskName.equals("build", ignoreCase = true) ||
-            taskName.matches(Regex("(assemble|bundle|package|install|sign)[A-Za-z0-9]*Release", RegexOption.IGNORE_CASE))
+        val taskName = requested.substringAfterLast(':').lowercase()
+        val isReleaseGoal = listOf("assemble", "bundle", "package", "install", "sign").any { prefix ->
+            taskName == prefix || taskName.startsWith(prefix) || taskName.startsWith("${prefix}release")
+        }
+        val isReleaseVariant = taskName.contains("release") && isReleaseGoal
+        taskName == "build" || taskName == "assemble" || isReleaseVariant
     }
     val releaseSigningConfig = signingConfigs.getByName("release")
-    if (releaseTaskRequested && releaseSigningConfig.storeFile == null) {
+    val releaseSigningConfigured = releaseSigningConfig.storeFile != null &&
+        releaseSigningConfig.storePassword != null &&
+        releaseSigningConfig.keyAlias != null &&
+        releaseSigningConfig.keyPassword != null
+    if (releaseTaskRequested && !releaseSigningConfigured) {
         throw GradleException(
-            "Release build requested but no release keystore is configured. " +
+            "Release build requested but no complete release keystore is configured. " +
                 "Set KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD."
         )
     }
