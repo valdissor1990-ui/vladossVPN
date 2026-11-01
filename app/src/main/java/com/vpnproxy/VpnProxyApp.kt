@@ -2,6 +2,9 @@ package com.vpnproxy
 
 import android.app.Application
 import android.app.ActivityManager
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -50,6 +53,8 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var batteryMonitorRegistered = false
+    private var startupRefreshStarted = false
+    private var startupScanStarted = false
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -89,8 +94,19 @@ class VpnProxyApp : Application(), Configuration.Provider {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
         }
 
-        // Try a fresh subscription immediately on every process start; repository keeps the cache on failure.
+        // Run startup refresh/scan only once and only when a network is available.
+        if (startupRefreshStarted || startupScanStarted) {
+            logCollector.warn("VpnProxyApp", "Startup refresh/scan already scheduled; skipping duplicate")
+            return
+        }
+        startupRefreshStarted = true
+        startupScanStarted = true
+
         applicationScope.launch {
+            if (!hasNetworkConnection()) {
+                logCollector.warn("VpnProxyApp", "Startup refresh/scan skipped: no active network")
+                return@launch
+            }
             val connectionCoordinator = connectionCoordinatorProvider.get()
             val subscriptionRepository = subscriptionRepositoryProvider.get()
             val serverScanner = serverScannerProvider.get()
@@ -139,6 +155,20 @@ class VpnProxyApp : Application(), Configuration.Provider {
         // Планирование из двух мест даёт дубли и race condition.
         // Если нужен фоновый периодический чек — раскомментируйте:
         // UpdateCheckWorker.schedule(this, intervalHours = 6)
+    }
+
+    private fun hasNetworkConnection(): Boolean {
+        return try {
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val activeNetwork = connectivity?.activeNetwork ?: return false
+            val caps = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        } catch (_: Throwable) {
+            true
+        }
     }
 
     private fun currentProcessName(): String? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
