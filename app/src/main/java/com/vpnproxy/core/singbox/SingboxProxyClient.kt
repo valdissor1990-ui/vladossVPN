@@ -12,6 +12,9 @@ import java.net.Socket
  */
 object SingboxProxyClient {
     private const val TAG = "SingboxProxyClient"
+    private const val PORT_READY_TIMEOUT_MS = 6_000L
+    private const val PORT_READY_POLL_MS = 50L
+    private const val PORT_CONNECT_TIMEOUT_MS = 100
     @Volatile private var activeCore: SingBoxCore? = null
 
     @Synchronized
@@ -21,21 +24,33 @@ object SingboxProxyClient {
         val core = SingBoxCore(appContext, SingBoxPlatform(appContext))
         return try {
             core.start(configJson)
-            val port = JSONObject(configJson).getJSONArray("inbounds").getJSONObject(0).getInt("listen_port")
-            var ready = false
-            repeat(60) {
-                if (!ready) {
-                    try {
-                        Socket().use { socket -> socket.connect(InetSocketAddress("127.0.0.1", port), 200) }
-                        ready = true
-                    } catch (_: Exception) {
-                        Thread.sleep(100)
-                    }
+            val inboundArray = JSONObject(configJson).getJSONArray("inbounds")
+            val ports = (0 until inboundArray.length()).map { index ->
+                inboundArray.getJSONObject(index).getInt("listen_port")
+            }.distinct()
+            check(ports.isNotEmpty()) { "Sing-box config has no local inbound ports" }
+
+            // Multi-profile probes open several inbounds in one core. Waiting only for
+            // the first listener lets the other profile checks race core initialization
+            // and incorrectly marks healthy profiles as unreachable.
+            val pending = ports.toMutableSet()
+            val deadline = System.nanoTime() + PORT_READY_TIMEOUT_MS * 1_000_000L
+            while (pending.isNotEmpty() && System.nanoTime() < deadline) {
+                val readyNow = pending.filter { port ->
+                    runCatching {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress("127.0.0.1", port), PORT_CONNECT_TIMEOUT_MS)
+                        }
+                    }.isSuccess
                 }
+                pending.removeAll(readyNow.toSet())
+                if (pending.isNotEmpty()) Thread.sleep(PORT_READY_POLL_MS)
             }
-            check(ready) { "Sing-box did not bind 127.0.0.1:$port" }
+            check(pending.isEmpty()) {
+                "Sing-box did not bind all local inbounds; ready=" + (ports.size - pending.size) + "/" + ports.size + ", pending=" + pending
+            }
             activeCore = core
-            Log.i(TAG, "Temporary proxy-only Sing-box ready on 127.0.0.1:$port")
+            Log.i(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
             true
         } catch (t: Throwable) {
             Log.e(TAG, "Temporary Sing-box startup failed", t)

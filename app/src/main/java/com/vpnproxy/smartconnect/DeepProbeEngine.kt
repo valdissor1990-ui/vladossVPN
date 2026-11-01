@@ -43,8 +43,15 @@ class DeepProbeEngine @Inject constructor(
     companion object {
         private const val TAG = "DeepProbe"
         private const val LATENCY_URL = "https://www.gstatic.com/generate_204"
+        // Independent endpoints avoid declaring every profile dead when one probe host
+        // is blocked or degraded on the current access network.
+        private val PROFILE_PING_URLS = listOf(
+            "https://cp.cloudflare.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204"
+        )
         private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
+        private const val PROFILE_PING_ATTEMPTS = 4
         private const val CONNECT_TIMEOUT_MS = 2_000L
         private const val READ_TIMEOUT_MS = 4_000L
 
@@ -188,12 +195,13 @@ class DeepProbeEngine @Inject constructor(
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
                                     val samples = mutableListOf<Long>()
-                                    for (attempt in 0 until 3) {
-                                        if (samples.size >= 2 || samples.size + (3 - attempt) < 2) break
+                                    for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
+                                        if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
                                         ensureActive()
                                         if (!running.get()) throw CancellationException("Profile ping cancelled")
                                         try {
-                                            val request = Request.Builder().url(LATENCY_URL).head().build()
+                                            val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
+                                            val request = Request.Builder().url(probeUrl).head().build()
                                             val elapsed = runInterruptible(Dispatchers.IO) {
                                                 val start = System.nanoTime()
                                                 client.newCall(request).execute().use { response ->
