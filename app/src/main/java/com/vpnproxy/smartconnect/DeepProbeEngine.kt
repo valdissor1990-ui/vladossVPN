@@ -54,8 +54,8 @@ class DeepProbeEngine @Inject constructor(
         private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
         private const val PROFILE_PING_ATTEMPTS = 4
-        private const val CONNECT_TIMEOUT_MS = 2_000L
-        private const val READ_TIMEOUT_MS = 4_000L
+        private const val CONNECT_TIMEOUT_MS = 3_500L
+        private const val READ_TIMEOUT_MS = 5_000L
 
         fun summarizeProfileLatency(config: ParsedConfig, samples: List<Long>): ProfilePingResult {
             val valid = samples.filter { it > 0L }.sorted()
@@ -167,15 +167,15 @@ class DeepProbeEngine @Inject constructor(
         awaitProbeSlot()
         try {
             checkProbeActive(probeGeneration)
-            check(!VpnProxyService.isRunning.value) {
-                "Проверка отдельных профилей доступна после отключения VPN"
+            check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
+                "Проверка отдельных профилей доступна только при полностью остановленном VPN"
             }
             checkProbeActive(probeGeneration)
             val ports = allocatePorts(configs.size)
             val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
             checkProbeActive(probeGeneration)
-            check(!VpnProxyService.isRunning.value) {
-                "VPN стал активен до начала проверки профилей"
+            check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
+                "VPN начал запускаться до начала проверки профилей"
             }
             checkProbeActive(probeGeneration)
             val started = SingboxProxyClient.start(context, configJson)
@@ -194,7 +194,7 @@ class DeepProbeEngine @Inject constructor(
                                         .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
                                         .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                                         .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .callTimeout(3, TimeUnit.SECONDS)
+                                        .callTimeout(7, TimeUnit.SECONDS)
                                         .retryOnConnectionFailure(false)
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
@@ -215,8 +215,15 @@ class DeepProbeEngine @Inject constructor(
                                             samples += elapsed
                                         } catch (cancelled: CancellationException) {
                                             throw cancelled
-                                        } catch (_: Exception) {
-                                            // A failed request is not a numeric ping sample.
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (failure: Exception) {
+                                            logCollector.warn(
+                                                TAG,
+                                                "Profile probe failed: profile=${configs[index].name} attempt=${attempt + 1} " +
+                                                    "endpoint=${PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]} " +
+                                                    "reason=${failure.javaClass.simpleName}: ${failure.message}"
+                                            )
                                         }
                                     }
                                     summarizeProfileLatency(configs[index], samples)
@@ -248,14 +255,14 @@ class DeepProbeEngine @Inject constructor(
         awaitProbeSlot()
         try {
             checkProbeActive(probeGeneration)
-            check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+            check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
             checkProbeActive(probeGeneration)
 
             val ports = allocatePorts(configs.size)
             val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
             checkProbeActive(probeGeneration)
-            check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
+            check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             checkProbeActive(probeGeneration)
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
@@ -279,7 +286,7 @@ class DeepProbeEngine @Inject constructor(
                             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
                             .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                             .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                            .callTimeout(6, TimeUnit.SECONDS)
+                            .callTimeout(8, TimeUnit.SECONDS)
                             .retryOnConnectionFailure(false)
                             .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                             .build()
@@ -295,8 +302,11 @@ class DeepProbeEngine @Inject constructor(
                                     val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
                                     if (response.code in 200..399) samples += elapsed else failures++
                                 }
-                            } catch (_: Exception) {
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
                                 failures++
+                                logCollector.warn(TAG, "Latency probe failed: profile=${config.name} reason=${failure.javaClass.simpleName}: ${failure.message}")
                             }
                         }
 
@@ -315,8 +325,11 @@ class DeepProbeEngine @Inject constructor(
                                     speedOk = bytes > 0
                                 }
                             }
-                        } catch (_: Exception) {
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
                             speedOk = false
+                            logCollector.warn(TAG, "Speed probe failed: profile=${config.name} reason=${failure.javaClass.simpleName}: ${failure.message}")
                         }
                         ProbeMetrics(
                             config = config,

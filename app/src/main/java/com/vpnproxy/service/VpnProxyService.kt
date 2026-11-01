@@ -32,6 +32,7 @@ import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +67,10 @@ class VpnProxyService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
+        private val _isCoreTransitioning = MutableStateFlow(false)
+        /** True while the VPN core is starting, stopping, or being intentionally restarted. */
+        val isCoreTransitioning: StateFlow<Boolean> = _isCoreTransitioning.asStateFlow()
+
         private val _lastError = MutableStateFlow<String?>(null)
         val lastError: StateFlow<String?> = _lastError
 
@@ -79,6 +84,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
+    @Inject lateinit var deepProbeEngine: DeepProbeEngine
     @Inject lateinit var dualPathStore: DualPathStore
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
@@ -98,6 +104,8 @@ class VpnProxyService : VpnService() {
     private var passiveProbeJob: Job? = null
     private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
+    /** True only while the lifecycle controller performs an intentional stop/start transition. */
+    private val plannedRestart = AtomicBoolean(false)
 
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
@@ -295,7 +303,16 @@ class VpnProxyService : VpnService() {
 
     private fun transitionServiceState(next: ServiceState) {
         _serviceState.value = next
-        logCollector.debug(TAG, "Service lifecycle state -> $next")
+        _isCoreTransitioning.value = plannedRestart.get() ||
+            next == ServiceState.Starting || next == ServiceState.Stopping
+        logCollector.debug(TAG, "Service lifecycle state -> $next coreTransitioning=${_isCoreTransitioning.value}")
+    }
+
+    private fun setPlannedRestart(active: Boolean) {
+        plannedRestart.set(active)
+        _isCoreTransitioning.value = active ||
+            _serviceState.value == ServiceState.Starting ||
+            _serviceState.value == ServiceState.Stopping
     }
 
     private fun scheduleIdleStop() {
@@ -352,14 +369,19 @@ class VpnProxyService : VpnService() {
                 ) {
                     val generation = restartRequestGeneration
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
-                    controller.restartSession(
-                        coreIsRunning = { _isRunning.value },
-                        stopSession = {
-                            stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
-                        },
-                        startSession = { startVpnSession() },
-                        restartDelayMs = 3_000L
-                    )
+                    setPlannedRestart(true)
+                    try {
+                        controller.restartSession(
+                            coreIsRunning = { _isRunning.value },
+                            stopSession = {
+                                stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
+                            },
+                            startSession = { startVpnSession() },
+                            restartDelayMs = 3_000L
+                        )
+                    } finally {
+                        setPlannedRestart(false)
+                    }
                     completedThisWorker = generation
                     restartCompletedGeneration = generation
                     logCollector.info(TAG, "restartVpn worker completed generation=$generation inFlight=false")
@@ -402,8 +424,12 @@ class VpnProxyService : VpnService() {
                     delay(5_000)
                     graceWaitedMs += 5_000L
                 }
-                if (!_isRunning.value && !(_serviceState.value == ServiceState.Stopping)) {
-                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
+                while (plannedRestart.get() && _serviceState.value != ServiceState.Stopping) {
+                    logCollector.debug(TAG, "Watchdog: planned restart in progress; timeout suppressed")
+                    delay(500L)
+                }
+                if (!_isRunning.value && !plannedRestart.get() && _serviceState.value != ServiceState.Stopping) {
+                    logCollector.warn(TAG, "Watchdog: VPN not running outside planned restart — Timeout event")
                     connectionCoordinator.send(ConnectionEvent.Timeout)
                 }
             }
@@ -497,6 +523,10 @@ class VpnProxyService : VpnService() {
                     val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
                     logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
                 }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
+                // Cancel and synchronously drain any proxy-only probe before the main VPN core starts.
+                // SingboxProxyClient serializes start/stop, so this closes the probe's temporary
+                // CommandServer before port 10809 and native libbox are claimed by the VPN session.
+                deepProbeEngine.cancel()
                 controller.startCore(configJson)
                 logCollector.info(TAG, "Native libbox logs captured through writeDebugMessage -> LogCollector; file log.output disabled")
             } catch (e: VpnStartException) {
