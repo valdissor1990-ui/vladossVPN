@@ -18,6 +18,7 @@ internal object ConnectServerSelector {
         configs: List<ParsedConfig>,
         isAutomaticMode: Boolean,
         manuallySelected: ScoringEngine.ScoredServer?,
+        scannedCandidates: List<ScoringEngine.ScoredServer> = emptyList(),
         lastServerStore: LastServerStore,
         autoSwitcher: AutoSwitcher,
         logCollector: LogCollector,
@@ -52,6 +53,14 @@ internal object ConnectServerSelector {
             TAG,
             traceMsg("Immediate connect selection: ${selectedConfig.name}; source=$source; profiles=${usable.size}; automatic=$isAutomaticMode")
         )
-        return autoSwitcher.selectImmediate(selectedConfig, usable)
+        val scannedSelection = scannedCandidates.firstOrNull {
+            it.config.connectionKey() == selectedConfig.connectionKey() &&
+                it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+        }
+        return if (scannedSelection != null) {
+            autoSwitcher.selectScanned(scannedSelection, scannedCandidates)
+        } else {
+            autoSwitcher.selectImmediate(selectedConfig, usable)
+        }
     }
 }
