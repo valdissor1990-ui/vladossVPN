@@ -63,7 +63,7 @@ class HomeViewModel @Inject constructor(
     companion object {
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
-        private const val SERVER_SELECTION_TIMEOUT_MS = 25_000L
+        private const val SERVER_SELECTION_TIMEOUT_MS = 80_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
@@ -433,7 +433,6 @@ class HomeViewModel @Inject constructor(
         // Stop any startup/background profile probe before bringing up the real VPN core.
         serverScanner.cancelScan()
         armConnectingWatchdog()
-        ensureServiceRunning()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -466,9 +465,32 @@ class HomeViewModel @Inject constructor(
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
-                val selected = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
-                    ConnectServerSelector.select(
+                logCollector.info(TAG, tmsg("Starting mandatory fresh server preflight: profiles=${configs.size}; preferred=${manuallySelectedServer?.config?.name ?: "auto"}"))
+                val reachable = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
+                    serverScanner.scanForConnection(
                         configs = configs,
+                        targetAvailableCount = 4,
+                        preferredConfig = manuallySelectedServer?.config,
+                        forceFresh = true
+                    )
+                }
+                if (reachable == null) {
+                    endConnectFlow()
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Проверка серверов заняла слишком много времени. Повторите подключение."))
+                    return@launch
+                }
+                val verifiedConfigs = reachable
+                    .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                    .map { it.config }
+                if (verifiedConfigs.isEmpty()) {
+                    endConnectFlow()
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Не найдено серверов с подтверждённой доступностью"))
+                    logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}"))
+                    return@launch
+                }
+                val selected = withTimeoutOrNull(5_000L) {
+                    ConnectServerSelector.select(
+                        configs = verifiedConfigs,
                         isAutomaticMode = _uiState.value.isAutomaticMode,
                         manuallySelected = manuallySelectedServer,
                         lastServerStore = lastServerStore,
@@ -479,14 +501,14 @@ class HomeViewModel @Inject constructor(
                 }
                 if (selected == null) {
                     endConnectFlow()
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Не удалось выбрать проверенный сервер"))
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 pendingRankingConfigs = configs
                 ensureServiceRunning()
-                logCollector.info(TAG, tmsg("Selected ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms refreshed=$refreshedSubscription"))
+                logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
