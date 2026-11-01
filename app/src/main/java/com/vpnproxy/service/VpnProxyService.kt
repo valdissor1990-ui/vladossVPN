@@ -32,6 +32,7 @@ import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -79,6 +80,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
+    @Inject lateinit var deepProbeEngine: DeepProbeEngine
     @Inject lateinit var dualPathStore: DualPathStore
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
@@ -98,6 +100,8 @@ class VpnProxyService : VpnService() {
     private var passiveProbeJob: Job? = null
     private var batteryPeriodicJob: Job? = null
     private val isReconnecting = AtomicBoolean(false)
+    /** True only while the lifecycle controller performs an intentional stop/start transition. */
+    private val plannedRestart = AtomicBoolean(false)
 
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle)
     val serviceState: StateFlow<ServiceState> = _serviceState.asStateFlow()
@@ -352,14 +356,19 @@ class VpnProxyService : VpnService() {
                 ) {
                     val generation = restartRequestGeneration
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
-                    controller.restartSession(
-                        coreIsRunning = { _isRunning.value },
-                        stopSession = {
-                            stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
-                        },
-                        startSession = { startVpnSession() },
-                        restartDelayMs = 3_000L
-                    )
+                    plannedRestart.set(true)
+                    try {
+                        controller.restartSession(
+                            coreIsRunning = { _isRunning.value },
+                            stopSession = {
+                                stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
+                            },
+                            startSession = { startVpnSession() },
+                            restartDelayMs = 3_000L
+                        )
+                    } finally {
+                        plannedRestart.set(false)
+                    }
                     completedThisWorker = generation
                     restartCompletedGeneration = generation
                     logCollector.info(TAG, "restartVpn worker completed generation=$generation inFlight=false")
@@ -402,8 +411,12 @@ class VpnProxyService : VpnService() {
                     delay(5_000)
                     graceWaitedMs += 5_000L
                 }
-                if (!_isRunning.value && !(_serviceState.value == ServiceState.Stopping)) {
-                    logCollector.warn(TAG, "Watchdog: VPN not running — Timeout event")
+                while (plannedRestart.get() && _serviceState.value != ServiceState.Stopping) {
+                    logCollector.debug(TAG, "Watchdog: planned restart in progress; timeout suppressed")
+                    delay(500L)
+                }
+                if (!_isRunning.value && !plannedRestart.get() && _serviceState.value != ServiceState.Stopping) {
+                    logCollector.warn(TAG, "Watchdog: VPN not running outside planned restart — Timeout event")
                     connectionCoordinator.send(ConnectionEvent.Timeout)
                 }
             }
@@ -497,6 +510,10 @@ class VpnProxyService : VpnService() {
                     val masked = com.vpnproxy.logging.SensitiveMasker.mask(configJson)
                     logCollector.info(TAG, "Singbox config for ${parsed.name}: $masked")
                 }.onFailure { Log.w(TAG, "Failed to log masked sing-box config", it) }
+                // Cancel and synchronously drain any proxy-only probe before the main VPN core starts.
+                // SingboxProxyClient serializes start/stop, so this closes the probe's temporary
+                // CommandServer before port 10809 and native libbox are claimed by the VPN session.
+                deepProbeEngine.cancel()
                 controller.startCore(configJson)
                 logCollector.info(TAG, "Native libbox logs captured through writeDebugMessage -> LogCollector; file log.output disabled")
             } catch (e: VpnStartException) {
