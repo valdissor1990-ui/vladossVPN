@@ -51,6 +51,7 @@ class DeepProbeEngine @Inject constructor(
         )
         private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
+        private const val PROFILE_PING_ATTEMPTS = 4
         private const val CONNECT_TIMEOUT_MS = 2_000L
         private const val READ_TIMEOUT_MS = 4_000L
 
@@ -194,8 +195,8 @@ class DeepProbeEngine @Inject constructor(
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
                                     val samples = mutableListOf<Long>()
-                                    for (attempt in 0 until 3) {
-                                        if (samples.size >= 2 || samples.size + (3 - attempt) < 2) break
+                                    for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
+                                        if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
                                         ensureActive()
                                         if (!running.get()) throw CancellationException("Profile ping cancelled")
                                         try {
