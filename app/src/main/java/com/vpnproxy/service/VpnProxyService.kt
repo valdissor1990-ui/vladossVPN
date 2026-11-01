@@ -67,6 +67,10 @@ class VpnProxyService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
+        private val _isCoreTransitioning = MutableStateFlow(false)
+        /** True while the VPN core is starting, stopping, or being intentionally restarted. */
+        val isCoreTransitioning: StateFlow<Boolean> = _isCoreTransitioning.asStateFlow()
+
         private val _lastError = MutableStateFlow<String?>(null)
         val lastError: StateFlow<String?> = _lastError
 
@@ -299,7 +303,16 @@ class VpnProxyService : VpnService() {
 
     private fun transitionServiceState(next: ServiceState) {
         _serviceState.value = next
-        logCollector.debug(TAG, "Service lifecycle state -> $next")
+        _isCoreTransitioning.value = plannedRestart.get() ||
+            next == ServiceState.Starting || next == ServiceState.Stopping
+        logCollector.debug(TAG, "Service lifecycle state -> $next coreTransitioning=${_isCoreTransitioning.value}")
+    }
+
+    private fun setPlannedRestart(active: Boolean) {
+        plannedRestart.set(active)
+        _isCoreTransitioning.value = active ||
+            _serviceState.value == ServiceState.Starting ||
+            _serviceState.value == ServiceState.Stopping
     }
 
     private fun scheduleIdleStop() {
@@ -356,7 +369,7 @@ class VpnProxyService : VpnService() {
                 ) {
                     val generation = restartRequestGeneration
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
-                    plannedRestart.set(true)
+                    setPlannedRestart(true)
                     try {
                         controller.restartSession(
                             coreIsRunning = { _isRunning.value },
@@ -367,7 +380,7 @@ class VpnProxyService : VpnService() {
                             restartDelayMs = 3_000L
                         )
                     } finally {
-                        plannedRestart.set(false)
+                        setPlannedRestart(false)
                     }
                     completedThisWorker = generation
                     restartCompletedGeneration = generation
