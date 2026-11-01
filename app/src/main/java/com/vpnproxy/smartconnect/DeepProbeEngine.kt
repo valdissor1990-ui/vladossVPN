@@ -186,7 +186,6 @@ class DeepProbeEngine @Inject constructor(
                 val semaphore = Semaphore(8)
                 for (indices in configs.indices.toList().chunked(8)) {
                     checkProbeActive(probeGeneration)
-                    checkProbeActive(probeGeneration)
                     val batch = coroutineScope {
                         indices.map { index ->
                             async(Dispatchers.IO) {
@@ -202,7 +201,6 @@ class DeepProbeEngine @Inject constructor(
                                     val samples = mutableListOf<Long>()
                                     for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
                                         if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
-                                        checkProbeActive(probeGeneration)
                                         checkProbeActive(probeGeneration)
                                         try {
                                             val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
@@ -275,7 +273,6 @@ class DeepProbeEngine @Inject constructor(
 
             try {
                 val results = configs.mapIndexed { index, config ->
-                    checkProbeActive(probeGeneration)
                     checkProbeActive(probeGeneration)
                     try {
                         val client = OkHttpClient.Builder()
