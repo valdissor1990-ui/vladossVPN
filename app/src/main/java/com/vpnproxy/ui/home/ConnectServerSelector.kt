@@ -41,11 +41,12 @@ internal object ConnectServerSelector {
                     (last.uuid.isBlank() || it.uuid == last.uuid)
             }
         }
-        val selectedConfig = manualConfig ?: lastConfig ?: usable.first()
+        val selectedConfig = manualConfig ?: if (isAutomaticMode) usable.first() else lastConfig ?: usable.first()
         val source = when {
             manualConfig != null -> "manual"
+            isAutomaticMode -> "lowest-latency-verified"
             lastConfig != null -> "last-success"
-            else -> "first-usable"
+            else -> "first-verified"
         }
         logCollector.info(
             TAG,
