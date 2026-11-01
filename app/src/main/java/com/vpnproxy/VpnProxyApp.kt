@@ -1,25 +1,27 @@
 package com.vpnproxy
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.diagnostics.BatteryMonitor
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.logging.CrashHandler
 import com.vpnproxy.logging.LogCollector
-import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.logging.LogCollectorHolder
+import com.vpnproxy.logging.LogCollectorTree
 import com.vpnproxy.subscription.SubscriptionRepository
 import com.vpnproxy.subscription.SubscriptionUpdateWorker
+import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -45,6 +47,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var startupRefreshStarted = false
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -55,7 +58,6 @@ class VpnProxyApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // ★ CrashHandler — ДО всего остального, чтобы перехватить краши на раннем старте
         CrashHandler.install(this)
         logCollector.initialize(this)
 
@@ -73,48 +75,72 @@ class VpnProxyApp : Application(), Configuration.Provider {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
         }
 
-        // Try a fresh subscription immediately on every process start; repository keeps the cache on failure.
+        startSafeStartupRefresh()
+
+        SubscriptionUpdateWorker.schedule(this, intervalMinutes = 30)
+    }
+
+    private fun startSafeStartupRefresh() {
+        if (startupRefreshStarted) return
+        startupRefreshStarted = true
+
         applicationScope.launch {
+            if (!hasNetworkConnection()) {
+                logCollector.warn("VpnProxyApp", "Startup refresh skipped: no active network")
+                return@launch
+            }
+
             val state = connectionCoordinator.state.value
             val vpnActive = state is ConnectionState.Connecting || state is ConnectionState.Verifying ||
                 state is ConnectionState.Connected || state is ConnectionState.Reconnecting
+
             if (vpnActive) {
                 logCollector.info("VpnProxyApp", "Startup auto-refresh skipped while VPN active: state=$state")
-            } else {
-                try {
-                    val count = subscriptionRepository.refreshAll()
-                    val providerConfigCount = subscriptionRepository.getAllConfigs().size
-                    logCollector.info(
-                        "VpnProxyApp",
-                        "Startup subscription refresh finished: uniqueConfigs=$count providerConfigs=$providerConfigCount"
-                    )
-                    if (count == 0) {
-                        logCollector.warn("VpnProxyApp", "Startup subscription refresh yielded no configs; no subscription servers are available")
-                    }
-                } catch (t: Throwable) {
-                    logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
-                }
+                return@launch
             }
 
-            // Scan the repository's current snapshot even if the network refresh failed;
-            // SubscriptionRepository has already loaded its persisted cache on cold start.
             try {
-                serverScanner.scanAfterSubscriptionUpdate(subscriptionRepository.getAllConfigs())
-                serverScanner.scanInBackground(applicationScope)
+                val count = subscriptionRepository.refreshAll()
+                val providerConfigCount = subscriptionRepository.getAllConfigs().size
+                logCollector.info(
+                    "VpnProxyApp",
+                    "Startup subscription refresh finished: uniqueConfigs=$count providerConfigs=$providerConfigCount"
+                )
+                if (count == 0) {
+                    logCollector.warn(
+                        "VpnProxyApp",
+                        "Startup subscription refresh yielded no configs; no subscription servers are available"
+                    )
+                }
+            } catch (t: Throwable) {
+                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
+            }
+
+            try {
+                val configs = subscriptionRepository.getAllConfigs()
+                if (configs.isNotEmpty()) {
+                    serverScanner.scanAfterSubscriptionUpdate(configs)
+                    serverScanner.scanInBackground(applicationScope)
+                } else {
+                    logCollector.warn("VpnProxyApp", "Startup server scan skipped: no configs available")
+                }
             } catch (t: Throwable) {
                 logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
             }
         }
+    }
 
-        // Refresh subscription every 30 minutes when network is available.
-        SubscriptionUpdateWorker.schedule(this, intervalMinutes = 30)
-
-        // UpdateCheckWorker НЕ планируем здесь — он запускается:
-        //   1) Вручную из Settings (force = true)
-        //   2) Автоматически при открытии HomeScreen (LaunchedEffect)
-        // Планирование из двух мест даёт дубли и race condition.
-        // Если нужен фоновый периодический чек — раскомментируйте:
-        // UpdateCheckWorker.schedule(this, intervalHours = 6)
+    private fun hasNetworkConnection(): Boolean {
+        return try {
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val activeNetwork = connectivity?.activeNetwork ?: return false
+            val caps = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+        } catch (_: Throwable) {
+            true
+        }
     }
 
     override fun onTerminate() {
