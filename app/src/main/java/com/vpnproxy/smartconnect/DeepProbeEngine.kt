@@ -349,14 +349,14 @@ class DeepProbeEngine @Inject constructor(
     /** Wait for the single temporary Sing-box core slot instead of fabricating failed results. */
     private suspend fun awaitProbeSlot() {
         while (!running.compareAndSet(false, true)) {
-            currentCoroutineContext().checkProbeActive(probeGeneration)
+            currentCoroutineContext().ensureActive()
             delay(50L)
         }
     }
 
     /** Propagate coroutine cancellation and explicit DeepProbe cancellation to every probe path. */
     private suspend fun checkProbeActive(generation: Long) {
-        currentCoroutineContext().checkProbeActive(probeGeneration)
+        currentCoroutineContext().ensureActive()
         if (cancellationGeneration.get() != generation) {
             throw CancellationException("DeepProbe cancelled")
         }
