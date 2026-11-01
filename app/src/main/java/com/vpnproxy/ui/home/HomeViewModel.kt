@@ -587,6 +587,15 @@ class HomeViewModel @Inject constructor(
             return
         }
         manuallySelectedServer = server
+        // On a disconnected app, route manual selection through the same mandatory
+        // fresh preflight as the main Connect button. A stale list entry is not proof
+        // that the profile is reachable on the current network.
+        if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
+            connectionCoordinator.state.value is ConnectionState.Error
+        ) {
+            connect()
+            return
+        }
         val traceId = TraceId.newId()
         activeTraceId = traceId
         permissionFlowInProgress = true
