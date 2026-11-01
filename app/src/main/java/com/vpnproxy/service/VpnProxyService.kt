@@ -24,6 +24,7 @@ import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.SingBoxCore
+import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticOptions
@@ -43,6 +44,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -368,6 +370,13 @@ class VpnProxyService : VpnService() {
                     _serviceState.value != ServiceState.Stopping
                 ) {
                     val generation = restartRequestGeneration
+                    // The desired server may change while a restart worker is in flight.
+                    // Re-apply the coordinator's latest selection immediately before each
+                    // stop/start cycle so an older state callback cannot launch a stale profile.
+                    connectionCoordinator.currentSelectedServer()?.let { desired ->
+                        autoSwitcher.forceSelect(desired)
+                        logCollector.info(TAG, "restartVpn synchronized desired server=${desired.config.name} generation=$generation")
+                    }
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
                     setPlannedRestart(true)
                     try {
@@ -527,7 +536,9 @@ class VpnProxyService : VpnService() {
                 // SingboxProxyClient serializes start/stop, so this closes the probe's temporary
                 // CommandServer before port 10809 and native libbox are claimed by the VPN session.
                 deepProbeEngine.cancel()
-                controller.startCore(configJson)
+                CorePortLease.mutex.withLock {
+                    controller.startCore(configJson)
+                }
                 logCollector.info(TAG, "Native libbox logs captured through writeDebugMessage -> LogCollector; file log.output disabled")
             } catch (e: VpnStartException) {
                 Log.e(TAG, "VpnStartException: ${e.reason}", e)
@@ -680,7 +691,12 @@ class VpnProxyService : VpnService() {
             autoSwitcher.stopMonitoring()
             autoSwitcher.clearDiagnosticFreeze()
             trafficCollector.stop()
-            lifecycleController?.stopCore()
+            // Stop/cancel a temporary probe first, then serialize the main core shutdown
+            // with every temporary core start/stop using the shared 10809 port lease.
+            deepProbeEngine.cancel()
+            CorePortLease.mutex.withLock {
+                lifecycleController?.stopCore()
+            }
 
             Log.e(TAG, "Stopping VPN. Reason: " + reason, throwable)
             _isRunning.value = false

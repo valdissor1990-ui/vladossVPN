@@ -3,6 +3,7 @@ package com.vpnproxy.smartconnect
 import android.content.Context
 import android.util.Log
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
+import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
@@ -14,6 +15,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -165,6 +167,7 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
+        CorePortLease.mutex.withLock {
         try {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
@@ -247,12 +250,14 @@ class DeepProbeEngine @Inject constructor(
         } finally {
             running.set(false)
         }
+        }
     }
 
     suspend fun run(configs: List<ParsedConfig>): List<ProbeMetrics> = withContext(Dispatchers.IO) {
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
+        CorePortLease.mutex.withLock {
         try {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
@@ -353,6 +358,7 @@ class DeepProbeEngine @Inject constructor(
             }
         } finally {
             running.set(false)
+        }
         }
     }
 
