@@ -149,6 +149,7 @@ object SingboxConfigBuilder {
     fun buildMulti(configs: List<ParsedConfig>, ports: List<Int>): String {
         require(configs.isNotEmpty()) { "At least one Sing-box config is required" }
         require(configs.size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
+        require(ports.distinct().size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
         return buildJsonObject {
             put("log", buildJsonObject {
                 put("level", "debug")

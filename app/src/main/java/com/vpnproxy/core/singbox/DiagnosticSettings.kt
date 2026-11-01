@@ -9,7 +9,7 @@ data class DiagnosticOptions(
     val tunStack: String = "system",
     val useDisallowSelfPackage: Boolean = false,
     val autoDetectInterface: Boolean = true,
-    val strictRoute: Boolean = false,
+    val strictRoute: Boolean = true,
     val routeFinal: String = "proxy",
     val passiveProbeEnabled: Boolean = true,
     val freezeAutoSwitcherAfterConnected: Boolean = false
@@ -29,7 +29,7 @@ object DiagnosticSettings {
             tunStack = p.getString("tun_stack", "system")?.takeIf { it in tunStacks } ?: "system",
             useDisallowSelfPackage = p.getBoolean("use_disallow_self_package", false),
             autoDetectInterface = p.getBoolean("auto_detect_interface", true),
-            strictRoute = p.getBoolean("strict_route", false),
+            strictRoute = p.getBoolean("strict_route", true),
             routeFinal = p.getString("route_final", "proxy")?.takeIf { it in routeFinals } ?: "proxy",
             passiveProbeEnabled = p.getBoolean("passive_probe_enabled", true),
             freezeAutoSwitcherAfterConnected = p.getBoolean("freeze_autoswitcher", false)

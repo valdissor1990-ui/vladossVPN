@@ -336,11 +336,28 @@ class DeepProbeEngine @Inject constructor(
         }
     }
 
+    /**
+     * Reserve all ephemeral ports at the same time. Closing each ServerSocket inside
+     * the loop allowed the OS to immediately hand the same port to the next iteration.
+     * Sing-box requires one distinct inbound port per profile.
+     */
     private fun allocatePorts(count: Int): List<Int> {
-        val ports = LinkedHashSet<Int>()
-        repeat(count) {
-            ServerSocket(0).use { socket -> ports += socket.localPort }
+        require(count > 0) { "At least one inbound port is required" }
+        val reservations = ArrayList<ServerSocket>(count)
+        try {
+            repeat(count) {
+                reservations += ServerSocket().apply {
+                    reuseAddress = false
+                    bind(InetSocketAddress("127.0.0.1", 0))
+                }
+            }
+            val ports = reservations.map { it.localPort }
+            check(ports.distinct().size == count) {
+                "Failed to reserve $count distinct inbound ports"
+            }
+            return ports
+        } finally {
+            reservations.forEach { socket -> runCatching { socket.close() } }
         }
-        return ports.toList()
     }
 }
