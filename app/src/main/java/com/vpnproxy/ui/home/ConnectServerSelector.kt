@@ -1,76 +1,56 @@
 package com.vpnproxy.ui.home
 
 import com.vpnproxy.core.connection.LastServerStore
-import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
-import kotlinx.coroutines.CancellationException
 
 /**
- * P1 connect path: order by last successful server, probe with [ServerScanner.scanForConnection],
- * then pick a live responder (prefer last server if it answered).
+ * Initial connection must not depend on an external preflight probe endpoint.
+ * Select a known-good or first usable profile immediately; the VPN core and traffic
+ * validator determine whether it actually works. Background ranking runs after connection.
  */
 internal object ConnectServerSelector {
     private const val TAG = "ConnectSelect"
 
-    suspend fun select(
+    fun select(
         configs: List<ParsedConfig>,
         isAutomaticMode: Boolean,
         manuallySelected: ScoringEngine.ScoredServer?,
         lastServerStore: LastServerStore,
-        serverScanner: ServerScanner,
         autoSwitcher: AutoSwitcher,
         logCollector: LogCollector,
         traceMsg: (String) -> String,
     ): ScoringEngine.ScoredServer? {
         if (configs.isEmpty()) return null
-        val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
-        val last = lastServerStore.load()
-        val orderedConfigs = if (last == null) configs else {
-            val preferred = configs.filter {
+
+        val usable = configs.filter { it.isValid() && !autoSwitcher.isBlacklisted(it) }
+        if (usable.isEmpty()) {
+            logCollector.warn(TAG, traceMsg("No non-blacklisted valid profiles available"))
+            return null
+        }
+
+        val manualConfig = manuallySelected?.config?.takeIf { selected ->
+            usable.any { it.connectionKey() == selected.connectionKey() }
+        }
+        val saved = lastServerStore.load()
+        val lastConfig = saved?.let { last ->
+            usable.firstOrNull {
                 it.address == last.address && it.port == last.port &&
                     (last.uuid.isBlank() || it.uuid == last.uuid)
             }
-            preferred + configs.filterNot { c -> preferred.any { it.connectionKey() == c.connectionKey() } }
         }
-        logCollector.info(TAG, traceMsg("Connect path: ping-first scanForConnection (${orderedConfigs.size} profiles)"))
-        val probed = try {
-            serverScanner.scanForConnection(orderedConfigs, targetAvailableCount = 4)
-        } catch (c: CancellationException) {
-            throw c
-        } catch (e: Exception) {
-            logCollector.warn(TAG, traceMsg("scanForConnection failed: ${e.message}"))
-            serverScanner.availableServers()
+        val selectedConfig = manualConfig ?: lastConfig ?: usable.first()
+        val source = when {
+            manualConfig != null -> "manual"
+            lastConfig != null -> "last-success"
+            else -> "first-usable"
         }
-        val scanned = probed
-            .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
-            .filterNot { autoSwitcher.isBlacklisted(it.config) }
-        val live = scanned.filter { it.successRate > 0f && it.latencyMs != Long.MAX_VALUE }
-        logCollector.info(TAG, traceMsg("Ping-first results: live=${live.size} scanned=${scanned.size}"))
-
-        return if (isAutomaticMode) {
-            val lastLive = if (last != null) {
-                live.firstOrNull {
-                    it.config.address == last.address && it.config.port == last.port &&
-                        (last.uuid.isBlank() || it.config.uuid == last.uuid)
-                }
-            } else null
-            val best = lastLive ?: serverScanner.bestAvailableServer(live.ifEmpty { scanned })
-            if (best != null) {
-                autoSwitcher.selectScanned(best, scanned)
-            } else {
-                logCollector.warn(TAG, traceMsg("No server passed reachability scan; refusing automatic selection"))
-                null
-            }
-        } else {
-            manuallySelected?.takeIf { s -> configs.any { it.connectionKey() == s.config.connectionKey() } }
-                ?: run {
-                    val best = serverScanner.bestAvailableServer(live.ifEmpty { scanned })
-                    if (best != null) autoSwitcher.selectScanned(best, scanned)
-                    else null
-                }
-        }
+        logCollector.info(
+            TAG,
+            traceMsg("Immediate connect selection: ${selectedConfig.name}; source=$source; profiles=${usable.size}; automatic=$isAutomaticMode")
+        )
+        return autoSwitcher.selectImmediate(selectedConfig, usable)
     }
 }
