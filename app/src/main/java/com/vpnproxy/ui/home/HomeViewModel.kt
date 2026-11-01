@@ -416,9 +416,16 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionGranted() {
-        if (!permissionFlowInProgress) {
-            logCollector.warn(TAG, "VPN permission granted event ignored because no connect flow is active")
+        // The Activity result can arrive after the coordinator has entered Connecting,
+        // while the local UI flag was reset by a concurrent state callback. The coordinator
+        // state is authoritative: never drop a valid permission result for an active connect.
+        if (!permissionFlowInProgress && connectionCoordinator.state.value !is ConnectionState.Connecting) {
+            logCollector.warn(TAG, "VPN permission granted event ignored: no active connect flow or Connecting state")
             return
+        }
+        if (!permissionFlowInProgress) {
+            permissionFlowInProgress = true
+            logCollector.warn(TAG, "Accepting VPN permission result because coordinator is already Connecting")
         }
 
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
