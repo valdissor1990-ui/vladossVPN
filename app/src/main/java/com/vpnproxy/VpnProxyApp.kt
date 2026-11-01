@@ -3,6 +3,7 @@ package com.vpnproxy
 import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.vpnproxy.core.connection.ConnectionCoordinator
@@ -25,16 +26,6 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
-/**
- * Application-класс.
- *
- * Обязанности:
- * - CrashHandler (до всего остального)
- * - Инициализация Timber → LogCollector
- * - Настройка WorkManager через HiltWorkerFactory
- * - Планирование периодических задач (subscriptions)
- * - BatteryMonitor register / unregister
- */
 @HiltAndroidApp
 class VpnProxyApp : Application(), Configuration.Provider {
 
@@ -48,6 +39,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startupRefreshStarted = false
+    private var startupScanStarted = false
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -75,45 +67,50 @@ class VpnProxyApp : Application(), Configuration.Provider {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
         }
 
+        scheduleBackgroundRefresh()
         startSafeStartupRefresh()
-
         SubscriptionUpdateWorker.schedule(this, intervalMinutes = 30)
     }
 
-    private fun startSafeStartupRefresh() {
-        if (startupRefreshStarted) return
-        startupRefreshStarted = true
+    private fun scheduleBackgroundRefresh() {
+        if (!hasNetworkConnection()) {
+            logCollector.warn("VpnProxyApp", "Background startup refresh skipped: no active network")
+            return
+        }
 
         applicationScope.launch {
-            if (!hasNetworkConnection()) {
-                logCollector.warn("VpnProxyApp", "Startup refresh skipped: no active network")
-                return@launch
-            }
-
             val state = connectionCoordinator.state.value
-            val vpnActive = state is ConnectionState.Connecting || state is ConnectionState.Verifying ||
-                state is ConnectionState.Connected || state is ConnectionState.Reconnecting
+            val vpnActive = state is ConnectionState.Connecting ||
+                state is ConnectionState.Verifying ||
+                state is ConnectionState.Connected ||
+                state is ConnectionState.Reconnecting
 
             if (vpnActive) {
-                logCollector.info("VpnProxyApp", "Startup auto-refresh skipped while VPN active: state=$state")
+                logCollector.info("VpnProxyApp", "Startup refresh skipped while VPN active")
                 return@launch
             }
 
             try {
                 val count = subscriptionRepository.refreshAll()
-                val providerConfigCount = subscriptionRepository.getAllConfigs().size
                 logCollector.info(
                     "VpnProxyApp",
-                    "Startup subscription refresh finished: uniqueConfigs=$count providerConfigs=$providerConfigCount"
+                    "Startup subscription refresh finished: uniqueConfigs=$count"
                 )
-                if (count == 0) {
-                    logCollector.warn(
-                        "VpnProxyApp",
-                        "Startup subscription refresh yielded no configs; no subscription servers are available"
-                    )
-                }
             } catch (t: Throwable) {
                 logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun startSafeStartupRefresh() {
+        if (startupRefreshStarted || startupScanStarted) return
+        startupRefreshStarted = true
+        startupScanStarted = true
+
+        applicationScope.launch {
+            if (!hasNetworkConnection()) {
+                logCollector.warn("VpnProxyApp", "Startup scan skipped: no active network")
+                return@launch
             }
 
             try {
@@ -121,11 +118,12 @@ class VpnProxyApp : Application(), Configuration.Provider {
                 if (configs.isNotEmpty()) {
                     serverScanner.scanAfterSubscriptionUpdate(configs)
                     serverScanner.scanInBackground(applicationScope)
+                    logCollector.info("VpnProxyApp", "Startup server scan launched for ${configs.size} configs")
                 } else {
-                    logCollector.warn("VpnProxyApp", "Startup server scan skipped: no configs available")
+                    logCollector.warn("VpnProxyApp", "Startup scan skipped: no cached or refreshed configs available")
                 }
             } catch (t: Throwable) {
-                logCollector.warn("VpnProxyApp", "Startup server scan failed: ${t.message}")
+                logCollector.warn("VpnProxyApp", "Startup scan failed: ${t.message}")
             }
         }
     }
@@ -135,9 +133,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
             val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             val activeNetwork = connectivity?.activeNetwork ?: return false
             val caps = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
-            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
-                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
         } catch (_: Throwable) {
             true
         }
