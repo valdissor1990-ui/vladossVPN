@@ -47,7 +47,6 @@ class NetworkAwareReconnector(
     @Volatile private var lastReconnectAt = 0L
     private val physicalNetworks = ConcurrentHashMap<Network, String>()
     @Volatile private var selectedNetwork: Network? = null
-    @Volatile private var selectedSignature: String? = null
 
     private sealed class NetEvent {
         data class Lost(val netId: Int) : NetEvent()
@@ -80,7 +79,6 @@ class NetworkAwareReconnector(
     /** Recompute only the preferred physical route; ignore changes on secondary networks. */
     private fun refreshSelectedNetwork(trySendEvent: (NetEvent) -> Unit) {
         val previous = selectedNetwork
-        val previousSignature = selectedSignature
         val candidates = physicalNetworks.entries.toList()
         val currentStillAvailable = previous?.let { network ->
             candidates.firstOrNull { it.key == network }
@@ -94,7 +92,6 @@ class NetworkAwareReconnector(
         }
 
         selectedNetwork = chosen?.key
-        selectedSignature = chosen?.value
         when {
             chosen == null && previous != null -> {
                 trySendEvent(NetEvent.Lost(previous.hashCode()))
@@ -168,7 +165,6 @@ class NetworkAwareReconnector(
                 cm.unregisterNetworkCallback(callback)
                 physicalNetworks.clear()
                 selectedNetwork = null
-                selectedSignature = null
                 logCollector.info(TAG, "Unregistered physical-network callback")
             } catch (t: Throwable) {
                 logCollector.warn(TAG, "Unregister failed: ${t.message}")
