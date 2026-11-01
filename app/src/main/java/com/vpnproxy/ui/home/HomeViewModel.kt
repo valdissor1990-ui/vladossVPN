@@ -494,6 +494,7 @@ class HomeViewModel @Inject constructor(
                         configs = verifiedConfigs,
                         isAutomaticMode = _uiState.value.isAutomaticMode,
                         manuallySelected = manuallySelectedServer,
+                        scannedCandidates = verifiedServers,
                         lastServerStore = lastServerStore,
                         autoSwitcher = autoSwitcher,
                         logCollector = logCollector,
