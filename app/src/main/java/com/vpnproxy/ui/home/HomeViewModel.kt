@@ -469,7 +469,7 @@ class HomeViewModel @Inject constructor(
                 val reachable = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
                     serverScanner.scanForConnection(
                         configs = configs,
-                        targetAvailableCount = 4,
+                        targetAvailableCount = configs.size + 1,
                         preferredConfig = manuallySelectedServer?.config,
                         forceFresh = true
                     )
