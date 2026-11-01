@@ -43,6 +43,12 @@ class DeepProbeEngine @Inject constructor(
     companion object {
         private const val TAG = "DeepProbe"
         private const val LATENCY_URL = "https://www.gstatic.com/generate_204"
+        // Independent endpoints avoid declaring every profile dead when one probe host
+        // is blocked or degraded on the current access network.
+        private val PROFILE_PING_URLS = listOf(
+            "https://cp.cloudflare.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204"
+        )
         private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
         private const val CONNECT_TIMEOUT_MS = 2_000L
@@ -193,7 +199,8 @@ class DeepProbeEngine @Inject constructor(
                                         ensureActive()
                                         if (!running.get()) throw CancellationException("Profile ping cancelled")
                                         try {
-                                            val request = Request.Builder().url(LATENCY_URL).head().build()
+                                            val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
+                                            val request = Request.Builder().url(probeUrl).head().build()
                                             val elapsed = runInterruptible(Dispatchers.IO) {
                                                 val start = System.nanoTime()
                                                 client.newCall(request).execute().use { response ->
