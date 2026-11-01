@@ -423,6 +423,8 @@ class HomeViewModel @Inject constructor(
 
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
+        // Stop any startup/background profile probe before bringing up the real VPN core.
+        serverScanner.cancelScan()
         armConnectingWatchdog()
         ensureServiceRunning()
         selectionJob?.cancel()
@@ -463,7 +465,6 @@ class HomeViewModel @Inject constructor(
                         isAutomaticMode = _uiState.value.isAutomaticMode,
                         manuallySelected = manuallySelectedServer,
                         lastServerStore = lastServerStore,
-                        serverScanner = serverScanner,
                         autoSwitcher = autoSwitcher,
                         logCollector = logCollector,
                         traceMsg = { tmsg(it) },
