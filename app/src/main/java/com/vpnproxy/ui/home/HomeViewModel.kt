@@ -479,9 +479,10 @@ class HomeViewModel @Inject constructor(
                     connectionCoordinator.send(ConnectionEvent.ShowError("Проверка серверов заняла слишком много времени. Повторите подключение."))
                     return@launch
                 }
-                val verifiedConfigs = reachable
+                val verifiedServers = reachable
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-                    .map { it.config }
+                    .sortedBy { it.latencyMs }
+                val verifiedConfigs = verifiedServers.map { it.config }
                 if (verifiedConfigs.isEmpty()) {
                     endConnectFlow()
                     connectionCoordinator.send(ConnectionEvent.ShowError("Не найдено серверов с подтверждённой доступностью"))
