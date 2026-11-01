@@ -216,6 +216,8 @@ class SingBoxCore(
             logCollector?.error(TAG, message)
             throw IllegalStateException(message)
         }
+        // The listener is confirmed gone; only now release the retained handle.
+        currentServer = null
         if (!lifecycleGeneration.isCurrent(generation)) {
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.current()}")
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
