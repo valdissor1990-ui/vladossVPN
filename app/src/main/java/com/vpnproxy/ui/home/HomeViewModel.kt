@@ -438,7 +438,8 @@ class HomeViewModel @Inject constructor(
                     configs = try {
                         subscriptionRepository.refreshAll()
                         jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
-                            serverScanner.scanAfterSubscriptionUpdate(refreshed)
+                            // Do not run the full profile probe before connecting.
+                            // Initial selection is immediate; health ranking continues in background.
                             refreshedSubscription = true
                         }
                     } catch (c: CancellationException) {
