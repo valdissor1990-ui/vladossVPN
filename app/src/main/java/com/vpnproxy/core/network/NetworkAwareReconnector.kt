@@ -99,7 +99,10 @@ class NetworkAwareReconnector(
             chosen == null && previous != null -> {
                 trySendEvent(NetEvent.Lost(previous.hashCode()))
             }
-            chosen != null && (chosen.key != previous || chosen.value != previousSignature) -> {
+            // Capabilities (especially VALIDATED) can change while Android keeps the
+            // same default physical network. Do not tear down a healthy tunnel for that.
+            // A real Wi-Fi <-> cellular handoff changes the selected Network handle.
+            chosen != null && chosen.key != previous -> {
                 trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
             }
         }
