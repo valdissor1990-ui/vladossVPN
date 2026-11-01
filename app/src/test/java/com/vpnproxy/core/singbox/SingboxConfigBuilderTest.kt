@@ -86,6 +86,17 @@ class SingboxConfigBuilderTest {
     }
 
     @Test
+    fun multiServerConfigRejectsDuplicateInboundPorts() {
+        val configs = listOf(config("hysteria2", "one"), config("tuic", "two"))
+        try {
+            SingboxConfigBuilder.buildMulti(configs, listOf(12001, 12001))
+            throw AssertionError("Duplicate inbound ports must be rejected")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("distinct inbound port"))
+        }
+    }
+
+    @Test
     fun vlessRealityMapsUriFieldsToSingBoxOutbound() {
         val config = ParsedConfig(
             uuid = "11111111-1111-1111-1111-111111111111",
