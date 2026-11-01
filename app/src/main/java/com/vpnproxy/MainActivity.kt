@@ -2,6 +2,7 @@ package com.vpnproxy
 
 import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -42,10 +43,12 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var logCollector: LogCollector
 
     private val homeViewModel: HomeViewModel by viewModels()
+    private var vpnPermissionRequestInFlight = false
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        vpnPermissionRequestInFlight = false
         if (result.resultCode == Activity.RESULT_OK) {
             logCollector.info(TAG, "VPN permission granted")
             homeViewModel.onVpnPermissionGranted()
@@ -66,9 +69,7 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         logCollector.info(TAG, "MainActivity created")
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        requestNotificationPermissionIfNeeded()
 
         setContent {
             VPNProxyTheme {
@@ -84,11 +85,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            logCollector.info(TAG, "POST_NOTIFICATIONS already granted")
+            return
+        }
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private fun requestVpnPermission() {
+        if (vpnPermissionRequestInFlight) {
+            logCollector.warn(TAG, "VPN permission request already in flight; ignoring duplicate request")
+            return
+        }
+
         val intent = VpnService.prepare(this)
         if (intent != null) {
+            vpnPermissionRequestInFlight = true
             vpnPermissionLauncher.launch(intent)
         } else {
+            vpnPermissionRequestInFlight = false
             homeViewModel.onVpnPermissionGranted()
         }
     }
