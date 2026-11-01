@@ -15,8 +15,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
@@ -27,6 +28,7 @@ import java.net.Proxy
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -129,12 +131,16 @@ class DeepProbeEngine @Inject constructor(
     )
 
     private val running = AtomicBoolean(false)
+    private val cancellationGeneration = AtomicLong(0L)
 
-    /** Cancel any in-flight probe; safe to call from service stop / disconnect. */
+    /** Cancel the active probe without releasing its slot before its coroutine has exited. */
     fun cancel() {
-        if (running.compareAndSet(true, false)) {
+        cancellationGeneration.incrementAndGet()
+        if (running.get()) {
             runCatching { SingboxProxyClient.stop(context) }
-            logCollector.info(TAG, "DeepProbe cancelled — temporary core stopped")
+            logCollector.info(TAG, "DeepProbe cancellation requested — temporary core stopped")
+        } else {
+            logCollector.info(TAG, "DeepProbe cancellation generation advanced (no active probe)")
         }
     }
 
@@ -157,22 +163,21 @@ class DeepProbeEngine @Inject constructor(
         onBatch: (List<ProfilePingResult>) -> Unit = {}
     ): List<ProfilePingResult> = withContext(Dispatchers.IO) {
         if (configs.isEmpty()) return@withContext emptyList()
-        if (!running.compareAndSet(false, true)) {
-            logCollector.warn(TAG, "Profile ping already running — skip")
-            return@withContext configs.map { ProfilePingResult(it, Long.MAX_VALUE, false, 0) }
-        }
+        val probeGeneration = cancellationGeneration.get()
+        awaitProbeSlot()
         try {
+            checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value) {
                 "Проверка отдельных профилей доступна после отключения VPN"
             }
-            ensureActive()
+            checkProbeActive(probeGeneration)
             val ports = allocatePorts(configs.size)
             val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
-            ensureActive()
+            checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value) {
                 "VPN стал активен до начала проверки профилей"
             }
-            check(running.get() && isActive) { "Profile ping cancelled" }
+            checkProbeActive(probeGeneration)
             val started = SingboxProxyClient.start(context, configJson)
             check(started) { "Sing-box failed to start for profile ping" }
 
@@ -180,8 +185,7 @@ class DeepProbeEngine @Inject constructor(
                 val output = mutableListOf<ProfilePingResult>()
                 val semaphore = Semaphore(8)
                 for (indices in configs.indices.toList().chunked(8)) {
-                    ensureActive()
-                    if (!running.get()) throw CancellationException("Profile ping cancelled")
+                    checkProbeActive(probeGeneration)
                     val batch = coroutineScope {
                         indices.map { index ->
                             async(Dispatchers.IO) {
@@ -197,8 +201,7 @@ class DeepProbeEngine @Inject constructor(
                                     val samples = mutableListOf<Long>()
                                     for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
                                         if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
-                                        ensureActive()
-                                        if (!running.get()) throw CancellationException("Profile ping cancelled")
+                                        checkProbeActive(probeGeneration)
                                         try {
                                             val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
                                             val request = Request.Builder().url(probeUrl).head().build()
@@ -240,23 +243,20 @@ class DeepProbeEngine @Inject constructor(
     }
 
     suspend fun run(configs: List<ParsedConfig>): List<ProbeMetrics> = withContext(Dispatchers.IO) {
-        if (!running.compareAndSet(false, true)) {
-            logCollector.warn(TAG, "DeepProbe already running — skip")
-            return@withContext emptyList()
-        }
+        if (configs.isEmpty()) return@withContext emptyList()
+        val probeGeneration = cancellationGeneration.get()
+        awaitProbeSlot()
         try {
+            checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
-            ensureActive()
+            checkProbeActive(probeGeneration)
 
             val ports = allocatePorts(configs.size)
             val configJson = SingboxConfigBuilder.buildMulti(configs, ports)
-            ensureActive()
+            checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value) { "Отключите VPN для глубокого анализа" }
-            if (!running.get() || !isActive) {
-                logCollector.info(TAG, "DeepProbe aborted before core start")
-                return@withContext emptyList()
-            }
+            checkProbeActive(probeGeneration)
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
                 SingboxProxyClient.start(context, configJson)
@@ -273,8 +273,7 @@ class DeepProbeEngine @Inject constructor(
 
             try {
                 val results = configs.mapIndexed { index, config ->
-                    ensureActive()
-                    if (!running.get()) throw CancellationException("DeepProbe cancelled")
+                    checkProbeActive(probeGeneration)
                     try {
                         val client = OkHttpClient.Builder()
                             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
@@ -288,7 +287,7 @@ class DeepProbeEngine @Inject constructor(
                         val samples = mutableListOf<Long>()
                         var failures = 0
                         repeat(LATENCY_SAMPLES) {
-                            ensureActive()
+                            checkProbeActive(probeGeneration)
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
                                 val start = System.nanoTime()
@@ -341,6 +340,22 @@ class DeepProbeEngine @Inject constructor(
             }
         } finally {
             running.set(false)
+        }
+    }
+
+    /** Wait for the single temporary Sing-box core slot instead of fabricating failed results. */
+    private suspend fun awaitProbeSlot() {
+        while (!running.compareAndSet(false, true)) {
+            currentCoroutineContext().ensureActive()
+            delay(50L)
+        }
+    }
+
+    /** Propagate coroutine cancellation and explicit DeepProbe cancellation to every probe path. */
+    private suspend fun checkProbeActive(generation: Long) {
+        currentCoroutineContext().ensureActive()
+        if (cancellationGeneration.get() != generation) {
+            throw CancellationException("DeepProbe cancelled")
         }
     }
 
