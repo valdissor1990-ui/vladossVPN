@@ -198,16 +198,16 @@ class SingBoxCore(
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
         logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
-        // Always wait for the mixed inbound port. Skipping the wait caused
-        // "Port 10809 still in use after retry" when a temporary profile-ping
-        // core had just stopped and forceSelect immediately started the VPN.
-        stopSuspended(waitForPort = true)
+        // Close once, then perform one authoritative wait below. Previously stopSuspended()
+        // waited 12s and startSuspended() immediately waited another 12s for the same port,
+        // doubling every failed attempt before any retry could happen.
+        stopSuspended(waitForPort = false)
 
         var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
-            logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; force-close and retry once")
-            stopSuspended(waitForPort = true)
-            // Brief extra settle time after forced close (TIME_WAIT / delayed FIN).
+            logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; retrying close on retained CommandServer handle")
+            stopSuspended(waitForPort = false)
+            // Brief extra settle time after close retry, then perform one bounded wait.
             delay(400)
             portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
         }
@@ -284,8 +284,10 @@ class SingBoxCore(
     }
 
     private suspend fun stopSuspended(waitForPort: Boolean = true) {
+        // Do not discard the only handle before close has completed. If libbox still
+        // owns its listener after the first close request, a retry must be able to reach
+        // the same CommandServer instead of logging "no active CommandServer".
         val server = currentServer
-        currentServer = null
         activeConfig = null
         logCollector?.info(TAG, "Core lifecycle: closeService requested")
         if (server != null) {
@@ -302,8 +304,10 @@ class SingBoxCore(
         if (waitForPort) {
             val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
             logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} freed=${portFreed} after stop")
-            if (!portFreed) {
-                logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after ${PORT_RELEASE_TIMEOUT_MS}ms, next start may fail")
+            if (portFreed) {
+                if (currentServer === server) currentServer = null
+            } else {
+                logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after ${PORT_RELEASE_TIMEOUT_MS}ms; retaining CommandServer handle for retry")
             }
         }
         lastStopAtMs = System.currentTimeMillis()
