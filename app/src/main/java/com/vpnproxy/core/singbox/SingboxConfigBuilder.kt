@@ -23,6 +23,25 @@ object SingboxConfigBuilder {
         return if (value.startsWith("/")) value else "/$value"
     }
 
+    private fun dnsServer(
+        type: String,
+        tag: String,
+        server: String,
+        serverPort: Int? = null,
+        detour: String? = null
+    ): JsonObject = buildJsonObject {
+        put("type", type)
+        put("tag", tag)
+        put("server", server)
+        if (serverPort != null) put("server_port", serverPort)
+        if (detour != null) {
+            require(detour != "direct") {
+                "Invalid DNS detour: 'direct' is forbidden in sing-box 1.14.x; libbox rejects it with 'detour to an empty direct outbound makes no sense'."
+            }
+            put("detour", detour)
+        }
+    }
+
     fun build(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", "debug")
@@ -59,28 +78,12 @@ object SingboxConfigBuilder {
         put("dns", buildJsonObject {
             put("servers", buildJsonArray {
                 when (options.dnsMode) {
-                    "proxy_dot_8888" -> add(buildJsonObject {
-                        put("type", "tls")
-                        put("tag", "proxy-dot")
-                        put("server", "8.8.8.8")
-                        put("server_port", 853)
-                        put("detour", "proxy")
-                    })
-                    "direct_udp_8888" -> add(buildJsonObject {
-                        put("type", "udp"); put("tag", "direct-dns"); put("server", "8.8.8.8")
-                    })
-                    "direct_udp_1111" -> add(buildJsonObject {
-                        put("type", "udp"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 1111)
-                    })
-                    "direct_dot_1111" -> add(buildJsonObject {
-                        put("type", "tls"); put("tag", "direct-dns"); put("server", "1.1.1.1"); put("server_port", 853)
-                    })
-                    "proxy_dot_1111" -> add(buildJsonObject {
-                        put("type", "tls"); put("tag", "proxy-dot"); put("server", "1.1.1.1"); put("server_port", 853); put("detour", "proxy")
-                    })
-                    "system_no_hijack" -> add(buildJsonObject {
-                        put("type", "local"); put("tag", "direct-dns")
-                    })
+                    "proxy_dot_8888" -> add(dnsServer("tls", "proxy-dot", "8.8.8.8", 853, detour = "proxy"))
+                    "direct_udp_8888" -> add(dnsServer("udp", "direct-dns", "8.8.8.8"))
+                    "direct_udp_1111" -> add(dnsServer("udp", "direct-dns", "1.1.1.1", 1111))
+                    "direct_dot_1111" -> add(dnsServer("tls", "direct-dns", "1.1.1.1", 853))
+                    "proxy_dot_1111" -> add(dnsServer("tls", "proxy-dot", "1.1.1.1", 853, detour = "proxy"))
+                    "system_no_hijack" -> add(dnsServer("local", "direct-dns", "127.0.0.1"))
                     else -> error("Unsupported diagnostic DNS mode: ${options.dnsMode}")
                 }
             })
