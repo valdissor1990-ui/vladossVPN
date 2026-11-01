@@ -163,7 +163,9 @@ class ServerScanner @Inject constructor(
 
     suspend fun scanForConnection(
         configs: List<ParsedConfig>,
-        targetAvailableCount: Int = 4
+        targetAvailableCount: Int = 4,
+        preferredConfig: ParsedConfig? = null,
+        forceFresh: Boolean = false
     ): List<ScoredServer> = scanMutex.withLock {
         val generationForScan = scanGeneration.get()
         val networkBucket = autoSwitcher.currentNetworkBucket()
@@ -171,9 +173,14 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = emptyList()
             scannedConfigKeys = emptySet()
         }
-        val unique = orderConfigsForCurrentNetwork(
+        val ordered = orderConfigsForCurrentNetwork(
             (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer)).distinctBy(::scanKey)
         )
+        // A manually selected profile is probed first, but it is not trusted until it passes.
+        val unique = preferredConfig?.let { preferred ->
+            ordered.filter { scanKey(it) == scanKey(preferred) } +
+                ordered.filterNot { scanKey(it) == scanKey(preferred) }
+        } ?: ordered
         val requestedKeys = unique.map(::scanKey).toSet()
         if (unique.isEmpty()) {
             scannedConfigKeys = emptySet()
@@ -181,23 +188,26 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = emptyList()
             return@withLock emptyList()
         }
-        if (requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers()
+        if (!forceFresh && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         val alreadyReachable = _scannedServers.value.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-        if (scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
+        if (!forceFresh && scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
             logCollector.info(TAG, "Reusing staged scan: reachable=$alreadyReachable target=$targetAvailableCount")
-            return@withLock availableServers()
+            return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         }
-        if (_scannedServers.value.isEmpty()) restoreCachedResults(unique)
+        if (!forceFresh && _scannedServers.value.isEmpty()) restoreCachedResults(unique)
         val savedAt = scanCache().getLong("saved_at", 0L)
         val cachedKeys = _scannedServers.value.map { scanKey(it.config) }.toSet()
-        if (savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
+        if (!forceFresh && savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
             cachedKeys == requestedKeys && _scannedServers.value.size == unique.size
         ) {
             scannedConfigKeys = requestedKeys
             scannedNetworkBucket = networkBucket
-            return@withLock availableServers()
+            return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         }
-        if (VpnProxyService.isRunning.value) return@withLock availableServers()
+        if (VpnProxyService.isRunning.value) {
+            logCollector.warn(TAG, "Connection scan refused: VPN core is already active")
+            return@withLock emptyList()
+        }
 
         _isScanning.value = true
         try {
@@ -241,8 +251,8 @@ class ServerScanner @Inject constructor(
                 }
             }
             val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-            logCollector.info(TAG, "Connection scan staged: reachable=$reachable target=$targetAvailableCount total=${unique.size}; remaining profiles stay unmeasured")
-            results
+            logCollector.info(TAG, "Connection preflight complete: reachable=$reachable target=$targetAvailableCount total=${unique.size}; only freshly probed reachable profiles may be selected")
+            results.filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         } finally {
             activeScanJob = null
             _isScanning.value = false
