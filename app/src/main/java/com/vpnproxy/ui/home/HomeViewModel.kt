@@ -104,6 +104,7 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var selectionJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
+    @Volatile private var permissionFlowInProgress: Boolean = false
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
 
@@ -113,6 +114,7 @@ class HomeViewModel @Inject constructor(
             connectionCoordinator.state.collect { state ->
                 when (state) {
                     is ConnectionState.Disconnected, is ConnectionState.Disconnecting -> {
+                        permissionFlowInProgress = false
                         cancelSelectionJob("state=$state")
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.DISCONNECTED,
@@ -135,6 +137,7 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Connected -> {
+                        permissionFlowInProgress = false
                         autoSwitcher.currentServer.value?.config?.let { server ->
                             lastServerStore.save(
                                 address = server.address,
@@ -157,6 +160,7 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                     is ConnectionState.Error -> {
+                        permissionFlowInProgress = false
                         cancelSelectionJob("Error")
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
@@ -238,6 +242,20 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private fun startConnectFlow(): Boolean {
+        if (permissionFlowInProgress) {
+            logCollector.warn(TAG, "Connect flow already active; ignoring duplicate request")
+            return false
+        }
+        permissionFlowInProgress = true
+        activeTraceId = TraceId.newId()
+        return true
+    }
+
+    private fun endConnectFlow() {
+        permissionFlowInProgress = false
+    }
+
     private fun cancelSelectionJob(reason: String) {
         if (selectionJob?.isActive == true) {
             logCollector.info(TAG, "Cancel selectionJob: $reason")
@@ -315,8 +333,8 @@ class HomeViewModel @Inject constructor(
         if (now - lastConnectClickMs < 900L) return
         lastConnectClickMs = now
         cancelSelectionJob("new connect")
+        if (!startConnectFlow()) return
         try {
-            activeTraceId = TraceId.newId()
             connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
             VpnProxyService.clearError()
             _uiState.value = _uiState.value.copy(
@@ -324,14 +342,22 @@ class HomeViewModel @Inject constructor(
                 isBusy = true,
                 lastErrorMessage = null
             )
-            vpnPermissionRequester?.invoke()
+            vpnPermissionRequester?.invoke() ?: run {
+                logCollector.warn(TAG, "VPN permission requester not set; proceeding without prompt")
+                onVpnPermissionGranted()
+            }
         } catch (e: Exception) {
+            endConnectFlow()
             connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Не удалось начать подключение"))
             _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.ERROR, isBusy = false)
         }
     }
 
     fun onVpnPermissionGranted() {
+        if (!permissionFlowInProgress) {
+            logCollector.warn(TAG, "Ignoring duplicate or unexpected VPN permission callback")
+            return
+        }
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         ensureServiceRunning()
@@ -343,6 +369,7 @@ class HomeViewModel @Inject constructor(
                     configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                 }
                 if (configs.isEmpty()) {
+                    endConnectFlow()
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
                     return@launch
                 }
@@ -351,6 +378,7 @@ class HomeViewModel @Inject constructor(
                 // Manual selection uses onServerSelected() and remains a separate user action.
                 val selected = serverScanner.bestAvailableServer(scanned)
                 if (selected == null) {
+                    endConnectFlow()
                     logCollector.warn(TAG, "No server passed reachability probes; refusing automatic connection")
                     connectionCoordinator.send(
                         ConnectionEvent.ShowError(
@@ -364,6 +392,7 @@ class HomeViewModel @Inject constructor(
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
+                endConnectFlow()
                 logCollector.error(TAG, "onVpnPermissionGranted failed", e)
                 connectionCoordinator.send(ConnectionEvent.ShowError(e.message ?: "Ошибка выбора сервера"))
             }
@@ -371,6 +400,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onVpnPermissionDenied() {
+        endConnectFlow()
         connectionCoordinator.send(ConnectionEvent.ShowError("Нет разрешения VPN. Выдайте доступ в настройках."))
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.ERROR,
@@ -380,6 +410,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        endConnectFlow()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
@@ -392,6 +423,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun forceDisconnect() {
+        endConnectFlow()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
@@ -406,6 +438,7 @@ class HomeViewModel @Inject constructor(
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
         val traceId = TraceId.newId()
         activeTraceId = traceId
+        permissionFlowInProgress = true
         connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
         viewModelScope.launch {
             try {
