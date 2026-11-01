@@ -368,6 +368,13 @@ class VpnProxyService : VpnService() {
                     _serviceState.value != ServiceState.Stopping
                 ) {
                     val generation = restartRequestGeneration
+                    // The desired server may change while a restart worker is in flight.
+                    // Re-apply the coordinator's latest selection immediately before each
+                    // stop/start cycle so an older state callback cannot launch a stale profile.
+                    connectionCoordinator.currentSelectedServer()?.let { desired ->
+                        autoSwitcher.forceSelect(desired)
+                        logCollector.info(TAG, "restartVpn synchronized desired server=${desired.config.name} generation=$generation")
+                    }
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
                     setPlannedRestart(true)
                     try {
