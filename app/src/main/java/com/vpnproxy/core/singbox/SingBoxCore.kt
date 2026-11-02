@@ -22,6 +22,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Locale
@@ -191,6 +192,29 @@ class SingBoxCore(
         stopBlocking().getOrThrow()
     }
 
+    /**
+     * Debug builds write libbox's own log stream to app-private storage as a second
+     * diagnostic source. Release builds keep file logging disabled; callback logging
+     * through CommandServerHandler remains active in both variants.
+     */
+    private fun withDebugNativeLogOutput(configJson: String): String {
+        if (!com.vpnproxy.BuildConfig.DEBUG) return configJson
+        return try {
+            val root = JSONObject(configJson)
+            val log = root.optJSONObject("log") ?: JSONObject()
+            val logFile = File(File(context.filesDir, "logs").apply { mkdirs() }, "libbox.log")
+            log.put("level", "debug")
+            log.put("timestamp", true)
+            log.put("output", logFile.absolutePath)
+            root.put("log", log)
+            logCollector?.info(TAG, "Debug native libbox file logging enabled: ${logFile.absolutePath}")
+            root.toString()
+        } catch (t: Throwable) {
+            logCollector?.warn(TAG, "Could not enable debug native libbox file logging: ${t.javaClass.simpleName}: ${t.message}")
+            configJson
+        }
+    }
+
     private suspend fun startSuspended(configJson: String, generation: Long) {
         require(configJson.isNotBlank()) { "Sing-box configuration is empty" }
         if (!lifecycleGeneration.isCurrent(generation)) {
@@ -253,10 +277,11 @@ class SingBoxCore(
             logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} confirmed free, starting CommandServer")
             val createdServer = CommandServer(handler, platform)
             server = createdServer
+            val effectiveConfig = withDebugNativeLogOutput(configJson)
             createdServer.start()
-            createdServer.startOrReloadService(configJson, OverrideOptions())
+            createdServer.startOrReloadService(effectiveConfig, OverrideOptions())
             currentServer = createdServer
-            activeConfig = configJson
+            activeConfig = effectiveConfig
             logCollector?.info(TAG, "Core lifecycle: started successfully generation=$generation")
             Log.i(TAG, "libbox 1.14.3 started in the app process")
         } catch (c: kotlinx.coroutines.CancellationException) {
