@@ -183,6 +183,7 @@ class DeepProbeEngine @Inject constructor(
             checkProbeActive(probeGeneration)
             val started = SingboxProxyClient.start(context, configJson)
             check(started) { "Sing-box failed to start for profile ping" }
+            logCollector.info(TAG, "Profile probe session started: generation=$probeGeneration profiles=${configs.size} attemptsPerProfile=$PROFILE_PING_ATTEMPTS requiredSuccessSamples=2 concurrency=8 endpoints=${PROFILE_PING_URLS.size}")
 
             try {
                 val output = mutableListOf<ProfilePingResult>()
@@ -218,8 +219,6 @@ class DeepProbeEngine @Inject constructor(
                                             samples += elapsed
                                         } catch (cancelled: CancellationException) {
                                             throw cancelled
-                                        } catch (cancelled: CancellationException) {
-                                            throw cancelled
                                         } catch (failure: Exception) {
                                             logCollector.warn(
                                                 TAG,
@@ -229,7 +228,12 @@ class DeepProbeEngine @Inject constructor(
                                             )
                                         }
                                     }
-                                    summarizeProfileLatency(configs[index], samples)
+                                    val result = summarizeProfileLatency(configs[index], samples)
+                                    logCollector.info(
+                                        TAG,
+                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${result.success} successfulSamples=${result.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${result.latencyMs}"
+                                    )
+                                    result
                                 }
                             }
                         }.awaitAll()
@@ -242,6 +246,8 @@ class DeepProbeEngine @Inject constructor(
                         break
                     }
                 }
+                val succeeded = output.count { it.success }
+                logCollector.info(TAG, "Profile probe session complete: generation=$probeGeneration total=${output.size} succeeded=$succeeded failed=${output.size - succeeded}")
                 return@withContext output
             } finally {
                 SingboxProxyClient.stop(context)
