@@ -31,6 +31,7 @@ import com.vpnproxy.core.singbox.DiagnosticOptions
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
+import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.DeepProbeEngine
@@ -90,6 +91,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var dualPathStore: DualPathStore
     @Inject lateinit var logCollector: LogCollector
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+    @Inject lateinit var serverScanner: ServerScanner
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
     @Inject lateinit var batteryLogger: BatteryLogger
 
@@ -212,12 +214,16 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Disconnected -> {
                         stopPassiveProbe()
                         autoSwitcher.clearDiagnosticFreeze()
+                        autoSwitcher.cancelBackgroundWork(state.toString())
+                        serverScanner.cancelBackgroundWork(state.toString())
                         stopVpnKeepAlive(state.toString())
                         scheduleIdleStop()
                     }
                     is ConnectionState.Error -> {
                         stopPassiveProbe()
                         autoSwitcher.clearDiagnosticFreeze()
+                        autoSwitcher.cancelBackgroundWork("Error: ${state.message}")
+                        serverScanner.cancelBackgroundWork("Error: ${state.message}")
                         stopVpnKeepAlive("Error: ${state.message}")
                         _lastError.value = state.message
                         updateNotification(state.message)
