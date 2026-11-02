@@ -433,7 +433,7 @@ class HomeViewModel @Inject constructor(
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         // Keep a startup scan alive. scanForConnection waits for its mutex and reuses
-        // results only when the exact profiles and physical network still match.
+        // results only when the exact profiles and current network bucket still match.
         armConnectingWatchdog()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
