@@ -42,6 +42,8 @@ class ServerScanner @Inject constructor(
     companion object {
         private const val TAG = "ServerScanner"
         private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
+        /** Connection may reuse only a recent in-memory scan on the same network. */
+        private const val CONNECTION_SCAN_REUSE_MAX_AGE_MS = 90_000L
     }
 
     private val scanMutex = Mutex()
@@ -53,6 +55,7 @@ class ServerScanner @Inject constructor(
 
     @Volatile private var scannedConfigKeys: Set<String> = emptySet()
     @Volatile private var scannedNetworkBucket: String? = null
+    @Volatile private var scannedAtMs: Long = 0L
     @Volatile private var backgroundJob: Job? = null
     /** Job for the in-flight scanAll body so the home button can cancel it immediately. */
     @Volatile private var activeScanJob: Job? = null
@@ -69,13 +72,14 @@ class ServerScanner @Inject constructor(
             if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
                 _scannedServers.value = emptyList()
                 scannedConfigKeys = emptySet()
+                scannedAtMs = 0L
             }
             val generation = scanGeneration.get()
             val unique = orderConfigsForCurrentNetwork(
                 (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer)).distinctBy(::scanKey)
             )
             val requestedKeys = unique.map(::scanKey).toSet()
-            if (!force && requestedKeys.isNotEmpty() && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) {
+            if (!force && isConnectionScanRecent() && requestedKeys.isNotEmpty() && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) {
                 return@withLock _scannedServers.value
             }
             if (unique.isEmpty()) {
@@ -132,9 +136,13 @@ class ServerScanner @Inject constructor(
                 scannedNetworkBucket = networkBucket
                 _scannedServers.value = results
                 if (complete) {
+                    scannedAtMs = System.currentTimeMillis()
                     persistScanResults(results)
                     pendingFullScanConfigs = emptyList()
-                } else scanCache().edit().putLong("saved_at", 0L).apply()
+                } else {
+                    scannedAtMs = 0L
+                    scanCache().edit().putLong("saved_at", 0L).apply()
+                }
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
                 logCollector.info(TAG, "Profile scan complete: ${unique.size} profiles retained; VPN-profile probe succeeded for $responsive, RU=$ruResponsive (input=${configs.size})")
@@ -148,6 +156,7 @@ class ServerScanner @Inject constructor(
     fun cancelScan() {
         val wasScanning = _isScanning.value
         scanGeneration.incrementAndGet()
+        scannedAtMs = 0L
         _isScanning.value = false
         activeScanJob?.cancel()
         activeScanJob = null
@@ -172,6 +181,7 @@ class ServerScanner @Inject constructor(
         if (scannedNetworkBucket != null && scannedNetworkBucket != networkBucket) {
             _scannedServers.value = emptyList()
             scannedConfigKeys = emptySet()
+            scannedAtMs = 0L
         }
         val ordered = orderConfigsForCurrentNetwork(
             (configs.filter(::isRussianServer) + configs.filterNot(::isRussianServer)).distinctBy(::scanKey)
@@ -188,9 +198,12 @@ class ServerScanner @Inject constructor(
             _scannedServers.value = emptyList()
             return@withLock emptyList()
         }
-        if (!forceFresh && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+        if (!forceFresh && isConnectionScanRecent() && requestedKeys == scannedConfigKeys && _scannedServers.value.size == unique.size) {
+            logCollector.info(TAG, "Reusing recent complete scan for connection: profiles=${unique.size}; ageMs=${System.currentTimeMillis() - scannedAtMs}")
+            return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+        }
         val alreadyReachable = _scannedServers.value.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-        if (!forceFresh && scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
+        if (!forceFresh && isConnectionScanRecent() && scannedNetworkBucket == networkBucket && _scannedServers.value.size == unique.size && alreadyReachable >= targetAvailableCount.coerceAtLeast(1)) {
             logCollector.info(TAG, "Reusing staged scan: reachable=$alreadyReachable target=$targetAvailableCount")
             return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         }
@@ -241,6 +254,7 @@ class ServerScanner @Inject constructor(
                 val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
                 scannedNetworkBucket = networkBucket
                 scannedConfigKeys = if (complete) requestedKeys else emptySet()
+                scannedAtMs = if (complete) System.currentTimeMillis() else 0L
                 _scannedServers.value = results
                 if (complete) {
                     persistScanResults(results)
@@ -288,8 +302,11 @@ class ServerScanner @Inject constructor(
     fun isScanCurrent(configs: List<ParsedConfig>): Boolean {
         val unique = configs.distinctBy(::scanKey)
         val keys = unique.map(::scanKey).toSet()
-        return keys.isNotEmpty() && keys == scannedConfigKeys && _scannedServers.value.size == unique.size
+        return isConnectionScanRecent() && keys.isNotEmpty() && keys == scannedConfigKeys && _scannedServers.value.size == unique.size
     }
+
+    private fun isConnectionScanRecent(nowMs: Long = System.currentTimeMillis()): Boolean =
+        scannedAtMs > 0L && nowMs - scannedAtMs in 0..CONNECTION_SCAN_REUSE_MAX_AGE_MS
 
     fun availableServers(): List<ScoredServer> = sortForCurrentNetwork(_scannedServers.value)
 
