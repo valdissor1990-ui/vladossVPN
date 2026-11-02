@@ -3,6 +3,7 @@ package com.vpnproxy.logging
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 data class LogEntry(
     val timestamp: Long = System.currentTimeMillis(),
@@ -11,8 +12,14 @@ data class LogEntry(
     val message: String,
     val server: String? = null,
     val rttMs: Long? = null,
-    val stackTrace: String? = null
+    val stackTrace: String? = null,
+    /** Unique in-process identity for Compose lists; timestamps and message fields can collide. */
+    val id: Long = nextId.incrementAndGet()
 ) {
+    companion object {
+        private val nextId = AtomicLong(0L)
+    }
+
     fun toFormattedString(maskSensitive: Boolean = true): String {
         val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
         val msg = if (maskSensitive) SensitiveMasker.mask(message) else message
