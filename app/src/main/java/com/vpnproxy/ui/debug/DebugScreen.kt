@@ -268,7 +268,7 @@ fun DebugScreen(
                     }
                 }
 
-                items(logs.reversed(), key = { it.timestamp.toString() + it.tag + it.message.hashCode() }) { entry ->
+                items(logs.reversed(), key = { it.id }) { entry ->
                     LogEntryItem(entry)
                 }
             }
