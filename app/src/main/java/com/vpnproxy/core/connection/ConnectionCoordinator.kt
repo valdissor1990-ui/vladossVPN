@@ -61,6 +61,8 @@ class ConnectionCoordinator @Inject constructor(
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
         private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
+        private const val NETWORK_FAILURE_MESSAGE =
+            "Несколько разных серверов не ответили через текущую сеть. Возможно, сеть ограничивает VPN. Попробуйте Wi-Fi или другого оператора."
         const val CONNECTING_TIMEOUT_MS = 90_000L
 
         fun trafficFatalMessage(summary: String?): String {
@@ -93,6 +95,8 @@ class ConnectionCoordinator @Inject constructor(
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
     private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
+    private data class RecentEndpointFailure(val config: ParsedConfig, val atMs: Long)
+    private val recentEndpointFailures = mutableListOf<RecentEndpointFailure>()
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
     private var trafficValidationGeneration: Long = 0L
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
@@ -113,6 +117,24 @@ class ConnectionCoordinator @Inject constructor(
 
     @Volatile private var onEndpointHardFailed: ((ParsedConfig) -> Unit)? = null
     fun setOnEndpointHardFailed(listener: ((ParsedConfig) -> Unit)?) { onEndpointHardFailed = listener }
+
+    @Volatile private var onNetworkWideFailure: ((List<ParsedConfig>) -> Unit)? = null
+    fun setOnNetworkWideFailure(listener: ((List<ParsedConfig>) -> Unit)?) { onNetworkWideFailure = listener }
+
+    private fun recordRecentEndpointFailure(config: ParsedConfig): List<ParsedConfig>? {
+        val now = System.currentTimeMillis()
+        recentEndpointFailures.removeAll { now - it.atMs > 75_000L }
+        // A repeated failure of the same profile is not evidence of a network-wide problem.
+        recentEndpointFailures.removeAll { it.config.connectionKey() == config.connectionKey() }
+        recentEndpointFailures += RecentEndpointFailure(config, now)
+        val distinct = recentEndpointFailures.map { it.config }.distinctBy { it.connectionKey() }
+        val transportKinds = distinct.map { it.transport.lowercase() }.toSet()
+        if (distinct.size >= 3 && transportKinds.size >= 2) {
+            recentEndpointFailures.clear()
+            return distinct
+        }
+        return null
+    }
 
     fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
         val normalized = providerTag?.takeIf { it.isNotBlank() }
@@ -213,7 +235,8 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 if (event.userInitiated) {
                     isFatalErrorLocked = false
-                    logI("Manual connect requested — fatal lock cleared")
+                    recentEndpointFailures.clear()
+                    logI("Manual connect requested — fatal lock and recent network-failure history cleared")
                 }
                 activeTraceId = event.traceId
                 retryCount = 0
@@ -305,6 +328,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
             is ConnectionEvent.NetworkChanged -> {
+                recentEndpointFailures.clear()
                 if (isFatalErrorLocked) {
                     logI("NetworkChanged ignored — fatalErrorLocked")
                     return
@@ -430,6 +454,7 @@ class ConnectionCoordinator @Inject constructor(
                     return
                 }
                 if (event.success) {
+                    recentEndpointFailures.clear()
                     setState(ConnectionState.Connected(event.serverName), reason = "TrafficValidated")
                 } else {
                     val detail = event.failureSummary?.takeIf { it.isNotBlank() } ?: "unknown"
@@ -441,6 +466,22 @@ class ConnectionCoordinator @Inject constructor(
                         detail.contains("unreachable", ignoreCase = true) ||
                         detail.contains("DNS_ERROR", ignoreCase = true)
                     if (failedConfig != null && !failureLooksLocalOrDns) {
+                        val networkWideProfiles = if (
+                            detail.contains("IO_ERROR", ignoreCase = true) ||
+                            detail.contains("TIMEOUT", ignoreCase = true) ||
+                            detail.contains("connection reset", ignoreCase = true)
+                        ) recordRecentEndpointFailure(failedConfig) else null
+
+                        if (networkWideProfiles != null) {
+                            logW("Network-wide failure suspected: ${networkWideProfiles.size} distinct endpoints across ${networkWideProfiles.map { it.transport }.distinct().size} transports failed within 75s; suppressing remaining fallback attempts and clearing endpoint blacklists")
+                            runCatching { onNetworkWideFailure?.invoke(networkWideProfiles) }
+                            retryCount = 0
+                            isFatalErrorLocked = true
+                            cancelSelectionJob()
+                            setState(ConnectionState.Error(NETWORK_FAILURE_MESSAGE), reason = "networkWideFailureSuspected")
+                            return
+                        }
+
                         scoringEngine.recordHardFailure(failedConfig, weight = 2)
                         runCatching { onEndpointHardFailed?.invoke(failedConfig) }
                     }
