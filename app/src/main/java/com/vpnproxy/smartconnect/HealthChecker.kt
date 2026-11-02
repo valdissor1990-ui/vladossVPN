@@ -2,6 +2,7 @@ package com.vpnproxy.smartconnect
 
 import android.content.Context
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
+import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
@@ -130,32 +131,39 @@ class HealthChecker @Inject constructor(
     ): T {
         singboxProbeMutex.lock()
         try {
+            // A transition can be in progress before isRunning flips to true.
+            // Never mistake that small window for an idle core and start a second one.
+            check(!VpnProxyService.isCoreTransitioning.value) {
+                "VPN core is starting or stopping; health probe deferred"
+            }
             val manageSingbox = !VpnProxyService.isRunning.value
-            if (manageSingbox) {
+            if (!manageSingbox) {
+                // The active VPN route measures only the active connection, not this
+                // arbitrary candidate. Callers must not use it as candidate reachability.
+                return action(httpClient)
+            }
+
+            return CorePortLease.mutex.withLock {
+                check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
+                    "VPN core became active before health probe acquired the shared port lease"
+                }
                 val started = SingboxProxyClient.start(context, SingboxConfigBuilder.build(config))
                 if (!started) {
                     SingboxProxyClient.stop(context)
                     error("Sing-box failed to start for health check")
                 }
-            }
-
-            val client = if (manageSingbox) {
-                OkHttpClient.Builder()
+                val client = OkHttpClient.Builder()
                     .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
                     .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
                     .readTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
                     .callTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
                     .retryOnConnectionFailure(false)
                     .build()
-            } else {
-                // The active VPN route is the only safe probe while another server is connected.
-                httpClient
-            }
-
-            try {
-                return action(client)
-            } finally {
-                if (manageSingbox) SingboxProxyClient.stop(context)
+                try {
+                    action(client)
+                } finally {
+                    SingboxProxyClient.stop(context)
+                }
             }
         } finally {
             singboxProbeMutex.unlock()
