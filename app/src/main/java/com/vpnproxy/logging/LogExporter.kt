@@ -102,7 +102,15 @@ class LogExporter @Inject constructor(
         val nativeFromAppLog = appText.lineSequence()
             .filter { it.contains("[LIBBOX]", ignoreCase = true) || it.contains(" | LIBBOX |", ignoreCase = true) }
             .joinToString("\n")
-        val nativeText = nativeFileText.takeIf { it.isNotBlank() } ?: nativeFromAppLog
+        val nativeFromMemory = logCollector.getAllEntries()
+            .filter { it.tag == "LIBBOX" || it.message.contains("[LIBBOX]", ignoreCase = true) }
+            .takeLast(2_000)
+            .joinToString("\n") { entry -> SensitiveMasker.mask(entry.toFormattedString(maskSensitive = true)) }
+        // Preserve callback lines even when app.log has not flushed or has rotated.
+        val nativeText = listOf(nativeFileText, nativeFromAppLog, nativeFromMemory)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("\n")
         return Sources(
             appText = appText,
             nativeText = nativeText.trimEnd(),
