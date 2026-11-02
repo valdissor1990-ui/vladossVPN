@@ -112,7 +112,7 @@ class DebugViewModel @Inject constructor(
                 .map { it.toFormattedString(maskSensitive = true) }
             val file = java.io.File(context.filesDir, "logs/libbox.log")
             val fileLines = if (file.isFile) {
-                file.readLines(Charsets.UTF_8).takeLast(100).map(SensitiveMasker::mask)
+                file.readLines(Charsets.UTF_8).takeLast(100).map { SensitiveMasker.mask(it) }
             } else emptyList()
             (callbackLines + fileLines).distinct().takeLast(150).joinToString("\n")
                 .ifBlank { "Native libbox has not emitted callback or file log lines yet (${file.absolutePath})" }
