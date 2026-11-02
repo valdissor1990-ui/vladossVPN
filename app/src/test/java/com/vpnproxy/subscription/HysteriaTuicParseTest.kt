@@ -79,6 +79,47 @@ class HysteriaTuicParseTest {
         assertTrue(configs.any { it.transport == "tuic" })
         assertTrue(configs.all { it.providerTag == "Test" })
     }
+
+    @Test
+    fun parsesGrpcServiceNameAndKeepsDistinctProfiles() {
+        val first = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@grpc.example.org:443" +
+                "?type=grpc&security=tls&sni=grpc.example.org&serviceName=service-one#One"
+        )!!
+        val second = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@grpc.example.org:443" +
+                "?type=grpc&security=tls&sni=grpc.example.org&serviceName=service-two#Two"
+        )!!
+
+        assertEquals("service-one", first.path)
+        assertEquals("service-two", second.path)
+        assertFalse(first.connectionKey() == second.connectionKey())
+    }
+
+    @Test
+    fun parsesGrpcAuthorityAlias() {
+        val config = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@grpc.example.org:443" +
+                "?type=grpc&security=tls&authority=grpc-service#GRPC"
+        )
+
+        assertNotNull(config)
+        assertEquals("grpc-service", config!!.path)
+    }
+
+    @Test
+    fun parsesBase64EncodedSingBoxJsonGrpcServiceName() {
+        val json = """{"outbounds":[{"type":"vless","tag":"grpc-json","server":"grpc.example.org","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","tls":{"enabled":true,"server_name":"grpc.example.org"},"transport":{"type":"grpc","service_name":"json-service"}}]}"""
+        val encoded = java.util.Base64.getEncoder()
+            .encodeToString(json.toByteArray(Charsets.UTF_8))
+
+        val configs = parser.parse(encoded, providerTag = "JSON")
+
+        assertEquals(1, configs.size)
+        assertEquals("grpc", configs.single().transport)
+        assertEquals("json-service", configs.single().path)
+    }
+
     @Test
     fun normalizesNullXhttpExtraToEmptyObjectWithoutWarning() {
         val cfg = parser.parseVlessUri(
