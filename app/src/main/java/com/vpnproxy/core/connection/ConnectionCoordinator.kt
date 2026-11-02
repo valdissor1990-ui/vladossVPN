@@ -218,9 +218,12 @@ class ConnectionCoordinator @Inject constructor(
                 activeTraceId = event.traceId
                 retryCount = 0
                 logI("ConnectRequested — enter Connecting (selection may still run)")
+                // Keep the coordinator idle while HomeViewModel performs fresh preflight.
+                // Entering Connecting here makes the service collector start Sing-box before
+                // DeepProbe has run, so the scanner then defers against the active VPN.
                 when (current) {
                     is ConnectionState.Disconnected, is ConnectionState.Disconnecting, is ConnectionState.Error ->
-                        setState(ConnectionState.Connecting, reason = "ConnectRequested")
+                        logI("ConnectRequested accepted; waiting for preflight and ServerSelected (state remains $current)")
                     is ConnectionState.Connecting -> logD("ConnectRequested while already Connecting")
                     else -> logD("ConnectRequested ignored in $current")
                 }
@@ -293,7 +296,7 @@ class ConnectionCoordinator @Inject constructor(
                 if (!selectedWasFallback) fallbackAttempts = 0
                 logI("ServerSelected: ${event.server.config.name}")
                 when (current) {
-                    is ConnectionState.Disconnected, is ConnectionState.Error -> logD("ServerSelected while idle")
+                    is ConnectionState.Disconnected, is ConnectionState.Error -> setState(ConnectionState.Connecting, reason = "ServerSelected after successful preflight")
                     is ConnectionState.Connecting -> setState(ConnectionState.Reconnecting, reason = "ServerSelected while Connecting")
                     is ConnectionState.Connected, is ConnectionState.Reconnecting, is ConnectionState.Verifying -> {
                         if (!isFatalErrorLocked) setState(ConnectionState.Reconnecting, reason = "ServerSelected")
@@ -453,6 +456,7 @@ class ConnectionCoordinator @Inject constructor(
                 when (current) {
                     is ConnectionState.Disconnecting -> setState(ConnectionState.Disconnected, reason = "ServiceStopped")
                     is ConnectionState.Disconnected -> logD("ServiceStopped while already Disconnected")
+                    is ConnectionState.Error -> logD("ServiceStopped after handled error; preserving Error state")
                     else -> {
                         if (!isFatalErrorLocked) {
                             logW("ServiceStopped unexpected in $current")
