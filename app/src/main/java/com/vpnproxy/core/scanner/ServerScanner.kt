@@ -95,8 +95,8 @@ class ServerScanner @Inject constructor(
                 logCollector.info(TAG, "Reusing ${unique.size} fresh cached server scan results")
                 return@withLock _scannedServers.value
             }
-            if (VpnProxyService.isRunning.value) {
-                logCollector.info(TAG, "Profile scan deferred while VPN is active; retaining last known results")
+            if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                logCollector.info(TAG, "Profile scan deferred while VPN is active or core is transitioning; retaining last known results")
                 return@withLock _scannedServers.value
             }
             _isScanning.value = true
@@ -204,8 +204,8 @@ class ServerScanner @Inject constructor(
             scannedNetworkBucket = networkBucket
             return@withLock availableServers().filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
         }
-        if (VpnProxyService.isRunning.value) {
-            logCollector.warn(TAG, "Connection scan refused: VPN core is already active")
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            logCollector.warn(TAG, "Connection scan deferred: VPN is active or core transition is in progress")
             return@withLock emptyList()
         }
 

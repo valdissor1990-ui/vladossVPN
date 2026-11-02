@@ -47,6 +47,7 @@ class NetworkAwareReconnector(
     @Volatile private var lastReconnectAt = 0L
     private val physicalNetworks = ConcurrentHashMap<Network, String>()
     @Volatile private var selectedNetwork: Network? = null
+    @Volatile private var hasSelectedNetworkBaseline = false
 
     private sealed class NetEvent {
         data class Lost(val netId: Int) : NetEvent()
@@ -92,13 +93,19 @@ class NetworkAwareReconnector(
         }
 
         selectedNetwork = chosen?.key
+        // The first snapshot establishes a baseline. Emitting an event for this
+        // initial selection can immediately restart a freshly connected VPN.
+        if (!hasSelectedNetworkBaseline) {
+            hasSelectedNetworkBaseline = true
+            logCollector.info(TAG, "Physical-network baseline established: ${chosen?.key ?: "none"}")
+            return
+        }
         when {
             chosen == null && previous != null -> {
                 trySendEvent(NetEvent.Lost(previous.hashCode()))
             }
-            // Capabilities (especially VALIDATED) can change while Android keeps the
-            // same default physical network. Do not tear down a healthy tunnel for that.
-            // A real Wi-Fi <-> cellular handoff changes the selected Network handle.
+            // Capabilities can change while Android keeps the same physical network.
+            // Only a changed Network handle should restart a healthy tunnel.
             chosen != null && chosen.key != previous -> {
                 trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
             }
@@ -165,6 +172,7 @@ class NetworkAwareReconnector(
                 cm.unregisterNetworkCallback(callback)
                 physicalNetworks.clear()
                 selectedNetwork = null
+                hasSelectedNetworkBaseline = false
                 logCollector.info(TAG, "Unregistered physical-network callback")
             } catch (t: Throwable) {
                 logCollector.warn(TAG, "Unregister failed: ${t.message}")
