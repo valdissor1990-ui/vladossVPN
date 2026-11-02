@@ -465,6 +465,7 @@ class ConnectionCoordinator @Inject constructor(
                     val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
                         detail.contains("unreachable", ignoreCase = true) ||
                         detail.contains("DNS_ERROR", ignoreCase = true)
+                    if (failureLooksLocalOrDns) recentEndpointFailures.clear()
                     if (failedConfig != null && !failureLooksLocalOrDns) {
                         val networkWideProfiles = if (
                             detail.contains("IO_ERROR", ignoreCase = true) ||
