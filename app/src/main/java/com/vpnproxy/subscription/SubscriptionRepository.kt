@@ -266,6 +266,12 @@ class SubscriptionRepository @Inject constructor(
                 it.connectionKey()
             }.size
 
+            val providerDuplicates = (totalConfigs - providerUniqueConfigs.size).coerceAtLeast(0)
+            val globalDuplicates = (providerUniqueConfigs.size - globallyUniqueCount).coerceAtLeast(0)
+            logCollector.info(
+                TAG,
+                "Subscription count audit: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} providerDuplicates=$providerDuplicates globalUnique=$globallyUniqueCount globalDuplicates=$globalDuplicates"
+            )
             if (providerUniqueConfigs.isNotEmpty() && anyNetworkSuccess) {
                 saveConfigsToCache(providerUniqueConfigs)
                 logCollector.info(
