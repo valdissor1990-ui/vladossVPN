@@ -62,12 +62,33 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
-        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
-            coordinator.hasSelectedServer()
+    fun connectRequested_doesNotStartConnectingUntilPreflightSelectsServer() {
+        sendAndWait(ConnectionEvent.ConnectRequested("preflight", userInitiated = true)) {
+            coordinator.activeTraceId == "preflight" && coordinator.state.value is ConnectionState.Disconnected
         }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer(), "preflight")) {
+            coordinator.state.value is ConnectionState.Connecting &&
+                coordinator.currentServerName() == "test-server"
+        }
+    }
+
+    @Test
+    fun serviceStopped_afterShowError_preservesErrorState() {
+        sendAndWait(ConnectionEvent.ShowError("preflight failed")) {
+            coordinator.state.value is ConnectionState.Error
+        }
+        coordinator.send(ConnectionEvent.ServiceStopped)
+        Thread.sleep(150)
+        assertEquals("preflight failed", (coordinator.state.value as ConnectionState.Error).message)
+    }
+
+    @Test
+    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+            coordinator.state.value is ConnectionState.Disconnected
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
 
         // A result without the current ServiceReady generation is stale/untrusted.
@@ -92,13 +113,13 @@ class ConnectionCoordinatorTest {
         val fastGlobal = candidate("fast-global", 0.95f, "fast.example.org")
         val slowerRussia = candidate("🇷🇺 Россия", 0.20f, "slow.example.org")
 
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.activeTraceId == "manual" && coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(current, fastGlobal, slowerRussia)))
         Thread.sleep(100)
-        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+        sendAndWait(ConnectionEvent.ServerSelected(current, "manual")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
             coordinator.currentServerName() == "fast-global" &&
@@ -119,13 +140,13 @@ class ConnectionCoordinatorTest {
             score = 0.9f
         )
 
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
-        }
-        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
         coordinator.setManualSelectionMode(true)
         sendAndWait(ConnectionEvent.ConnectRequested("manual-selection", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+            coordinator.activeTraceId == "manual-selection" && coordinator.state.value is ConnectionState.Disconnected
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
+        sendAndWait(ConnectionEvent.ServerSelected(current, "manual-selection")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
 
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
@@ -143,12 +164,12 @@ class ConnectionCoordinatorTest {
         val outside = current.copy(config = current.config.copy(name = "outside", address = "outside.example.org", providerTag = "subscription-B"))
 
         coordinator.setProviderScope("subscription-A")
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
+        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
+            coordinator.activeTraceId == "scoped" && coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(outside, allowed)))
-        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+        sendAndWait(ConnectionEvent.ServerSelected(current, "scoped")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
             coordinator.currentServerName() == "allowed" && coordinator.state.value is ConnectionState.Reconnecting
@@ -255,8 +276,10 @@ class ConnectionCoordinatorTest {
         assertTrue(coordinator.state.value is ConnectionState.Error)
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            !coordinator.isFatalErrorLocked &&
-                coordinator.state.value is ConnectionState.Connecting
+            coordinator.activeTraceId == "manual" && !coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.state.value is ConnectionState.Connecting
         }
     }
 
@@ -278,7 +301,10 @@ class ConnectionCoordinatorTest {
         assertTrue(coordinator.isFatalErrorLocked)
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting && !coordinator.isFatalErrorLocked
+            coordinator.state.value is ConnectionState.Error && !coordinator.isFatalErrorLocked
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.state.value is ConnectionState.Connecting
         }
     }
 

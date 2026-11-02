@@ -398,6 +398,8 @@ class HomeViewModel @Inject constructor(
         lastConnectClickMs = now
         cancelSelectionJob("new connect")
 
+        // An explicit Connect tap is permission to retry the manually selected endpoint, even if a prior attempt temporarily blacklisted it on this network.
+        manuallySelectedServer?.config?.let { autoSwitcher.clearServerBlacklist(it, "user Connect") }
         if (!startConnectFlow()) return
         try {
             connectionCoordinator.send(ConnectionEvent.ConnectRequested(activeTraceId!!, userInitiated = true))
@@ -463,6 +465,20 @@ class HomeViewModel @Inject constructor(
                 if (configs.isEmpty()) {
                     endConnectFlow()
                     connectionCoordinator.send(ConnectionEvent.ShowError("Нет доступных серверов"))
+                    return@launch
+                }
+                // ConnectRequested intentionally does not start the VPN service. If a previous
+                // failed session is still tearing down, wait for the core and its port lease to
+                // become idle before starting temporary DeepProbe instances.
+                val coreStopped = withTimeoutOrNull(20_000L) {
+                    while (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                        delay(100L)
+                    }
+                    true
+                } ?: false
+                if (!coreStopped) {
+                    endConnectFlow()
+                    connectionCoordinator.send(ConnectionEvent.ShowError("Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд."))
                     return@launch
                 }
                 logCollector.info(TAG, tmsg("Starting mandatory fresh server preflight: profiles=${configs.size}; preferred=${manuallySelectedServer?.config?.name ?: "auto"}"))
@@ -584,6 +600,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onServerSelected(server: ScoringEngine.ScoredServer) {
+        // A direct user selection is an explicit retry, unlike background auto-selection.
+        autoSwitcher.clearServerBlacklist(server.config, "user selected server")
         if (!autoSwitcher.forceSelect(server)) {
             logCollector.warn(TAG, "Manual server selection rejected: ${server.config.name}")
             return

@@ -223,6 +223,14 @@ class AutoSwitcher @Inject constructor(
         logCollector.warn(TAG, "Server blacklisted for ${ttlMs}ms on ${currentNetworkBucket()} after failed start: ${target.name}", mapOf("server" to serverKey(target)))
     }
 
+    /** Remove only this endpoint's current-network blacklist entry after an explicit user retry. */
+    fun clearServerBlacklist(config: ParsedConfig, reason: String) {
+        val key = blacklistKey(config)
+        val removed = serverBlacklist.remove(key) != null
+        blacklistPreferences.edit().remove(key).apply()
+        if (removed) logCollector.info(TAG, "Server blacklist cleared by explicit user action ($reason): ${config.name}")
+    }
+
     fun clearBlacklist() {
         if (suppressIfFrozen("blacklist-clear")) return
         serverBlacklist.clear()
