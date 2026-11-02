@@ -271,6 +271,17 @@ class AutoSwitcher @Inject constructor(
         healthCheckJob = null
     }
 
+    /** Cancel health monitoring and background ranking without leaving stale fallbacks. */
+    fun cancelBackgroundWork(reason: String = "VPN disconnected") {
+        healthCheckJob?.cancel()
+        healthCheckJob = null
+        rankingJob?.cancel()
+        rankingJob = null
+        _rankedServers.value = emptyList()
+        connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
+        logCollector.info(TAG, "AutoSwitcher background work cancelled: $reason")
+    }
+
     private suspend fun checkCurrentServer() {
         val current = _currentServer.value ?: return
         if (switching.get()) return
@@ -577,6 +588,10 @@ class AutoSwitcher @Inject constructor(
                 val ruResults = if (russian.isNotEmpty()) healthChecker.testLatency(russian) else emptyList()
                 val foreignResults = if (foreign.isNotEmpty()) healthChecker.testLatency(foreign) else emptyList()
                 // Region is a probe-order hint only; it must not override measured quality.
+                if (!isActive || connectionCoordinator.state.value !is com.vpnproxy.core.connection.ConnectionState.Connected) {
+                    logCollector.info(TAG, "Discarding background ranking: VPN disconnected before results were published")
+                    return@launch
+                }
                 val ranked = scoringEngine.computeScore(ruResults + foreignResults)
                 if (scopeGeneration != providerScopeGeneration) {
                     logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
