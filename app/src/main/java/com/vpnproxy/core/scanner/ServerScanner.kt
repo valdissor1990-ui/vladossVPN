@@ -252,17 +252,25 @@ class ServerScanner @Inject constructor(
             }
             val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
             if (scanGeneration.get() == generationForScan) {
+                val reachableCount = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                 val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
+                // A technically complete scan with zero reachable endpoints must not become a
+                // reusable "fresh" result. Otherwise the next Connect can reuse the all-zero
+                // snapshot and reject the user's manually selected server without retrying it.
+                val reusable = complete && reachableCount > 0
                 scannedNetworkBucket = networkBucket
-                scannedConfigKeys = if (complete) requestedKeys else emptySet()
-                scannedAtMs = if (complete) System.currentTimeMillis() else 0L
+                scannedConfigKeys = if (reusable) requestedKeys else emptySet()
+                scannedAtMs = if (reusable) System.currentTimeMillis() else 0L
                 _scannedServers.value = results
-                if (complete) {
+                if (reusable) {
                     persistScanResults(results)
                     pendingFullScanConfigs = emptyList()
                 } else {
                     pendingFullScanConfigs = unique
                     scanCache().edit().putLong("saved_at", 0L).apply()
+                    if (complete && reachableCount == 0) {
+                        logCollector.warn(TAG, "Complete connection scan found zero reachable profiles; previous successful disk cache retained and zero-result scan will not be reused")
+                    }
                 }
             }
             val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
