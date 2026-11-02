@@ -499,23 +499,36 @@ class HomeViewModel @Inject constructor(
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .sortedBy { it.latencyMs }
                 val verifiedConfigs = verifiedServers.map { it.config }
-                if (verifiedConfigs.isEmpty()) {
+                val manualFallback = if (verifiedConfigs.isEmpty()) {
+                    manuallySelectedServer?.takeIf { manual ->
+                        configs.any { it.connectionKey() == manual.config.connectionKey() }
+                    }
+                } else null
+                if (verifiedConfigs.isEmpty() && manualFallback == null) {
                     endConnectFlow()
                     connectionCoordinator.send(ConnectionEvent.ShowError("Не найдено серверов с подтверждённой доступностью"))
-                    logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}"))
+                    logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}; manualFallback=false"))
                     return@launch
                 }
-                val selected = withTimeoutOrNull(5_000L) {
-                    ConnectServerSelector.select(
-                        configs = verifiedConfigs,
-                        isAutomaticMode = _uiState.value.isAutomaticMode,
-                        manuallySelected = manuallySelectedServer,
-                        scannedCandidates = verifiedServers,
-                        lastServerStore = lastServerStore,
-                        autoSwitcher = autoSwitcher,
-                        logCollector = logCollector,
-                        traceMsg = { tmsg(it) },
+                val selected = if (manualFallback != null) {
+                    logCollector.warn(
+                        TAG,
+                        tmsg("Preflight found zero reachable profiles; trying the explicitly selected server as a one-shot fallback: ${manualFallback.config.name}")
                     )
+                    manualFallback
+                } else {
+                    withTimeoutOrNull(5_000L) {
+                        ConnectServerSelector.select(
+                            configs = verifiedConfigs,
+                            isAutomaticMode = _uiState.value.isAutomaticMode,
+                            manuallySelected = manuallySelectedServer,
+                            scannedCandidates = verifiedServers,
+                            lastServerStore = lastServerStore,
+                            autoSwitcher = autoSwitcher,
+                            logCollector = logCollector,
+                            traceMsg = { tmsg(it) },
+                        )
+                    }
                 }
                 if (selected == null) {
                     endConnectFlow()
