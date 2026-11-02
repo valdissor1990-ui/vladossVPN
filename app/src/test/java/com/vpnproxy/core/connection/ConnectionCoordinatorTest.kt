@@ -114,13 +114,13 @@ class ConnectionCoordinatorTest {
         val fastGlobal = candidate("fast-global", 0.95f, "fast.example.org")
         val slowerRussia = candidate("🇷🇺 Россия", 0.20f, "slow.example.org")
 
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(current, fastGlobal, slowerRussia)))
         Thread.sleep(100)
-        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+        sendAndWait(ConnectionEvent.ServerSelected(current, "manual")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
             coordinator.currentServerName() == "fast-global" &&
@@ -141,13 +141,13 @@ class ConnectionCoordinatorTest {
             score = 0.9f
         )
 
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
-        }
-        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
         coordinator.setManualSelectionMode(true)
         sendAndWait(ConnectionEvent.ConnectRequested("manual-selection", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+            coordinator.state.value is ConnectionState.Disconnected
+        }
+        coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
+        sendAndWait(ConnectionEvent.ServerSelected(current, "manual-selection")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
 
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
@@ -165,12 +165,12 @@ class ConnectionCoordinatorTest {
         val outside = current.copy(config = current.config.copy(name = "outside", address = "outside.example.org", providerTag = "subscription-B"))
 
         coordinator.setProviderScope("subscription-A")
-        sendAndWait(ConnectionEvent.ServerSelected(current)) {
-            coordinator.hasSelectedServer()
+        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(outside, allowed)))
-        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+        sendAndWait(ConnectionEvent.ServerSelected(current, "scoped")) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
             coordinator.currentServerName() == "allowed" && coordinator.state.value is ConnectionState.Reconnecting
@@ -277,8 +277,10 @@ class ConnectionCoordinatorTest {
         assertTrue(coordinator.state.value is ConnectionState.Error)
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            !coordinator.isFatalErrorLocked &&
-                coordinator.state.value is ConnectionState.Connecting
+            !coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.state.value is ConnectionState.Connecting
         }
     }
 
