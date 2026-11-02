@@ -92,7 +92,18 @@ class SubscriptionParser @Inject constructor(
 
     fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
         val trimmed = rawContent.trim()
-        if (trimmed.isBlank()) return emptyList()
+        if (trimmed.isBlank()) {
+            logCollector.warn(TAG, "Subscription import rejected: empty payload provider=$providerTag")
+            return emptyList()
+        }
+
+        val lineCount = trimmed.lineSequence().count { it.isNotBlank() }
+        val detectedFormat = when {
+            trimmed.startsWith("[") || trimmed.startsWith("{") -> "json"
+            trimmed.contains("proxies:") || trimmed.contains("proxy-groups:") -> "clash_yaml"
+            else -> "base64_or_uri_text"
+        }
+        logCollector.info(TAG, "Subscription import started: provider=$providerTag chars=${trimmed.length} nonEmptyLines=$lineCount formatHint=$detectedFormat")
 
         val decoded = tryBase64Decode(trimmed)?.trim()
         if (!decoded.isNullOrBlank() && decoded != trimmed) {
@@ -162,24 +173,34 @@ class SubscriptionParser @Inject constructor(
                     line.startsWith("socks://", ignoreCase = true) ||
                     line.startsWith("socks5://", ignoreCase = true)
             }.toList()
-        val parsed = candidates.mapNotNull { line ->
-            when {
-                line.startsWith("vless://", ignoreCase = true) -> parseVlessUri(line, providerTag)
-                line.startsWith("hysteria2://", ignoreCase = true) || line.startsWith("hy2://", ignoreCase = true) ->
-                    parseHysteria2Uri(line, providerTag)
-                line.startsWith("tuic://", ignoreCase = true) -> parseTuicUri(line, providerTag)
-                line.startsWith("ss://", ignoreCase = true) -> ExtraUriParsers.parseShadowsocks(line, providerTag, logCollector)
-                line.startsWith("vmess://", ignoreCase = true) -> ExtraUriParsers.parseVmess(line, providerTag, logCollector)
-                line.startsWith("trojan://", ignoreCase = true) -> ExtraUriParsers.parseTrojan(line, providerTag, logCollector)
-                line.startsWith("socks://", ignoreCase = true) || line.startsWith("socks5://", ignoreCase = true) ->
-                    ExtraUriParsers.parseSocks(line, providerTag, logCollector)
+        val parsed = mutableListOf<ParsedConfig>()
+        val skippedByScheme = linkedMapOf<String, Int>()
+        candidates.forEachIndexed { index, line ->
+            val scheme = line.substringBefore("://").lowercase()
+            val config = when {
+                scheme == "vless" -> parseVlessUri(line, providerTag)
+                scheme == "hysteria2" || scheme == "hy2" -> parseHysteria2Uri(line, providerTag)
+                scheme == "tuic" -> parseTuicUri(line, providerTag)
+                scheme == "ss" -> ExtraUriParsers.parseShadowsocks(line, providerTag, logCollector)
+                scheme == "vmess" -> ExtraUriParsers.parseVmess(line, providerTag, logCollector)
+                scheme == "trojan" -> ExtraUriParsers.parseTrojan(line, providerTag, logCollector)
+                scheme == "socks" || scheme == "socks5" -> ExtraUriParsers.parseSocks(line, providerTag, logCollector)
                 else -> null
+            }
+            if (config != null) {
+                parsed += config
+            } else {
+                skippedByScheme[scheme] = (skippedByScheme[scheme] ?: 0) + 1
+                val label = line.substringAfter('#', "").take(64).ifBlank { "no-name" }
+                    .replace(Regex("[^\\p{L}\\p{N} _.,()\\-]"), "_")
+                // Never log the URI itself: it contains UUIDs/passwords/Reality keys.
+                logCollector.warn(TAG, "Subscription candidate rejected: provider=$providerTag index=${index + 1} scheme=$scheme label=$label reason=parser_returned_null")
             }
         }
         val protocolCounts = parsed.groupingBy { it.transport.lowercase() }.eachCount()
         logCollector.info(
             TAG,
-            "URI subscription parse summary: candidates=${candidates.size} parsed=${parsed.size} skipped=${candidates.size - parsed.size} protocols=$protocolCounts"
+            "URI subscription parse summary: candidates=${candidates.size} parsed=${parsed.size} skipped=${candidates.size - parsed.size} protocols=$protocolCounts skippedByScheme=$skippedByScheme"
         )
         return parsed
     }
@@ -396,7 +417,16 @@ class SubscriptionParser @Inject constructor(
                 }
                 else -> {}
             }
-            logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size}")
+            val schemaKinds = when (element) {
+                is JsonArray -> element.filterIsInstance<JsonObject>().groupingBy {
+                    it["type"]?.jsonPrimitive?.contentOrNull ?: it["protocol"]?.jsonPrimitive?.contentOrNull ?: "missing_type"
+                }.eachCount()
+                is JsonObject -> element["outbounds"]?.jsonArray?.filterIsInstance<JsonObject>()?.groupingBy {
+                    it["type"]?.jsonPrimitive?.contentOrNull ?: it["protocol"]?.jsonPrimitive?.contentOrNull ?: "missing_type"
+                }?.eachCount() ?: mapOf("single_object" to candidateCount)
+                else -> emptyMap()
+            }
+            logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size} schemaKinds=$schemaKinds supportedSchema=sing-box_outbound_or_legacy_xray_vless")
             configs
         } catch (e: Exception) {
             logCollector.warn(TAG, "JSON parse failed: ${e.message}")
