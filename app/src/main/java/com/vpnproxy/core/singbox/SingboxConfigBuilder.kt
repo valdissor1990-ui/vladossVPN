@@ -365,6 +365,10 @@ object SingboxConfigBuilder {
                     put("server_name", serverName)
                     when {
                         isVless -> {
+                            put("insecure", config.insecure)
+                            if (config.alpn.isNotEmpty()) {
+                                put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+                            }
                             put("utls", buildJsonObject {
                                 put("enabled", true)
                                 put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
