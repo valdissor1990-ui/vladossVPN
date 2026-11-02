@@ -138,9 +138,9 @@ class HealthChecker @Inject constructor(
             }
             val manageSingbox = !VpnProxyService.isRunning.value
             if (!manageSingbox) {
-                // The active VPN route measures only the active connection, not this
-                // arbitrary candidate. Callers must not use it as candidate reachability.
-                return action(httpClient)
+                // The active VPN route cannot prove that this arbitrary candidate works.
+                // Fail closed instead of assigning the current tunnel's success to every profile.
+                error("Cannot probe an alternative profile while the VPN core is active")
             }
 
             return CorePortLease.mutex.withLock {
