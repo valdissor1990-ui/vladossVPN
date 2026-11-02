@@ -49,31 +49,34 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
-        const val DEFAULT_SUBSCRIPTION_URL =
-            "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt"
-        const val PRIMARY_URL = DEFAULT_SUBSCRIPTION_URL
-        const val MIRROR_URL_GITHUB =
-            "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN/mirror-data/list_universal.txt"
-        val FALLBACK_CHAIN = listOf(PRIMARY_URL, MIRROR_URL_GITHUB)
-        const val DEFAULT_SUBSCRIPTION_NAME = "Default (zieng2)"
-        const val DEFAULT_SUBSCRIPTION_ID = "default-zieng2"
-
+        const val SOLOVYOV_BASE64_URL =
+            "https://final-sorted-base64.solovyov-jenya2004.workers.dev/"
+        const val SOLOVYOV_RANDOM_URL =
+            "https://random.solovyov-jenya2004.workers.dev/"
         const val IGARECK_URL =
-            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+
+        const val SOLOVYOV_BASE64_NAME = "Mobile Base64 (solovyov)"
+        const val SOLOVYOV_BASE64_ID = "builtin-solovyov-base64"
+        const val SOLOVYOV_RANDOM_NAME = "Mobile Random (solovyov)"
+        const val SOLOVYOV_RANDOM_ID = "builtin-solovyov-random"
         const val IGARECK_NAME = "WhiteList Mobile (igareck)"
         const val IGARECK_ID = "builtin-igareck-wl-mobile"
 
-        const val WHITE_LITE_URL =
+        // Previous built-in feeds are removed from existing installs during migration.
+        private val OBSOLETE_BUILT_IN_IDS = setOf("default-zieng2", "builtin-flat447-white-lite")
+        private val OBSOLETE_BUILT_IN_URLS = setOf(
+            "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt",
+            "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN/mirror-data/list_universal.txt",
             "https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_LITE.txt"
-        const val WHITE_LITE_NAME = "WHITE_LITE (FLAT447)"
-        const val WHITE_LITE_ID = "builtin-flat447-white-lite"
+        )
 
         data class BuiltInSpec(val id: String, val url: String, val name: String)
 
         val BUILT_IN_SUBSCRIPTIONS: List<BuiltInSpec> = listOf(
-            BuiltInSpec(DEFAULT_SUBSCRIPTION_ID, DEFAULT_SUBSCRIPTION_URL, DEFAULT_SUBSCRIPTION_NAME),
-            BuiltInSpec(IGARECK_ID, IGARECK_URL, IGARECK_NAME),
-            BuiltInSpec(WHITE_LITE_ID, WHITE_LITE_URL, WHITE_LITE_NAME)
+            BuiltInSpec(SOLOVYOV_BASE64_ID, SOLOVYOV_BASE64_URL, SOLOVYOV_BASE64_NAME),
+            BuiltInSpec(SOLOVYOV_RANDOM_ID, SOLOVYOV_RANDOM_URL, SOLOVYOV_RANDOM_NAME),
+            BuiltInSpec(IGARECK_ID, IGARECK_URL, IGARECK_NAME)
         )
         val BUILT_IN_IDS: Set<String> = BUILT_IN_SUBSCRIPTIONS.map { it.id }.toSet()
     }
@@ -160,15 +163,30 @@ class SubscriptionRepository @Inject constructor(
     }
 
     /**
-     * Adds missing built-in sources while preserving existing subscription settings.
-     * A matching URL already saved by the user is not duplicated.
+     * Migrates obsolete bundled feeds out, updates the igareck URL, and installs
+     * the three current mobile sources without duplicating user-added URLs.
      */
     private fun ensureBuiltInSubscriptions() {
         val current = _subscriptions.value.toMutableList()
-        var changed = false
+        val migrated = current.filterNot {
+            it.id in OBSOLETE_BUILT_IN_IDS || it.url in OBSOLETE_BUILT_IN_URLS
+        }.map { sub ->
+            if (sub.id == IGARECK_ID) {
+                sub.copy(url = IGARECK_URL, name = IGARECK_NAME, tag = sub.tag.ifBlank { IGARECK_NAME })
+            } else sub
+        }.toMutableList()
+        var changed = migrated != current
         for (spec in BUILT_IN_SUBSCRIPTIONS) {
-            if (current.any { it.id == spec.id || it.url == spec.url }) continue
-            current += ProviderSubscription(
+            val existingIndex = migrated.indexOfFirst { it.id == spec.id || it.url == spec.url }
+            if (existingIndex >= 0) {
+                val existing = migrated[existingIndex]
+                if (existing.id != spec.id || existing.url != spec.url || existing.name != spec.name) {
+                    migrated[existingIndex] = existing.copy(id = spec.id, url = spec.url, name = spec.name)
+                    changed = true
+                }
+                continue
+            }
+            migrated += ProviderSubscription(
                 id = spec.id,
                 url = spec.url,
                 name = spec.name,
@@ -179,8 +197,9 @@ class SubscriptionRepository @Inject constructor(
             logCollector.info(TAG, "Built-in subscription added: " + spec.name)
         }
         if (changed) {
-            _subscriptions.value = current
+            _subscriptions.value = migrated
             saveToPrefs()
+            logCollector.info(TAG, "Built-in subscription migration complete: " + migrated.size + " saved sources")
         }
     }
 
@@ -249,7 +268,7 @@ class SubscriptionRepository @Inject constructor(
                     logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
                     val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
                     if (cached.isNotEmpty()) {
-                        if (sub.url == PRIMARY_URL) _lastRefreshUsedCache.value = true
+                        if (sub.id in BUILT_IN_IDS) _lastRefreshUsedCache.value = true
                         logCollector.info(TAG, "Using cached configs for ${sub.name}: ${cached.size}")
                         allConfigsList.addAll(cached.map { it.toParsedConfig() })
                         totalConfigs += cached.size
@@ -292,7 +311,7 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
         withContext(Dispatchers.IO) {
-            val sources = if (sub.url == PRIMARY_URL) FALLBACK_CHAIN else listOf(sub.url)
+            val sources = listOf(sub.url)
             var lastFailure: Exception? = null
             var sawTransportFailure = false
             for (sourceUrl in sources) {
