@@ -25,12 +25,22 @@ class AutoSwitcherTest {
     @Test
     fun test_switchIfServerIsBad() {
         val direct = ProbeResult(latencyMs = 35, success = true)
-        val vpn = ProbeResult(latencyMs = 900, success = true)
+        val vpn = ProbeResult(latencyMs = 1_200, success = true)
 
         assertEquals(NetworkFaultKind.SERVER_DEGRADATION, classifyProbeFault(direct, vpn))
         assertFalse(shouldSwitchAfterEvidence(1, 0, directPathHealthy = true))
         assertFalse(shouldSwitchAfterEvidence(2, 0, directPathHealthy = true))
         assertTrue(shouldSwitchAfterEvidence(3, 0, directPathHealthy = true))
+    }
+
+    @Test
+    fun suspectRttThreshold_isDoubledToOneSecond() {
+        val direct = ProbeResult(latencyMs = 35, success = true)
+        val underThreshold = ProbeResult(latencyMs = 900, success = true)
+        val overThreshold = ProbeResult(latencyMs = 1_001, success = true)
+
+        assertEquals(NetworkFaultKind.NONE, classifyProbeFault(direct, underThreshold))
+        assertEquals(NetworkFaultKind.SERVER_DEGRADATION, classifyProbeFault(direct, overThreshold))
     }
 
     @Test
