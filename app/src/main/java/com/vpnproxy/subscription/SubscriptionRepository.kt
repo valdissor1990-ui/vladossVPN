@@ -221,13 +221,28 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
-                    val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
+                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.message}")
+                    // Keep an independent last-known body per subscription. The aggregate
+                    // cache may have been written by an older build after only one provider
+                    // succeeded, so it cannot be the sole recovery source.
+                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val bodyCached = runCatching {
+                        encryptedPrefs.getString(bodyKey, null)
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { parser.parse(it, providerTag = sub.name) }
+                            .orEmpty()
+                    }.getOrDefault(emptyList())
+                    val aggregateCached = if (bodyCached.isEmpty()) {
+                        loadConfigsFromCache().filter { it.providerTag == sub.name }.map { it.toParsedConfig() }
+                    } else emptyList()
+                    val cached = if (bodyCached.isNotEmpty()) bodyCached else aggregateCached
                     if (cached.isNotEmpty()) {
                         _lastRefreshUsedCache.value = true
-                        logCollector.info(TAG, "Using cached configs for ${sub.name}: ${cached.size}")
-                        allConfigsList.addAll(cached.map { it.toParsedConfig() })
+                        logCollector.info(TAG, "Using per-subscription cache for ${sub.name}: count=${cached.size}; source=${if (bodyCached.isNotEmpty()) "encrypted_body" else "aggregate_cache"}")
+                        allConfigsList.addAll(cached)
                         totalConfigs += cached.size
+                    } else {
+                        logCollector.warn(TAG, "No recoverable cache for subscription ${sub.name} (id=${sub.id})")
                     }
                 }
             }
@@ -243,15 +258,18 @@ class SubscriptionRepository @Inject constructor(
 
             val providerDuplicates = (totalConfigs - providerUniqueConfigs.size).coerceAtLeast(0)
             val globalDuplicates = (providerUniqueConfigs.size - globallyUniqueCount).coerceAtLeast(0)
+            val providerAudit = providerUniqueConfigs.groupingBy { it.providerTag }.eachCount().toSortedMap()
             logCollector.info(
                 TAG,
-                "Subscription count audit: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} providerDuplicates=$providerDuplicates globalUnique=$globallyUniqueCount globalDuplicates=$globalDuplicates"
+                "Subscription count audit: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} providerDuplicates=$providerDuplicates globalUnique=$globallyUniqueCount globalDuplicates=$globalDuplicates providers=$providerAudit"
             )
-            if (providerUniqueConfigs.isNotEmpty() && anyNetworkSuccess) {
+            if (providerUniqueConfigs.isNotEmpty()) {
+                // The list above already contains fresh responses plus each failed
+                // provider's own cached response; persist the complete reconstructed set.
                 saveConfigsToCache(providerUniqueConfigs)
                 logCollector.info(
                     TAG,
-                    "Updated cached_configs.json: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
+                    "Updated cached_configs.json: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount networkSuccess=$anyNetworkSuccess"
                 )
             }
 
