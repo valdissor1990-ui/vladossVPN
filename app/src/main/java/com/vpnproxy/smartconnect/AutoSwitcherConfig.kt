@@ -14,7 +14,8 @@ object AutoSwitcherConfig {
     const val batterySaverHealthCheckIntervalMs = 600_000L
     /** In-app economy mode (user toggle): between normal and system saver. */
     const val economyHealthCheckIntervalMs = 360_000L
-    const val suspectRttMs = 500L
+    /** RTT above 1000 ms is treated as suspect; doubled from 500 ms for high-latency routes. */
+    const val suspectRttMs = 1_000L
     const val suspectJitterMs = 150L
     const val directFastRttMs = 100L
     const val microProbeMinMbps = 1.0
