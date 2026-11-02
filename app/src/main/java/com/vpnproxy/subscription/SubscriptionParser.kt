@@ -134,10 +134,14 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun tryBase64Decode(input: String): String? {
-        return try {
-            val clean = input.replace("\n", "").replace("\r", "").replace(" ", "")
-            String(Base64.decode(clean, Base64.DEFAULT))
-        } catch (_: Exception) { null }
+        val clean = input.replace("\n", "").replace("\r", "").replace(" ", "")
+        // java.util.Base64 is deterministic in local JVM unit tests; Android's Base64
+        // stub can fail in tests and does not consistently cover URL-safe provider output.
+        return runCatching {
+            String(java.util.Base64.getDecoder().decode(clean), Charsets.UTF_8)
+        }.recoverCatching {
+            String(java.util.Base64.getUrlDecoder().decode(clean), Charsets.UTF_8)
+        }.getOrNull()
     }
 
     private fun containsSupportedUri(text: String): Boolean =
