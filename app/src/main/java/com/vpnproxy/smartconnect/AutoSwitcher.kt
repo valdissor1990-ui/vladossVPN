@@ -228,7 +228,7 @@ class AutoSwitcher @Inject constructor(
         val key = blacklistKey(config)
         val removed = serverBlacklist.remove(key) != null
         blacklistPreferences.edit().remove(key).apply()
-        if (removed) logCollector.info(TAG, "Server blacklist cleared by explicit user action ($reason): ${config.name}")
+        if (removed) logCollector.info(TAG, "Server blacklist cleared: reason=$reason server=${config.name}")
     }
 
     fun clearBlacklist() {
