@@ -109,7 +109,7 @@ class ServerScanner @Inject constructor(
                 val resultByKey = linkedMapOf<String, ScoredServer>()
                 unique.forEach { resultByKey[scanKey(it)] = unavailable(it) }
                 _scannedServers.value = sortForCurrentNetwork(resultByKey.values.toList())
-                val probeConfigs = unique.filter { config -> config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
+                val probeConfigs = buildProbeCandidates(unique, "full_scan")
                 var probedCount = 0
                 if (probeConfigs.isNotEmpty()) {
                     try {
@@ -226,7 +226,7 @@ class ServerScanner @Inject constructor(
         _isScanning.value = true
         try {
             activeScanJob = currentCoroutineContext()[Job]
-            val probeConfigs = unique.filter { config -> !autoSwitcher.isBlacklisted(config) && config.isValid() && runCatching { SingboxConfigBuilder.buildOutbound(config) }.isSuccess }
+            val probeConfigs = buildProbeCandidates(unique.filterNot { autoSwitcher.isBlacklisted(it) }, "connection_preflight")
             val resultByKey = linkedMapOf<String, ScoredServer>()
             unique.forEach { config ->
                 resultByKey[scanKey(config)] = if (config.isValid()) ScoredServer(config, Long.MAX_VALUE, 0f, -1f, 0f) else unavailable(config)
@@ -432,6 +432,29 @@ class ServerScanner @Inject constructor(
 
     private fun unavailable(config: ParsedConfig): ScoredServer =
         ScoredServer(config, Long.MAX_VALUE, 0f, 0f, 0f)
+
+    private fun buildProbeCandidates(configs: List<ParsedConfig>, stage: String): List<ParsedConfig> {
+        val accepted = mutableListOf<ParsedConfig>()
+        var invalidCount = 0
+        var buildFailureCount = 0
+        configs.forEach { config ->
+            if (!config.isValid()) {
+                invalidCount++
+                logCollector.warn(TAG, "Probe candidate rejected before Sing-box build: stage=$stage server=${config.name} reason=parsed_config_invalid protocol=${config.transport} security=${config.security}")
+                return@forEach
+            }
+            val buildResult = runCatching { SingboxConfigBuilder.buildOutbound(config) }
+            if (buildResult.isSuccess) {
+                accepted += config
+            } else {
+                buildFailureCount++
+                val error = buildResult.exceptionOrNull()
+                logCollector.error(TAG, "Probe candidate rejected by Sing-box config builder: stage=$stage server=${config.name} protocol=${config.transport} security=${config.security} reason=${error?.javaClass?.simpleName}: ${error?.message}")
+            }
+        }
+        logCollector.info(TAG, "Probe candidate filtering: stage=$stage input=${configs.size} accepted=${accepted.size} invalid=$invalidCount singboxBuildFailed=$buildFailureCount")
+        return accepted
+    }
 
     private fun scanKey(config: ParsedConfig): String =
         "${config.providerTag}\u001F${config.connectionKey()}"
