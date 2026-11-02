@@ -571,6 +571,12 @@ class AutoSwitcher @Inject constructor(
 
     /** Probe RU endpoints first, then the rest; ranking never blocks initial connection. */
     fun rankInBackground(configs: List<ParsedConfig>) {
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            rankingJob?.cancel()
+            rankingJob = null
+            logCollector.info(TAG, "Background profile ranking skipped: VPN core is active; only individually preflight-verified fallback candidates are allowed")
+            return
+        }
         if (isDiagnosticFreezeActive()) logCollector.info(TAG, "AutoSwitcher ranking allowed but server selection frozen")
         val scopeGeneration = providerScopeGeneration
         rankingJob?.cancel()
