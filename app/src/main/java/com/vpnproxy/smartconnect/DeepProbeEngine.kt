@@ -208,7 +208,7 @@ class DeepProbeEngine @Inject constructor(
                                         checkProbeActive(probeGeneration)
                                         try {
                                             val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
-                                            val request = Request.Builder().url(probeUrl).head().build()
+                                            val request = Request.Builder().url(probeUrl).get().build()
                                             val elapsed = runInterruptible(Dispatchers.IO) {
                                                 val start = System.nanoTime()
                                                 client.newCall(request).execute().use { response ->
