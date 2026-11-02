@@ -64,7 +64,7 @@ class ConnectionCoordinatorTest {
     @Test
     fun connectRequested_doesNotStartConnectingUntilPreflightSelectsServer() {
         sendAndWait(ConnectionEvent.ConnectRequested("preflight", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Disconnected
+            coordinator.activeTraceId == "preflight" && coordinator.state.value is ConnectionState.Disconnected
         }
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer(), "preflight")) {
             coordinator.state.value is ConnectionState.Connecting &&
@@ -77,9 +77,8 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.ShowError("preflight failed")) {
             coordinator.state.value is ConnectionState.Error
         }
-        sendAndWait(ConnectionEvent.ServiceStopped) {
-            coordinator.state.value is ConnectionState.Error
-        }
+        coordinator.send(ConnectionEvent.ServiceStopped)
+        Thread.sleep(150)
         assertEquals("preflight failed", (coordinator.state.value as ConnectionState.Error).message)
     }
 
@@ -115,7 +114,7 @@ class ConnectionCoordinatorTest {
         val slowerRussia = candidate("🇷🇺 Россия", 0.20f, "slow.example.org")
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Disconnected
+            coordinator.activeTraceId == "manual" && coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(current, fastGlobal, slowerRussia)))
         Thread.sleep(100)
@@ -143,7 +142,7 @@ class ConnectionCoordinatorTest {
 
         coordinator.setManualSelectionMode(true)
         sendAndWait(ConnectionEvent.ConnectRequested("manual-selection", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Disconnected
+            coordinator.activeTraceId == "manual-selection" && coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(fallback)))
         sendAndWait(ConnectionEvent.ServerSelected(current, "manual-selection")) {
@@ -166,7 +165,7 @@ class ConnectionCoordinatorTest {
 
         coordinator.setProviderScope("subscription-A")
         sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Disconnected
+            coordinator.activeTraceId == "scoped" && coordinator.state.value is ConnectionState.Disconnected
         }
         coordinator.send(ConnectionEvent.SetFallbackCandidates(listOf(outside, allowed)))
         sendAndWait(ConnectionEvent.ServerSelected(current, "scoped")) {
@@ -277,7 +276,7 @@ class ConnectionCoordinatorTest {
         assertTrue(coordinator.state.value is ConnectionState.Error)
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            !coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+            coordinator.activeTraceId == "manual" && !coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
         }
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.state.value is ConnectionState.Connecting
