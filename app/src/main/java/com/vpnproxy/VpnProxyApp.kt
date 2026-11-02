@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -38,8 +39,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     @Inject lateinit var connectionCoordinator: ConnectionCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var startupRefreshStarted = false
-    private var startupScanStarted = false
+    private val startupTasksStarted = AtomicBoolean(false)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -103,9 +103,7 @@ class VpnProxyApp : Application(), Configuration.Provider {
     }
 
     private fun startSafeStartupRefresh() {
-        if (startupRefreshStarted || startupScanStarted) return
-        startupRefreshStarted = true
-        startupScanStarted = true
+        if (!startupTasksStarted.compareAndSet(false, true)) return
 
         applicationScope.launch {
             if (!hasNetworkConnection()) {
@@ -136,8 +134,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        } catch (_: Throwable) {
-            true
+        } catch (t: Throwable) {
+            logCollector.warn("VpnProxyApp", "Network availability check failed: ${t.message}")
+            false
         }
     }
 
