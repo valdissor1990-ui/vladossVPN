@@ -107,6 +107,9 @@ class NetworkAwareReconnector(
             chosen == null && previous != null -> {
                 trySendEvent(NetEvent.Lost(previous.hashCode()))
             }
+            chosen != null && previous == null -> {
+                trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+            }
             chosen != null && previous != null -> {
                 val sameNetworkId = chosen.key.hashCode() == previous.hashCode()
                 val sameSignature = chosen.value == previousSignature
