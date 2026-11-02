@@ -210,7 +210,8 @@ class ServerScanner @Inject constructor(
         if (!forceFresh && _scannedServers.value.isEmpty()) restoreCachedResults(unique)
         val savedAt = scanCache().getLong("saved_at", 0L)
         val cachedKeys = _scannedServers.value.map { scanKey(it.config) }.toSet()
-        if (!forceFresh && savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
+        if (!forceFresh && isConnectionScanRecent() &&
+            savedAt > 0L && System.currentTimeMillis() - savedAt in 0..scanCacheMaxAgeMs &&
             cachedKeys == requestedKeys && _scannedServers.value.size == unique.size
         ) {
             scannedConfigKeys = requestedKeys
