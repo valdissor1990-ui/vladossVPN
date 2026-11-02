@@ -49,36 +49,28 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
-        const val SOLOVYOV_BASE64_URL =
-            "https://final-sorted-base64.solovyov-jenya2004.workers.dev/"
-        const val SOLOVYOV_RANDOM_URL =
-            "https://random.solovyov-jenya2004.workers.dev/"
-        const val IGARECK_URL =
-            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
-
-        const val SOLOVYOV_BASE64_NAME = "Mobile Base64 (solovyov)"
-        const val SOLOVYOV_BASE64_ID = "builtin-solovyov-base64"
-        const val SOLOVYOV_RANDOM_NAME = "Mobile Random (solovyov)"
-        const val SOLOVYOV_RANDOM_ID = "builtin-solovyov-random"
-        const val IGARECK_NAME = "WhiteList Mobile (igareck)"
-        const val IGARECK_ID = "builtin-igareck-wl-mobile"
-
-        // Previous built-in feeds are removed from existing installs during migration.
-        private val OBSOLETE_BUILT_IN_IDS = setOf("default-zieng2", "builtin-flat447-white-lite")
-        private val OBSOLETE_BUILT_IN_URLS = setOf(
+        // IDs, URLs and labels used by older bundled feeds. They are removed once
+        // during migration; no bundled source is installed or refreshed afterwards.
+        private val REMOVED_BUNDLED_IDS = setOf(
+            "default-zieng2",
+            "builtin-flat447-white-lite",
+            "builtin-solovyov-base64",
+            "builtin-solovyov-random",
+            "builtin-igareck-wl-mobile"
+        )
+        private val REMOVED_BUNDLED_URLS = setOf(
             "https://gitverse.ru/api/repos/zieng2/wl/raw/branch/master/list_universal.txt",
             "https://raw.githubusercontent.com/valdissor1990-ui/vladossVPN/mirror-data/list_universal.txt",
-            "https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_LITE.txt"
+            "https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_LITE.txt",
+            "https://final-sorted-base64.solovyov-jenya2004.workers.dev/",
+            "https://random.solovyov-jenya2004.workers.dev/",
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         )
-
-        data class BuiltInSpec(val id: String, val url: String, val name: String)
-
-        val BUILT_IN_SUBSCRIPTIONS: List<BuiltInSpec> = listOf(
-            BuiltInSpec(SOLOVYOV_BASE64_ID, SOLOVYOV_BASE64_URL, SOLOVYOV_BASE64_NAME),
-            BuiltInSpec(SOLOVYOV_RANDOM_ID, SOLOVYOV_RANDOM_URL, SOLOVYOV_RANDOM_NAME),
-            BuiltInSpec(IGARECK_ID, IGARECK_URL, IGARECK_NAME)
+        private val REMOVED_BUNDLED_NAMES = setOf(
+            "Mobile Base64 (solovyov)",
+            "Mobile Random (solovyov)",
+            "WhiteList Mobile (igareck)"
         )
-        val BUILT_IN_IDS: Set<String> = BUILT_IN_SUBSCRIPTIONS.map { it.id }.toSet()
     }
 
     @Serializable
@@ -130,12 +122,14 @@ class SubscriptionRepository @Inject constructor(
 
     init {
         loadFromPrefs()
-        ensureBuiltInSubscriptions()
+        removeBundledSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
-            _allConfigs.value = cached.map { it.toParsedConfig() }.distinctBy {
+            val retainedCached = cached.filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+            _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
+            if (retainedCached.size != cached.size) saveConfigsToCache(_allConfigs.value)
             logCollector.info(TAG, "Cold start from cache: ${_allConfigs.value.size}")
         } else {
             logCollector.warn(TAG, "No cached subscription configs available at cold start")
@@ -162,44 +156,18 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    /**
-     * Migrates obsolete bundled feeds out, updates the igareck URL, and installs
-     * the three current mobile sources without duplicating user-added URLs.
-     */
-    private fun ensureBuiltInSubscriptions() {
-        val current = _subscriptions.value.toMutableList()
-        val migrated = current.filterNot {
-            it.id in OBSOLETE_BUILT_IN_IDS || it.url in OBSOLETE_BUILT_IN_URLS
-        }.map { sub ->
-            if (sub.id == IGARECK_ID) {
-                sub.copy(url = IGARECK_URL, name = IGARECK_NAME, tag = sub.tag.ifBlank { IGARECK_NAME })
-            } else sub
-        }.toMutableList()
-        var changed = migrated != current
-        for (spec in BUILT_IN_SUBSCRIPTIONS) {
-            val existingIndex = migrated.indexOfFirst { it.id == spec.id || it.url == spec.url }
-            if (existingIndex >= 0) {
-                val existing = migrated[existingIndex]
-                if (existing.id != spec.id || existing.url != spec.url || existing.name != spec.name) {
-                    migrated[existingIndex] = existing.copy(id = spec.id, url = spec.url, name = spec.name)
-                    changed = true
-                }
-                continue
-            }
-            migrated += ProviderSubscription(
-                id = spec.id,
-                url = spec.url,
-                name = spec.name,
-                tag = spec.name,
-                enabled = true
-            )
-            changed = true
-            logCollector.info(TAG, "Built-in subscription added: " + spec.name)
+    /** Remove all bundled feeds from existing installations while preserving user-added sources. */
+    private fun removeBundledSubscriptions() {
+        val current = _subscriptions.value
+        val retained = current.filterNot { sub ->
+            sub.id in REMOVED_BUNDLED_IDS ||
+                sub.url in REMOVED_BUNDLED_URLS ||
+                sub.name in REMOVED_BUNDLED_NAMES
         }
-        if (changed) {
-            _subscriptions.value = migrated
+        if (retained != current) {
+            _subscriptions.value = retained
             saveToPrefs()
-            logCollector.info(TAG, "Built-in subscription migration complete: " + migrated.size + " saved sources")
+            logCollector.info(TAG, "Removed bundled subscriptions: removed=${current.size - retained.size}; userSources=${retained.size}")
         }
     }
 
@@ -227,19 +195,7 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun removeSubscription(id: String) {
-        if (id in BUILT_IN_IDS) {
-            logCollector.warn(TAG, "Cannot remove built-in subscription: " + id)
-            return
-        }
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
-        saveToPrefs()
-    }
-
-    /** Built-in sources can be disabled without deleting their saved entry. */
-    fun setSubscriptionEnabled(id: String, enabled: Boolean) {
-        _subscriptions.value = _subscriptions.value.map {
-            if (it.id == id) it.copy(enabled = enabled) else it
-        }
         saveToPrefs()
     }
 
@@ -265,13 +221,28 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name}: ${e.message}")
-                    val cached = loadConfigsFromCache().filter { it.providerTag == sub.name }
+                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.message}")
+                    // Keep an independent last-known body per subscription. The aggregate
+                    // cache may have been written by an older build after only one provider
+                    // succeeded, so it cannot be the sole recovery source.
+                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val bodyCached = runCatching {
+                        encryptedPrefs.getString(bodyKey, null)
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { parser.parse(it, providerTag = sub.name) }
+                            .orEmpty()
+                    }.getOrDefault(emptyList())
+                    val aggregateCached = if (bodyCached.isEmpty()) {
+                        loadConfigsFromCache().filter { it.providerTag == sub.name }.map { it.toParsedConfig() }
+                    } else emptyList()
+                    val cached = if (bodyCached.isNotEmpty()) bodyCached else aggregateCached
                     if (cached.isNotEmpty()) {
-                        if (sub.id in BUILT_IN_IDS) _lastRefreshUsedCache.value = true
-                        logCollector.info(TAG, "Using cached configs for ${sub.name}: ${cached.size}")
-                        allConfigsList.addAll(cached.map { it.toParsedConfig() })
+                        _lastRefreshUsedCache.value = true
+                        logCollector.info(TAG, "Using per-subscription cache for ${sub.name}: count=${cached.size}; source=${if (bodyCached.isNotEmpty()) "encrypted_body" else "aggregate_cache"}")
+                        allConfigsList.addAll(cached)
                         totalConfigs += cached.size
+                    } else {
+                        logCollector.warn(TAG, "No recoverable cache for subscription ${sub.name} (id=${sub.id})")
                     }
                 }
             }
@@ -287,15 +258,18 @@ class SubscriptionRepository @Inject constructor(
 
             val providerDuplicates = (totalConfigs - providerUniqueConfigs.size).coerceAtLeast(0)
             val globalDuplicates = (providerUniqueConfigs.size - globallyUniqueCount).coerceAtLeast(0)
+            val providerAudit = providerUniqueConfigs.groupingBy { it.providerTag }.eachCount().toSortedMap()
             logCollector.info(
                 TAG,
-                "Subscription count audit: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} providerDuplicates=$providerDuplicates globalUnique=$globallyUniqueCount globalDuplicates=$globalDuplicates"
+                "Subscription count audit: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} providerDuplicates=$providerDuplicates globalUnique=$globallyUniqueCount globalDuplicates=$globalDuplicates providers=$providerAudit"
             )
-            if (providerUniqueConfigs.isNotEmpty() && anyNetworkSuccess) {
+            if (providerUniqueConfigs.isNotEmpty()) {
+                // The list above already contains fresh responses plus each failed
+                // provider's own cached response; persist the complete reconstructed set.
                 saveConfigsToCache(providerUniqueConfigs)
                 logCollector.info(
                     TAG,
-                    "Updated cached_configs.json: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
+                    "Updated cached_configs.json: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount networkSuccess=$anyNetworkSuccess"
                 )
             }
 
@@ -449,9 +423,10 @@ class SubscriptionRepository @Inject constructor(
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
-        loadConfigsFromCache().map { it.toParsedConfig() }.distinctBy {
-            "${it.providerTag}\u001F${it.connectionKey()}"
-        }
+        loadConfigsFromCache().filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+            .map { it.toParsedConfig() }.distinctBy {
+                "${it.providerTag}\u001F${it.connectionKey()}"
+            }
 
     @Serializable
     private data class CachedConfig(

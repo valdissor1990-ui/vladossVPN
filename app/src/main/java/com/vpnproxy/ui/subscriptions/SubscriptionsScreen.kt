@@ -14,7 +14,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vpnproxy.subscription.SubscriptionRepository
 import com.vpnproxy.ui.theme.OnDark
 import com.vpnproxy.ui.theme.WarningYellow
 
@@ -143,8 +142,6 @@ fun SubscriptionsScreen(
                     .map { it.connectionKey() }
                     .distinct()
                     .count { it in scannedKeys }
-                val isBuiltIn = sub.id in SubscriptionRepository.BUILT_IN_IDS
-                val canRemove = !isBuiltIn
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -152,24 +149,9 @@ fun SubscriptionsScreen(
                     Column(modifier = Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(text = sub.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                            if (isBuiltIn) {
-                                Switch(
-                                    checked = sub.enabled,
-                                    onCheckedChange = { viewModel.setSubscriptionEnabled(sub.id, it) },
-                                    enabled = !refreshing
-                                )
-                            } else if (canRemove) {
-                                IconButton(onClick = { viewModel.removeSubscription(sub.id) }) {
-                                    Icon(Icons.Default.Delete, "Удалить")
-                                }
+                            IconButton(onClick = { viewModel.removeSubscription(sub.id) }) {
+                                Icon(Icons.Default.Delete, "Удалить")
                             }
-                        }
-                        if (isBuiltIn) {
-                            Text(
-                                text = "Встроенный источник · можно отключить",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
                         }
                         Text(text = sub.url, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                         Text(text = "Тег: ${sub.displayTag()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

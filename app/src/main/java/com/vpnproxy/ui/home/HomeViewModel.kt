@@ -369,9 +369,12 @@ class HomeViewModel @Inject constructor(
                 val allowedProfiles = configs.map { it.providerTag to it.connectionKey() }.toSet()
                 val candidates = serverScanner.availableServers()
                     .filter { (it.config.providerTag to it.config.connectionKey()) in allowedProfiles }
+                    .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
+                    .sortedBy { it.latencyMs }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
-                autoSwitcher.rankInBackground(configs)
+                logCollector.info(TAG, "Fallback candidates refreshed from individual server scan: verified=${candidates.size}; totalProfiles=${configs.size}")
+                // Do not re-probe every profile through the already active VPN tunnel.
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -536,8 +539,9 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
-                pendingRankingConfigs = configs
+                pendingRankingConfigs = emptyList()
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {

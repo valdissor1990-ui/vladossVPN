@@ -250,6 +250,7 @@ fun ServerListContent(
 
     val uniqueItems = remember(filtered) {
         filtered.distinctBy { viewModel.configKey(it.config) }
+            .sortedWith(compareBy<ScoredServer>({ if (it.latencyMs == Long.MAX_VALUE) 1 else 0 }, { it.latencyMs }))
     }
 
     Column(
@@ -387,109 +388,36 @@ fun ServerListContent(
             }
         }
 
-        val russianServers = remember(uniqueItems) {
-            uniqueItems.filter { viewModel.isRussianServer(it.config) }
-        }
-        val otherServers = remember(uniqueItems) {
-            uniqueItems.filterNot { viewModel.isRussianServer(it.config) }
-        }
-
-        if (filtered.isEmpty()) {
+        if (uniqueItems.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (servers.isEmpty()) "Список пуст. Обновите подписки." else "Ничего не найдено",
+                    text = if (servers.isEmpty()) "Список пуст. Добавьте подписку." else "Ничего не найдено",
                     color = Color(0xFFDDE7FF).copy(alpha = 0.8f)
                 )
             }
         } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "🇷🇺 Россия · ${russianServers.size}",
-                        color = Color(0xFFFFD7A8),
-                        fontSize = 13.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+                items(
+                    items = uniqueItems,
+                    key = { viewModel.configKey(it.config) }
+                ) { scoredServer ->
+                    val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "н/д"
+                    val scoreValue = scoreLabel.toDoubleOrNull()
+                    val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
+                    GlassServerCard(
+                        server = scoredServer,
+                        scoreLabel = scoreLabel,
+                        scoreColor = scoreColor,
+                        onClick = { onServerSelected(scoredServer) }
                     )
-                    LazyColumn(
-                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(
-                            items = russianServers,
-                            key = { "ru-${viewModel.configKey(it.config)}" }
-                        ) { scoredServer ->
-                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "н/д"
-                            val scoreValue = scoreLabel.toDoubleOrNull()
-                            val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
-                            GlassServerCard(
-                                server = scoredServer,
-                                scoreLabel = scoreLabel,
-                                scoreColor = scoreColor,
-                                onClick = { onServerSelected(scoredServer) }
-                            )
-                        }
-                    }
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "🌐 Другие · ${otherServers.size}",
-                        color = Color(0xFFBDEBFF),
-                        fontSize = 13.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
-                    )
-                    LazyColumn(
-                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(
-                            items = otherServers,
-                            key = { "other-${viewModel.configKey(it.config)}" }
-                        ) { scoredServer ->
-                            val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "—"
-                            val scoreValue = scoreLabel.toDoubleOrNull()
-                            val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
-                            GlassServerCard(
-                                server = scoredServer,
-                                scoreLabel = scoreLabel,
-                                scoreColor = scoreColor,
-                                onClick = { onServerSelected(scoredServer) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF101A49).copy(alpha = 0.86f))
-                .border(1.dp, Color.White.copy(alpha = 0.18f))
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            TextButton(onClick = { viewModel.rescanServers() }) {
-                Text("▤  Серверы", color = Color.White)
-            }
-            TextButton(onClick = onNavigateHome) {
-                Text("⏻  Подключение", color = Color(0xFFD5E6FF))
-            }
-            TextButton(onClick = onNavigateSettings) {
-                Text("⚙  Настройки", color = Color(0xFFD5E6FF))
             }
         }
     }

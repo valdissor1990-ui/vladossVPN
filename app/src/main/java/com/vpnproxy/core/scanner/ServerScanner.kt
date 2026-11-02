@@ -160,8 +160,18 @@ class ServerScanner @Inject constructor(
         _isScanning.value = false
         activeScanJob?.cancel()
         activeScanJob = null
-        if (wasScanning) logCollector.info(TAG, "Server scan cancellation requested; probes short-circuit and UI cleared")
+        deepProbeEngine.cancel()
+        if (wasScanning) logCollector.info(TAG, "Server scan cancellation requested; active probe cancelled")
         else logCollector.info(TAG, "Server scan cancel requested (no active scan flag)")
+    }
+
+    /** Stop every scanner-owned background task when the user disconnects the VPN. */
+    fun cancelBackgroundWork(reason: String = "VPN disconnected") {
+        backgroundJob?.cancel()
+        backgroundJob = null
+        pendingFullScanConfigs = emptyList()
+        cancelScan()
+        logCollector.info(TAG, "All scanner background work cancelled: $reason")
     }
 
     suspend fun scanAfterSubscriptionUpdate(configs: List<ParsedConfig>): List<ScoredServer> {
