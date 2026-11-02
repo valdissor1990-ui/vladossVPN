@@ -765,6 +765,12 @@ class VpnProxyService : VpnService() {
                 stopVpnInternal("forceStop: $reason")
             } catch (t: Throwable) {
                 Log.e(TAG, "forceStopService stopVpnInternal failed", t)
+            } finally {
+                // The core stop has completed (or failed); do not leave scanners blocked
+                // forever by the service's Stopping UI state.
+                _isRunning.value = false
+                _isCoreTransitioning.value = false
+                logCollector.info(TAG, "FORCE_STOP finalized: isRunning=false coreTransitioning=false")
             }
             connectionCoordinator.send(ConnectionEvent.ForceDisconnected(reason = "forceStopService: $reason"))
             try {
@@ -809,6 +815,7 @@ class VpnProxyService : VpnService() {
             Log.e(TAG, "onDestroy stopCore failed", t)
         }
         _isRunning.value = false
+        _isCoreTransitioning.value = false
         scope.cancel()
         lifecycleController = null
         super.onDestroy()
