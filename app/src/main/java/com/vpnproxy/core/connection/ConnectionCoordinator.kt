@@ -217,7 +217,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 activeTraceId = event.traceId
                 retryCount = 0
-                logI("ConnectRequested — enter Connecting (selection may still run)")
+                logI("ConnectRequested — begin preflight; VPN startup waits for ServerSelected")
                 // Keep the coordinator idle while HomeViewModel performs fresh preflight.
                 // Entering Connecting here makes the service collector start Sing-box before
                 // DeepProbe has run, so the scanner then defers against the active VPN.
@@ -301,7 +301,7 @@ class ConnectionCoordinator @Inject constructor(
                     is ConnectionState.Connected, is ConnectionState.Reconnecting, is ConnectionState.Verifying -> {
                         if (!isFatalErrorLocked) setState(ConnectionState.Reconnecting, reason = "ServerSelected")
                     }
-                    is ConnectionState.Disconnecting -> logD("ServerSelected ignored while Disconnecting")
+                    is ConnectionState.Disconnecting -> setState(ConnectionState.Connecting, reason = "ServerSelected after preflight and teardown")
                 }
             }
             is ConnectionEvent.NetworkChanged -> {
