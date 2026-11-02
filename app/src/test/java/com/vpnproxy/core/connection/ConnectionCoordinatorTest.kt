@@ -62,12 +62,34 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
-        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
-            coordinator.hasSelectedServer()
+    fun connectRequested_doesNotStartConnectingUntilPreflightSelectsServer() {
+        sendAndWait(ConnectionEvent.ConnectRequested("preflight", userInitiated = true)) {
+            coordinator.state.value is ConnectionState.Disconnected
         }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer(), "preflight")) {
+            coordinator.state.value is ConnectionState.Connecting &&
+                coordinator.currentServerName() == "test-server"
+        }
+    }
+
+    @Test
+    fun serviceStopped_afterShowError_preservesErrorState() {
+        sendAndWait(ConnectionEvent.ShowError("preflight failed")) {
+            coordinator.state.value is ConnectionState.Error
+        }
+        sendAndWait(ConnectionEvent.ServiceStopped) {
+            coordinator.state.value is ConnectionState.Error
+        }
+        assertEquals("preflight failed", (coordinator.state.value as ConnectionState.Error).message)
+    }
+
+    @Test
+    fun uncorrelatedTrafficValidationResult_cannotPromoteConnectionToConnected() {
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting
+            coordinator.state.value is ConnectionState.Disconnected
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer() && coordinator.state.value is ConnectionState.Connecting
         }
 
         // A result without the current ServiceReady generation is stale/untrusted.
@@ -278,7 +300,10 @@ class ConnectionCoordinatorTest {
         assertTrue(coordinator.isFatalErrorLocked)
 
         sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
-            coordinator.state.value is ConnectionState.Connecting && !coordinator.isFatalErrorLocked
+            coordinator.state.value is ConnectionState.Error && !coordinator.isFatalErrorLocked
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.state.value is ConnectionState.Connecting
         }
     }
 
