@@ -47,6 +47,7 @@ class NetworkAwareReconnector(
     @Volatile private var lastReconnectAt = 0L
     private val physicalNetworks = ConcurrentHashMap<Network, String>()
     @Volatile private var selectedNetwork: Network? = null
+    @Volatile private var selectedNetworkSignature: String? = null
     @Volatile private var hasSelectedNetworkBaseline = false
 
     private sealed class NetEvent {
@@ -92,22 +93,28 @@ class NetworkAwareReconnector(
             candidates.maxByOrNull { priority(it.value) }
         }
 
+        val previousSignature = selectedNetworkSignature
         selectedNetwork = chosen?.key
+        selectedNetworkSignature = chosen?.value
         // The first snapshot establishes a baseline. Emitting an event for this
         // initial selection can immediately restart a freshly connected VPN.
         if (!hasSelectedNetworkBaseline) {
             hasSelectedNetworkBaseline = true
-            logCollector.info(TAG, "Physical-network baseline established: ${chosen?.key ?: "none"}")
+            logCollector.info(TAG, "Physical-network baseline established: netId=${chosen?.key?.hashCode() ?: "none"} signature=${chosen?.value ?: "none"}")
             return
         }
         when {
             chosen == null && previous != null -> {
                 trySendEvent(NetEvent.Lost(previous.hashCode()))
             }
-            // Capabilities can change while Android keeps the same physical network.
-            // Only a changed Network handle should restart a healthy tunnel.
-            chosen != null && chosen.key != previous -> {
-                trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+            chosen != null && previous != null -> {
+                val sameNetworkId = chosen.key.hashCode() == previous.hashCode()
+                val sameSignature = chosen.value == previousSignature
+                if (!sameNetworkId || !sameSignature) {
+                    trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+                } else {
+                    logCollector.debug(TAG, "Physical network unchanged; suppress reconnect: netId=${chosen.key.hashCode()} signature=${chosen.value}")
+                }
             }
         }
     }
@@ -172,6 +179,7 @@ class NetworkAwareReconnector(
                 cm.unregisterNetworkCallback(callback)
                 physicalNetworks.clear()
                 selectedNetwork = null
+                selectedNetworkSignature = null
                 hasSelectedNetworkBaseline = false
                 logCollector.info(TAG, "Unregistered physical-network callback")
             } catch (t: Throwable) {
