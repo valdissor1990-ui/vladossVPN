@@ -17,6 +17,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogEntry
 import com.vpnproxy.logging.LogExporter
 import com.vpnproxy.logging.LogLevel
+import com.vpnproxy.logging.SensitiveMasker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -108,13 +109,13 @@ class DebugViewModel @Inject constructor(
             val callbackLines = logCollector.getAllEntries()
                 .filter { it.tag == "LIBBOX" }
                 .takeLast(100)
-                .joinToString("\n") { it.toFormattedString(maskSensitive = true) }
-            if (callbackLines.isNotBlank()) callbackLines
-            else {
-                val file = java.io.File(context.filesDir, "logs/libbox.log")
-                if (!file.isFile) "No native callback lines yet; file log.output is disabled (${file.absolutePath})"
-                else file.readLines(Charsets.UTF_8).takeLast(100).joinToString("\n").ifBlank { "native libbox file is empty" }
-            }
+                .map { it.toFormattedString(maskSensitive = true) }
+            val file = java.io.File(context.filesDir, "logs/libbox.log")
+            val fileLines = if (file.isFile) {
+                file.readLines(Charsets.UTF_8).takeLast(100).map { SensitiveMasker.mask(it) }
+            } else emptyList()
+            (callbackLines + fileLines).distinct().takeLast(150).joinToString("\n")
+                .ifBlank { "Native libbox has not emitted callback or file log lines yet (${file.absolutePath})" }
         }.getOrElse { "libbox log unavailable: ${it.javaClass.simpleName}: ${it.message}" }
     }
 

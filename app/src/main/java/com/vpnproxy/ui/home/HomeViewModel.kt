@@ -432,8 +432,8 @@ class HomeViewModel @Inject constructor(
 
         val traceId = activeTraceId ?: TraceId.newId().also { activeTraceId = it }
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
-        // Stop any startup/background profile probe before bringing up the real VPN core.
-        serverScanner.cancelScan()
+        // Keep a startup scan alive. scanForConnection waits for its mutex and reuses
+        // results only when the exact profiles and current network bucket still match.
         armConnectingWatchdog()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
@@ -481,13 +481,13 @@ class HomeViewModel @Inject constructor(
                     connectionCoordinator.send(ConnectionEvent.ShowError("Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд."))
                     return@launch
                 }
-                logCollector.info(TAG, tmsg("Starting mandatory fresh server preflight: profiles=${configs.size}; preferred=${manuallySelectedServer?.config?.name ?: "auto"}"))
+                logCollector.info(TAG, tmsg("Starting connection preflight: profiles=${configs.size}; preferred=${manuallySelectedServer?.config?.name ?: "auto"}; reuse recent same-network scan when valid"))
                 val reachable = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
                     serverScanner.scanForConnection(
                         configs = configs,
                         targetAvailableCount = configs.size + 1,
                         preferredConfig = manuallySelectedServer?.config,
-                        forceFresh = true
+                        forceFresh = false
                     )
                 }
                 if (reachable == null) {

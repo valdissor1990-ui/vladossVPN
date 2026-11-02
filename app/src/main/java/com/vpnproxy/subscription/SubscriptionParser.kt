@@ -94,13 +94,21 @@ class SubscriptionParser @Inject constructor(
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) return emptyList()
 
-        val decoded = tryBase64Decode(trimmed)
-        if (decoded != null && (
-            decoded.contains("vless://") || decoded.contains("hysteria2://") || decoded.contains("hy2://") ||
-            decoded.contains("tuic://") || decoded.contains("ss://") || decoded.contains("vmess://") ||
-            decoded.contains("trojan://") || decoded.contains("socks://") || decoded.contains("socks5://")
-        )) {
-            return parseVlessLines(decoded, providerTag)
+        val decoded = tryBase64Decode(trimmed)?.trim()
+        if (!decoded.isNullOrBlank() && decoded != trimmed) {
+            // Some providers Base64-wrap JSON as well as plain URI lists.
+            if (decoded.startsWith("[") || decoded.startsWith("{")) {
+                val jsonResult = tryParseJson(decoded, providerTag)
+                if (jsonResult.isNotEmpty()) {
+                    logCollector.info(TAG, "Decoded Base64 JSON subscription: parsed=${jsonResult.size}")
+                    return jsonResult
+                }
+            }
+            if (decoded.contains("proxies:") || decoded.contains("proxy-groups:")) {
+                val yamlResult = tryParseClashYaml(decoded, providerTag)
+                if (yamlResult.isNotEmpty()) return yamlResult
+            }
+            if (containsSupportedUri(decoded)) return parseVlessLines(decoded, providerTag)
         }
 
         if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
@@ -126,40 +134,54 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun tryBase64Decode(input: String): String? {
-        return try {
-            val clean = input.replace("\n", "").replace("\r", "").replace(" ", "")
-            String(Base64.decode(clean, Base64.DEFAULT))
-        } catch (_: Exception) { null }
+        val clean = input.replace("\n", "").replace("\r", "").replace(" ", "")
+        // java.util.Base64 is deterministic in local JVM unit tests; Android's Base64
+        // stub can fail in tests and does not consistently cover URL-safe provider output.
+        return runCatching {
+            String(java.util.Base64.getDecoder().decode(clean), Charsets.UTF_8)
+        }.recoverCatching {
+            String(java.util.Base64.getUrlDecoder().decode(clean), Charsets.UTF_8)
+        }.getOrNull()
     }
 
+    private fun containsSupportedUri(text: String): Boolean =
+        listOf("vless://", "hysteria2://", "hy2://", "tuic://", "ss://", "vmess://", "trojan://", "socks://", "socks5://")
+            .any { text.contains(it, ignoreCase = true) }
+
     private fun parseVlessLines(text: String, providerTag: String): List<ParsedConfig> {
-        return text.lines()
+        val candidates = text.lineSequence()
             .map { it.trim() }
             .filter { line ->
-                line.startsWith("vless://") ||
-                    line.startsWith("hysteria2://") ||
-                    line.startsWith("hy2://") ||
-                    line.startsWith("tuic://") ||
-                    line.startsWith("ss://") ||
-                    line.startsWith("vmess://") ||
-                    line.startsWith("trojan://") ||
-                    line.startsWith("socks://") ||
-                    line.startsWith("socks5://")
+                line.startsWith("vless://", ignoreCase = true) ||
+                    line.startsWith("hysteria2://", ignoreCase = true) ||
+                    line.startsWith("hy2://", ignoreCase = true) ||
+                    line.startsWith("tuic://", ignoreCase = true) ||
+                    line.startsWith("ss://", ignoreCase = true) ||
+                    line.startsWith("vmess://", ignoreCase = true) ||
+                    line.startsWith("trojan://", ignoreCase = true) ||
+                    line.startsWith("socks://", ignoreCase = true) ||
+                    line.startsWith("socks5://", ignoreCase = true)
+            }.toList()
+        val parsed = candidates.mapNotNull { line ->
+            when {
+                line.startsWith("vless://", ignoreCase = true) -> parseVlessUri(line, providerTag)
+                line.startsWith("hysteria2://", ignoreCase = true) || line.startsWith("hy2://", ignoreCase = true) ->
+                    parseHysteria2Uri(line, providerTag)
+                line.startsWith("tuic://", ignoreCase = true) -> parseTuicUri(line, providerTag)
+                line.startsWith("ss://", ignoreCase = true) -> ExtraUriParsers.parseShadowsocks(line, providerTag, logCollector)
+                line.startsWith("vmess://", ignoreCase = true) -> ExtraUriParsers.parseVmess(line, providerTag, logCollector)
+                line.startsWith("trojan://", ignoreCase = true) -> ExtraUriParsers.parseTrojan(line, providerTag, logCollector)
+                line.startsWith("socks://", ignoreCase = true) || line.startsWith("socks5://", ignoreCase = true) ->
+                    ExtraUriParsers.parseSocks(line, providerTag, logCollector)
+                else -> null
             }
-            .mapNotNull { line ->
-                when {
-                    line.startsWith("vless://") -> parseVlessUri(line, providerTag)
-                    line.startsWith("hysteria2://") || line.startsWith("hy2://") ->
-                        parseHysteria2Uri(line, providerTag)
-                    line.startsWith("tuic://") -> parseTuicUri(line, providerTag)
-                    line.startsWith("ss://") -> ExtraUriParsers.parseShadowsocks(line, providerTag, logCollector)
-                    line.startsWith("vmess://") -> ExtraUriParsers.parseVmess(line, providerTag, logCollector)
-                    line.startsWith("trojan://") -> ExtraUriParsers.parseTrojan(line, providerTag, logCollector)
-                    line.startsWith("socks://") || line.startsWith("socks5://") ->
-                        ExtraUriParsers.parseSocks(line, providerTag, logCollector)
-                    else -> null
-                }
-            }
+        }
+        val protocolCounts = parsed.groupingBy { it.transport.lowercase() }.eachCount()
+        logCollector.info(
+            TAG,
+            "URI subscription parse summary: candidates=${candidates.size} parsed=${parsed.size} skipped=${candidates.size - parsed.size} protocols=$protocolCounts"
+        )
+        return parsed
     }
 
     fun parseHysteria2Uri(uri: String, providerTag: String = ""): ParsedConfig? {
@@ -316,7 +338,10 @@ class SubscriptionParser @Inject constructor(
             val transport = (params["type"] ?: params["transport"] ?: "tcp").lowercase()
             val security = (params["security"] ?: "none").lowercase()
             val sni = params["sni"] ?: params["serverName"]
-            val path = params["path"]
+            // VLESS gRPC carries its service path in serviceName/authority.
+            // ParsedConfig.path is consumed as Sing-box's service_name by the builder.
+            val grpcServiceName = params["serviceName"] ?: params["service_name"] ?: params["servicename"] ?: params["authority"]
+            val path = if (transport == "grpc") grpcServiceName ?: params["path"] else params["path"]
             val host = params["host"]
             val fingerprint = params["fp"] ?: params["fingerprint"]
             val publicKey = params["pbk"] ?: params["publicKey"]
@@ -350,17 +375,28 @@ class SubscriptionParser @Inject constructor(
         return try {
             val element = Json.parseToJsonElement(json)
             val configs = mutableListOf<ParsedConfig>()
+            var candidateCount = 0
             when (element) {
                 is JsonArray -> element.forEach { item ->
-                    if (item is JsonObject) extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
+                    if (item is JsonObject) {
+                        candidateCount++
+                        extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
+                    }
                 }
                 is JsonObject -> {
                     element["outbounds"]?.jsonArray?.forEach { item ->
-                        if (item is JsonObject) extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
-                    } ?: extractFromJsonObject(element, providerTag)?.let { configs.add(it) }
+                        if (item is JsonObject) {
+                            candidateCount++
+                            extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
+                        }
+                    } ?: run {
+                        candidateCount = 1
+                        extractFromJsonObject(element, providerTag)?.let { configs.add(it) }
+                    }
                 }
                 else -> {}
             }
+            logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size}")
             configs
         } catch (e: Exception) {
             logCollector.warn(TAG, "JSON parse failed: ${e.message}")
@@ -392,7 +428,11 @@ class SubscriptionParser @Inject constructor(
                         if (realityEnabled) "reality" else "tls"
                     } else "none",
                     sni = tls?.get("server_name")?.jsonPrimitive?.content,
-                    path = transportObject?.get("path")?.jsonPrimitive?.content,
+                    path = if (transport.equals("grpc", ignoreCase = true)) {
+                        transportObject?.get("service_name")?.jsonPrimitive?.content
+                            ?: transportObject?.get("serviceName")?.jsonPrimitive?.content
+                            ?: transportObject?.get("path")?.jsonPrimitive?.content
+                    } else transportObject?.get("path")?.jsonPrimitive?.content,
                     host = host,
                     mode = transportObject?.get("mode")?.jsonPrimitive?.content,
                     fingerprint = tls?.get("utls")?.jsonObject?.get("fingerprint")?.jsonPrimitive?.content,
@@ -421,12 +461,16 @@ class SubscriptionParser @Inject constructor(
             val security = stream?.get("security")?.jsonPrimitive?.content ?: "none"
             val reality = stream?.get("realitySettings")?.jsonObject
             val xhttp = stream?.get("xhttpSettings")?.jsonObject
+            val grpc = stream?.get("grpcSettings")?.jsonObject
             val tls = stream?.get("tlsSettings")?.jsonObject
+            val transportPath = if (transport.equals("grpc", ignoreCase = true)) {
+                grpc?.get("serviceName")?.jsonPrimitive?.content ?: grpc?.get("service_name")?.jsonPrimitive?.content
+            } else xhttp?.get("path")?.jsonPrimitive?.content
             ParsedConfig(
                 uuid = uuid, address = address, port = port,
                 transport = transport, security = security,
                 sni = reality?.get("serverName")?.jsonPrimitive?.content ?: tls?.get("serverName")?.jsonPrimitive?.content,
-                path = xhttp?.get("path")?.jsonPrimitive?.content,
+                path = transportPath,
                 host = xhttp?.get("host")?.jsonPrimitive?.content,
                 mode = xhttp?.get("mode")?.jsonPrimitive?.content,
                 fingerprint = reality?.get("fingerprint")?.jsonPrimitive?.content ?: tls?.get("fingerprint")?.jsonPrimitive?.content,
@@ -464,8 +508,14 @@ class SubscriptionParser @Inject constructor(
                         uuid = uuid, address = server, port = port,
                         transport = network, security = security,
                         sni = proxy["servername"] as? String ?: proxy["sni"] as? String,
-                        path = (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
-                            ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String,
+                        path = if (network.equals("grpc", ignoreCase = true)) {
+                            val grpcOptions = proxy["grpc-opts"] as? Map<String, Any>
+                            grpcOptions?.get("grpc-service-name") as? String
+                                ?: grpcOptions?.get("service-name") as? String
+                        } else {
+                            (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
+                                ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String
+                        },
                         host = ((proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>)?.get("Host") as? String,
                         mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
                         fingerprint = proxy["client-fingerprint"] as? String,

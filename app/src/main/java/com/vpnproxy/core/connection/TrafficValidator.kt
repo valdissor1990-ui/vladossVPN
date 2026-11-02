@@ -50,6 +50,8 @@ class TrafficValidator @Inject constructor(
         private const val PORT_WAIT_TIMEOUT_MS = 3_000L
         private const val PORT_POLL_MS = 100L
         private const val PORT_CONNECT_TIMEOUT_MS = 150
+        // ServiceReady confirms the core is up, but its first outbound handshake may still settle.
+        private const val SERVICE_READY_SETTLE_DELAY_MS = 350L
     }
 
     suspend fun checkTraffic(serverName: String? = null): Boolean =
@@ -76,6 +78,8 @@ class TrafficValidator @Inject constructor(
         }
 
         val localProxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(proxyHost, proxyPort))
+        delay(SERVICE_READY_SETTLE_DELAY_MS)
+        logCollector.debug(TAG, "Traffic probe settle delay completed: ${SERVICE_READY_SETTLE_DELAY_MS}ms after local proxy became ready")
         val results = mutableListOf<TrafficProbeTargetResult>()
 
         for (probeUrl in PROBE_URLS) {

@@ -67,39 +67,9 @@ class VpnProxyApp : Application(), Configuration.Provider {
             logCollector.warn("VpnProxyApp", "Battery snapshot failed: ${t.message}")
         }
 
-        scheduleBackgroundRefresh()
+        // One startup pipeline owns refresh + full scan; avoid racing stale cached profiles.
         startSafeStartupRefresh()
         SubscriptionUpdateWorker.schedule(this, intervalMinutes = 30)
-    }
-
-    private fun scheduleBackgroundRefresh() {
-        if (!hasNetworkConnection()) {
-            logCollector.warn("VpnProxyApp", "Background startup refresh skipped: no active network")
-            return
-        }
-
-        applicationScope.launch {
-            val state = connectionCoordinator.state.value
-            val vpnActive = state is ConnectionState.Connecting ||
-                state is ConnectionState.Verifying ||
-                state is ConnectionState.Connected ||
-                state is ConnectionState.Reconnecting
-
-            if (vpnActive) {
-                logCollector.info("VpnProxyApp", "Startup refresh skipped while VPN active")
-                return@launch
-            }
-
-            try {
-                val count = subscriptionRepository.refreshAll()
-                logCollector.info(
-                    "VpnProxyApp",
-                    "Startup subscription refresh finished: uniqueConfigs=$count"
-                )
-            } catch (t: Throwable) {
-                logCollector.warn("VpnProxyApp", "Startup subscription refresh failed: ${t.message}")
-            }
-        }
     }
 
     private fun startSafeStartupRefresh() {
@@ -112,11 +82,18 @@ class VpnProxyApp : Application(), Configuration.Provider {
             }
 
             try {
+                // Refresh first so startup scan and the next Connect action use one snapshot.
+                val refreshedCount = subscriptionRepository.refreshAll()
                 val configs = subscriptionRepository.getAllConfigs()
                 if (configs.isNotEmpty()) {
-                    serverScanner.scanAfterSubscriptionUpdate(configs)
+                    logCollector.info(
+                        "VpnProxyApp",
+                        "Startup subscription refresh finished: uniqueConfigs=$refreshedCount; scanning=${configs.size}"
+                    )
+                    serverScanner.scanAll(configs, force = true)
+                    // The background loop's initial scan reuses the just-completed result.
                     serverScanner.scanInBackground(applicationScope)
-                    logCollector.info("VpnProxyApp", "Startup server scan launched for ${configs.size} configs")
+                    logCollector.info("VpnProxyApp", "Startup full server scan completed for ${configs.size} configs")
                 } else {
                     logCollector.warn("VpnProxyApp", "Startup scan skipped: no cached or refreshed configs available")
                 }

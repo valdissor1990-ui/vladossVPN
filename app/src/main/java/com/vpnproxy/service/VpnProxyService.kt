@@ -119,6 +119,11 @@ class VpnProxyService : VpnService() {
         connectionCoordinator.setOnEndpointHardFailed { cfg ->
             autoSwitcher.markServerFailed(cfg)
         }
+        connectionCoordinator.setOnNetworkWideFailure { configs ->
+            configs.forEach { config ->
+                autoSwitcher.clearServerBlacklist(config, "network-wide failure suspected")
+            }
+        }
         Log.d("VpnService", "===== onCreate started =====")
 
         if (uncaughtHandlerInstalled.compareAndSet(false, true)) {
