@@ -379,6 +379,8 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
+                insecure = (params["allowInsecure"] ?: params["insecure"]).isTruthy(),
+                alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
                 extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"], params) else null
             )
             if (!config.isValid()) {
@@ -507,7 +509,12 @@ class SubscriptionParser @Inject constructor(
                 publicKey = reality?.get("publicKey")?.jsonPrimitive?.content,
                 shortId = reality?.get("shortId")?.jsonPrimitive?.content,
                 flow = user["flow"]?.jsonPrimitive?.content,
-                name = "$address:$port", providerTag = providerTag
+                name = "$address:$port",
+                providerTag = providerTag,
+                insecure = tls?.get("allowInsecure")?.jsonPrimitive?.booleanOrNull ?: false,
+                alpn = tls?.get("alpn")?.jsonArray
+                    ?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
+                    ?: emptyList()
             ).takeIf { it.isValid() }
         } catch (_: Exception) { null }
     }

@@ -126,6 +126,45 @@ class SingboxConfigBuilderTest {
     }
 
     @Test
+    fun vlessGrpcBuildsServiceNameTlsAlpnAndFirefoxFingerprint() {
+        val config = ParsedConfig(
+            uuid = "11111111-1111-4111-8111-111111111111",
+            address = "filnex.baby",
+            port = 443,
+            transport = "grpc",
+            security = "tls",
+            sni = "filnex.baby",
+            path = "lalibobi.tw.de1.Connect",
+            host = null,
+            mode = null,
+            fingerprint = "firefox",
+            publicKey = null,
+            shortId = null,
+            flow = "",
+            name = "grpc-provider",
+            insecure = false,
+            alpn = listOf("h2")
+        )
+
+        val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.build(config)
+        ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
+
+        assertEquals("vless", outbound["type"]!!.jsonPrimitive.content)
+        assertEquals("filnex.baby", outbound["server"]!!.jsonPrimitive.content)
+        assertEquals("grpc", outbound["transport"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "lalibobi.tw.de1.Connect",
+            outbound["transport"]!!.jsonObject["service_name"]!!.jsonPrimitive.content
+        )
+        val tls = outbound["tls"]!!.jsonObject
+        assertEquals("filnex.baby", tls["server_name"]!!.jsonPrimitive.content)
+        assertEquals("h2", tls["alpn"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals("firefox", tls["utls"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content)
+        assertFalse(tls["insecure"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test
     fun xhttpRealityMapsTransportAndExtraFields() {
         val config = ParsedConfig(
             uuid = "11111111-1111-1111-1111-111111111111",

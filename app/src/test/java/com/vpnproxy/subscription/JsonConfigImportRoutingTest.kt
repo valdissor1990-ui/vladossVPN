@@ -113,6 +113,57 @@ class JsonConfigImportRoutingTest {
     }
 
     @Test
+    fun importsXrayVlessGrpcTlsAlpnAndFingerprintWithoutDroppingThem() {
+        val sample = """
+            {
+              "protocol": "vless",
+              "settings": {
+                "vnext": [{
+                  "address": "filnex.baby",
+                  "port": 443,
+                  "users": [{
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "encryption": "none",
+                    "flow": ""
+                  }]
+                }]
+              },
+              "streamSettings": {
+                "network": "grpc",
+                "security": "tls",
+                "grpcSettings": {
+                  "authority": "filnex.baby",
+                  "mode": false,
+                  "serviceName": "lalibobi.tw.de1.Connect"
+                },
+                "tlsSettings": {
+                  "alpn": ["h2"],
+                  "enableSessionResumption": false,
+                  "fingerprint": "firefox",
+                  "serverName": "filnex.baby",
+                  "allowInsecure": false
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = parser.parse(sample, providerTag = "VLEES")
+
+        assertEquals(1, parsed.size)
+        val config = parsed.single()
+        assertEquals("filnex.baby", config.address)
+        assertEquals(443, config.port)
+        assertEquals("grpc", config.transport)
+        assertEquals("tls", config.security)
+        assertEquals("lalibobi.tw.de1.Connect", config.path)
+        assertEquals("filnex.baby", config.sni)
+        assertEquals("firefox", config.fingerprint)
+        assertEquals(listOf("h2"), config.alpn)
+        assertEquals(false, config.insecure)
+        assertEquals("VLEES", config.providerTag)
+    }
+
+    @Test
     fun rejectsMalformedJsonAndUnsupportedPayloads() {
         assertTrue(parser.parse("""{"protocol":""").isEmpty())
         assertTrue(parser.parse("""{"protocol":"unsupported","settings":{}}""").isEmpty())

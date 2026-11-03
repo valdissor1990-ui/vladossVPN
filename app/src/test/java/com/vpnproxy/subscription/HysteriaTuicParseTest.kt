@@ -97,6 +97,19 @@ class HysteriaTuicParseTest {
     }
 
     @Test
+    fun parsesVlessGrpcUriAlpnAndAllowInsecure() {
+        val config = parser.parseVlessUri(
+            "vless://11111111-1111-1111-1111-111111111111@grpc.example.org:443" +
+                "?type=grpc&security=tls&sni=grpc.example.org&serviceName=service-one" +
+                "&alpn=h2&allowInsecure=false#GRPC"
+        )
+
+        assertNotNull(config)
+        assertEquals(listOf("h2"), config!!.alpn)
+        assertFalse(config.insecure)
+    }
+
+    @Test
     fun parsesGrpcAuthorityAlias() {
         val config = parser.parseVlessUri(
             "vless://11111111-1111-1111-1111-111111111111@grpc.example.org:443" +
