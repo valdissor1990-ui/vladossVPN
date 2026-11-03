@@ -230,6 +230,10 @@ object SingboxConfigBuilder {
 
             when {
                 isHy2 -> {
+                    LogCollectorHolder.get()?.info(
+                        "SingboxConfigBuilder",
+                        "Hysteria2 outbound summary: profile=${config.name} server=${config.address}:${config.port} sni=${config.sni ?: "unset"} authPresent=${!(config.password ?: config.uuid).isNullOrBlank()} obfsType=${config.obfsType ?: "none"} obfsPasswordPresent=${!config.obfsPassword.isNullOrBlank()} insecure=${config.insecure} alpn=${config.alpn} fingerprintPresent=${!config.fingerprint.isNullOrBlank()}"
+                    )
                     put("password", config.password ?: config.uuid)
                     config.obfsType?.takeIf { it.isNotBlank() }?.let { obfsType ->
                         put("obfs", buildJsonObject {
@@ -346,7 +350,12 @@ object SingboxConfigBuilder {
                         put("type", "xhttp")
                         config.host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
                         config.path?.takeIf { it.isNotBlank() }?.let { put("path", normalizePath(it)) }
-                        put("mode", config.mode?.takeIf { it.isNotBlank() } ?: "auto")
+                        val finalMode = config.mode?.takeIf { it.isNotBlank() } ?: "auto"
+                        put("mode", finalMode)
+                        LogCollectorHolder.get()?.info(
+                            "SingboxConfigBuilder",
+                            "XHTTP outbound summary: profile=${config.name} server=${config.address}:${config.port} inputMode=${config.mode ?: "unset"} extraMode=${extraObject?.get("mode")?.toString() ?: "unset"} finalMode=$finalMode pathPresent=${!config.path.isNullOrBlank()} hostPresent=${!config.host.isNullOrBlank()} includedKeys=${includedKeys.distinct().sorted()} omittedKeys=${omittedKeys.distinct().sorted()}"
+                        )
                     })
                 }
             }
