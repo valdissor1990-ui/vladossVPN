@@ -86,16 +86,19 @@ class LogExporter @Inject constructor(
         val appText = appTextRaw.lineSequence()
             .joinToString("\n") { line -> SensitiveMasker.mask(line) }
             .trimEnd()
-        val nativeFile = File(context.filesDir, "logs/libbox.log")
-        val nativeFileText = if (nativeFile.isFile) {
-            runCatching { nativeFile.readText(Charsets.UTF_8) }.getOrElse {
-                "[native log read failed: ${it.javaClass.simpleName}: ${it.message}]"
-            }.lineSequence().filter { it.isNotBlank() }
-                .joinToString("\n") { line ->
-                    val tagged = if (line.startsWith("[LIBBOX]")) line else "[LIBBOX] $line"
-                    SensitiveMasker.mask(tagged)
-                }
-        } else ""
+        val nativeDirectory = File(context.filesDir, "logs")
+        val nativeFile = File(nativeDirectory, "libbox.log")
+        val nativeFileText = listOf(File(nativeDirectory, "libbox.log.1"), nativeFile)
+            .filter { it.isFile }
+            .joinToString("\n") { file ->
+                runCatching { file.readText(Charsets.UTF_8) }.getOrElse {
+                    "[native log read failed: ${it.javaClass.simpleName}: ${it.message}]"
+                }.lineSequence().filter { it.isNotBlank() }
+                    .joinToString("\n") { line ->
+                        val tagged = if (line.startsWith("[LIBBOX]")) line else "[LIBBOX] $line"
+                        SensitiveMasker.mask(tagged)
+                    }
+            }
         // The native callback currently writes through LogCollector/logcat on some
         // libbox builds rather than to filesDir/logs/libbox.log. Preserve those
         // lines in the dedicated native section instead of reporting zero native logs.
@@ -141,7 +144,9 @@ class LogExporter @Inject constructor(
             appendLine("last ConnectionState: ${lastContaining("ConnectionState", "setState(", "STATE:", "state changed")}")
             appendLine("last SelectedServer: ${lastContaining("SelectedServer", "server selected", "ServerSelected")}")
             appendLine("last ServiceReady timestamp: ${lastContaining("ServiceReady")}")
-            appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} app_lines=${sources.appLines}")
+            val nativeCallbackLines = sources.nativeText.lineSequence().count { it.contains("[LIBBOX]", ignoreCase = true) }
+            appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} native_callback_lines=$nativeCallbackLines app_lines=${sources.appLines}")
+            appendLine("native log file=${File(context.filesDir, "logs/libbox.log").absolutePath}; rotated_file=${File(context.filesDir, "logs/libbox.log.1").isFile}")
         }
     }
 
