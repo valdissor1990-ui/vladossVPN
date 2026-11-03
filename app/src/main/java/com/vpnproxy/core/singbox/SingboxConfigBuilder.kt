@@ -394,6 +394,13 @@ object SingboxConfigBuilder {
                             if (config.alpn.isNotEmpty()) {
                                 put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
                             }
+                            // Hysteria 2 Xray imports may specify a TLS client fingerprint.
+                            if (isHy2 && !config.fingerprint.isNullOrBlank()) {
+                                put("utls", buildJsonObject {
+                                    put("enabled", true)
+                                    put("fingerprint", config.fingerprint)
+                                })
+                            }
                             config.pinSHA256?.takeIf { it.isNotBlank() }?.let { pin ->
                                 put("certificate_public_key_sha256", buildJsonArray {
                                     add(kotlinx.serialization.json.JsonPrimitive(pin))

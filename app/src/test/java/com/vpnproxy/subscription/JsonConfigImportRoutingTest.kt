@@ -169,4 +169,68 @@ class JsonConfigImportRoutingTest {
         assertTrue(parser.parse("""{"protocol":"unsupported","settings":{}}""").isEmpty())
         assertTrue(parser.parse("""{"type":"vless","server":"1.2.3.4","server_port":443}""").isEmpty())
     }
+
+    @Test
+    fun importsXrayHysteria2OutboundAndSkipsServiceOutbounds() {
+        val sample = """
+            {
+              "inbounds": [{"tag": "socks-in", "port": 10808}],
+              "outbounds": [
+                {
+                  "protocol": "hysteria",
+                  "settings": {
+                    "address": "static.court.lalibobi.online",
+                    "port": 443,
+                    "version": 2
+                  },
+                  "streamSettings": {
+                    "network": "hysteria",
+                    "security": "tls",
+                    "hysteriaSettings": {"auth": "hy2-secret", "version": 2},
+                    "tlsSettings": {
+                      "alpn": ["h3"],
+                      "fingerprint": "firefox",
+                      "serverName": "static.court.lalibobi.online"
+                    }
+                  },
+                  "tag": "proxy"
+                },
+                {"protocol": "freedom", "tag": "direct"},
+                {"protocol": "blackhole", "tag": "block"}
+              ],
+              "routing": {"domainStrategy": "AsIs"}
+            }
+        """.trimIndent()
+
+        val parsed = parser.parse(sample, providerTag = "hysteria-provider")
+
+        assertEquals(1, parsed.size)
+        val config = parsed.single()
+        assertEquals("hysteria2", config.transport)
+        assertEquals("static.court.lalibobi.online", config.address)
+        assertEquals(443, config.port)
+        assertEquals("hy2-secret", config.password)
+        assertEquals("hy2-secret", config.uuid)
+        assertEquals("static.court.lalibobi.online", config.sni)
+        assertEquals("firefox", config.fingerprint)
+        assertEquals(listOf("h3"), config.alpn)
+        assertEquals("hysteria-provider", config.providerTag)
+        assertTrue(config.requiresSingBox())
+    }
+
+    @Test
+    fun doesNotTreatLegacyXrayHysteriaV1AsHysteria2() {
+        val sample = """
+            {
+              "protocol": "hysteria",
+              "settings": {"address": "legacy.example", "port": 443, "version": 1},
+              "streamSettings": {
+                "hysteriaSettings": {"auth": "legacy-secret", "version": 1}
+              }
+            }
+        """.trimIndent()
+
+        assertTrue(parser.parse(sample).isEmpty())
+    }
+
 }
