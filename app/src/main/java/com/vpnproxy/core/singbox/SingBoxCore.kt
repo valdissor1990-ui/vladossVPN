@@ -139,7 +139,7 @@ class SingBoxCore(
                 Log.e(TAG, "writeDebugMessage could not append to LogCollector; callback suppressed", t)
             }
             try {
-                Log.d(TAG, line)
+                Log.d(TAG, safeLine)
             } catch (_: Throwable) {
                 // Android logging must not escape the native callback either.
             }
