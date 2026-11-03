@@ -110,10 +110,17 @@ class LogExporter @Inject constructor(
             .takeLast(2_000)
             .joinToString("\n") { entry -> SensitiveMasker.mask(entry.toFormattedString(maskSensitive = true)) }
         // Preserve callback lines even when app.log has not flushed or has rotated.
-        val nativeText = listOf(nativeFileText, nativeFromAppLog, nativeFromMemory)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .joinToString("\n")
+        // Prefer the dedicated native callback file when available. The same callback
+        // lines are also present in app.log and memory; concatenating all three sources
+        // would triple-count them. Fall back to the other sources on older builds.
+        val nativeText = if (nativeFileText.isNotBlank()) {
+            nativeFileText
+        } else {
+            listOf(nativeFromAppLog, nativeFromMemory)
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString("\n")
+        }
         return Sources(
             appText = appText,
             nativeText = nativeText.trimEnd(),
