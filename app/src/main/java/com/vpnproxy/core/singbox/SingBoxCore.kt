@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogCollectorHolder
+import com.vpnproxy.logging.SensitiveMasker
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.Libbox
@@ -43,6 +44,7 @@ class SingBoxCore(
         private const val PORT_RELEASE_TIMEOUT_MS = 12_000L
         private const val PORT_POLL_INTERVAL_MS = 150L
         private const val MIN_STOP_START_COOLDOWN_MS = 1_800L
+        private const val MAX_NATIVE_LOG_BYTES = 8L * 1024L * 1024L
         @Volatile private var setupComplete = false
 
         @Synchronized
@@ -54,7 +56,8 @@ class SingBoxCore(
                 workingPath = working.absolutePath
                 tempPath = context.cacheDir.absolutePath
                 logMaxLines = 3000
-                debug = com.vpnproxy.BuildConfig.DEBUG
+                // Keep native debug callbacks enabled in release builds too; the app persists a sanitized, bounded copy for diagnostics.
+                debug = true
                 appVersion = runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
                 }.getOrDefault("1")
@@ -86,6 +89,7 @@ class SingBoxCore(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineName("SingBoxCoreLifecycle")
     )
     private val lifecycleMutex = Mutex()
+    private val nativeLogLock = Any()
     private val lifecycleGeneration = LifecycleGenerationGate()
 
     @Volatile private var currentServer: CommandServer? = null
@@ -120,17 +124,23 @@ class SingBoxCore(
 
         override fun writeDebugMessage(message: String?) {
             val line = message.orEmpty()
-            // This callback crosses JNI; collector/logcat failures must never escape into libbox.
+            if (line.isBlank()) return
+            // JNI callbacks must never throw back into libbox. Persist a sanitized copy
+            // independently of LogCollector so native diagnostics survive buffer rotation,
+            // process recreation, and log export in release as well as debug builds.
+            val safeLine = SensitiveMasker.mask("[LIBBOX] $line")
+            runCatching { appendNativeLogLine(safeLine) }
+                .onFailure { Log.e(TAG, "Could not persist native callback line", it) }
             try {
-                logCollector?.debug("LIBBOX", "[LIBBOX] $line")
+                logCollector?.debug("LIBBOX", safeLine)
                 if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
-                    logCollector?.error("LIBBOX", "[LIBBOX] exact handshake failure: $line")
+                    logCollector?.error("LIBBOX", "exact handshake failure: $safeLine")
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "writeDebugMessage could not append to LogCollector; callback suppressed", t)
             }
             try {
-                Log.d(TAG, line)
+                Log.d(TAG, safeLine)
             } catch (_: Throwable) {
                 // Android logging must not escape the native callback either.
             }
@@ -190,6 +200,24 @@ class SingBoxCore(
     /** Legacy source-compatible wrapper; lifecycle serialization is owned here. */
     fun stop() {
         stopBlocking().getOrThrow()
+    }
+
+    /** Thread-safe, bounded persistence for the native debug callback in every build. */
+    private fun appendNativeLogLine(line: String) {
+        val directory = File(context.filesDir, "logs")
+        if (!directory.exists() && !directory.mkdirs()) return
+        val file = File(directory, "libbox.log")
+        synchronized(nativeLogLock) {
+            if (file.exists() && file.length() >= MAX_NATIVE_LOG_BYTES) {
+                val previous = File(directory, "libbox.log.1")
+                if (previous.exists()) previous.delete()
+                if (!file.renameTo(previous)) {
+                    // Keep logging if rotation fails, but don't allow unbounded growth.
+                    if (file.length() >= MAX_NATIVE_LOG_BYTES * 2) file.writeText("", Charsets.UTF_8)
+                }
+            }
+            file.appendText(line + "\n", Charsets.UTF_8)
+        }
     }
 
     /**
