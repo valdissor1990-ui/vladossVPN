@@ -479,9 +479,54 @@ class SubscriptionParser @Inject constructor(
                 return parsed.takeIf { it.isValid() }
             }
 
-            // Legacy V2Ray/Xray JSON schema.
+            // Legacy Xray Hysteria v2 schema. Xray calls the protocol "hysteria",
+            // while Sing-box uses the outbound type "hysteria2".
             val protocol = obj["protocol"]?.jsonPrimitive?.content ?: return null
-            if (protocol != "vless") return null
+            if (protocol.equals("hysteria", ignoreCase = true)) {
+                val settings = obj["settings"]?.jsonObject ?: return null
+                val stream = obj["streamSettings"]?.jsonObject
+                val hysteriaSettings = stream?.get("hysteriaSettings")?.jsonObject
+                val version = settings["version"]?.jsonPrimitive?.intOrNull
+                    ?: hysteriaSettings?.get("version")?.jsonPrimitive?.intOrNull
+                if (version != 2) {
+                    logCollector.warn(TAG, "Unsupported legacy Xray Hysteria version skipped: version=$version")
+                    return null
+                }
+                val address = settings["address"]?.jsonPrimitive?.content
+                    ?: settings["server"]?.jsonPrimitive?.content ?: return null
+                val port = settings["port"]?.jsonPrimitive?.intOrNull ?: return null
+                val auth = hysteriaSettings?.get("auth")?.jsonPrimitive?.content
+                    ?: settings["auth"]?.jsonPrimitive?.content
+                    ?: settings["password"]?.jsonPrimitive?.content
+                    ?: return null
+                val tls = stream?.get("tlsSettings")?.jsonObject
+                val parsed = ParsedConfig(
+                    uuid = auth,
+                    address = address,
+                    port = port,
+                    transport = "hysteria2",
+                    security = "tls",
+                    sni = tls?.get("serverName")?.jsonPrimitive?.content
+                        ?: tls?.get("server_name")?.jsonPrimitive?.content,
+                    path = null,
+                    host = null,
+                    mode = null,
+                    fingerprint = tls?.get("fingerprint")?.jsonPrimitive?.content,
+                    publicKey = null,
+                    shortId = null,
+                    flow = null,
+                    name = obj["tag"]?.jsonPrimitive?.content ?: address + ":" + port,
+                    providerTag = providerTag,
+                    password = auth,
+                    insecure = tls?.get("allowInsecure")?.jsonPrimitive?.booleanOrNull
+                        ?: tls?.get("insecure")?.jsonPrimitive?.booleanOrNull ?: false,
+                    alpn = tls?.get("alpn")?.jsonArray
+                        ?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
+                        ?: emptyList()
+                )
+                return parsed.takeIf { it.isValid() }
+            }
+            if (!protocol.equals("vless", ignoreCase = true)) return null
             val settings = obj["settings"]?.jsonObject ?: return null
             val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
             val address = vnext["address"]?.jsonPrimitive?.content ?: return null
