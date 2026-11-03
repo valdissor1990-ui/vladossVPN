@@ -56,7 +56,7 @@ class SingBoxCore(
                 workingPath = working.absolutePath
                 tempPath = context.cacheDir.absolutePath
                 logMaxLines = 3000
-                debug = com.vpnproxy.BuildConfig.DEBUG
+                // Keep native debug callbacks enabled in release builds too; the app persists a sanitized, bounded copy for diagnostics.\n                debug = true
                 appVersion = runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
                 }.getOrDefault("1")
