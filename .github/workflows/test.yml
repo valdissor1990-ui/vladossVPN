@@ -61,7 +61,7 @@ jobs:
           ./scripts/download_libbox.sh
           ls -la app/libs/
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         if: github.ref == 'refs/heads/chore/open-source-license-compliance'
         with:
           go-version: '1.26.8'
