@@ -436,7 +436,6 @@ class HomeViewModel @Inject constructor(
         val server = _uiState.value.pendingRecommendation ?: return
         val traceId = TraceId.newId()
         activeTraceId = traceId
-        manuallySelectedServer = server
         permissionFlowInProgress = true
         _uiState.value = _uiState.value.copy(
             pendingRecommendation = null,
