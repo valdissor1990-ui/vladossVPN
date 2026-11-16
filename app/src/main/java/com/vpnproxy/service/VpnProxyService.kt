@@ -840,19 +840,28 @@ class VpnProxyService : VpnService() {
         // scope because the service scope is cancelled below and onDestroy must not block
         // Android's main thread while waiting for a native core transition.
         val controllerForTeardown = lifecycleController
+        // Block any new preflight immediately; the native stop completes asynchronously.
+        _isCoreTransitioning.value = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            var stopSucceeded = controllerForTeardown == null
             try {
                 controllerForTeardown?.withLifecycleLock {
                     CorePortLease.mutex.withLock {
                         controllerForTeardown.stopCore()
                     }
                 }
+                stopSucceeded = true
             } catch (t: Throwable) {
-                Log.e(TAG, "onDestroy serialized stopCore failed", t)
+                // Fail closed. If native shutdown failed, do not advertise the shared
+                // core/port as idle: a later probe or service start could collide with it.
+                Log.e(TAG, "onDestroy serialized stopCore failed; keeping core state blocked", t)
             } finally {
-                // Keep preflight blocked until the native core has actually stopped.
-                _isRunning.value = false
-                _isCoreTransitioning.value = false
+                if (stopSucceeded) {
+                    _isRunning.value = false
+                    _isCoreTransitioning.value = false
+                } else {
+                    _isCoreTransitioning.value = true
+                }
             }
         }
         scope.cancel()
