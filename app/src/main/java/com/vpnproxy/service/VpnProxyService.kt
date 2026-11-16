@@ -820,6 +820,28 @@ class VpnProxyService : VpnService() {
         vpnJob = null
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
+
+        // Mirror the normal stop path during Android-driven service teardown. These
+        // components own independent jobs/scopes, so cancelling only this service's
+        // scope would leave probes, rankings or traffic polling alive after onDestroy.
+        try {
+            stopPassiveProbe()
+            autoSwitcher.clearDiagnosticFreeze()
+            autoSwitcher.cancelBackgroundWork("VPN service destroyed")
+            serverScanner.cancelBackgroundWork("VPN service destroyed")
+            trafficCollector.stop()
+        } catch (t: Throwable) {
+            Log.e(TAG, "onDestroy background-work cleanup failed", t)
+        }
+
+        // Invalidate and stop any temporary profile-probe core before shutting down
+        // the service core. DeepProbeEngine.cancel() is idempotent and advances its
+        // generation so an in-flight scan cannot publish stale results.
+        try {
+            deepProbeEngine.cancel()
+        } catch (t: Throwable) {
+            Log.e(TAG, "onDestroy DeepProbe cancellation failed", t)
+        }
         try {
             lifecycleController?.stopCore()
         } catch (t: Throwable) {
