@@ -46,7 +46,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val raw = uri.removePrefix("ss://")
+            val raw = uri.substringAfter("://")
             val hashIdx = raw.indexOf('#')
             val name = if (hashIdx >= 0) {
                 decodeFragmentSafely(raw.substring(hashIdx + 1))
@@ -135,7 +135,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val b64 = uri.removePrefix("vmess://")
+            val b64 = uri.substringAfter("://")
             val jsonText = String(
                 Base64.decode(b64, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP)
             )
