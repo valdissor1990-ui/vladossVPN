@@ -226,7 +226,7 @@ class SubscriptionParser @Inject constructor(
                 alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
                 obfsType = params["obfs"] ?: params["obfs-type"],
                 obfsPassword = params["obfs-password"],
-                pinSHA256 = params["pinSHA256"] ?: params["pin_sha256"]
+                pinSHA256 = params["pinsha256"] ?: params["pin_sha256"]
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
@@ -257,8 +257,8 @@ class SubscriptionParser @Inject constructor(
                 password = password,
                 insecure = params["insecure"].isTruthy(),
                 alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
-                pinSHA256 = params["pinSHA256"] ?: params["pin_sha256"],
-                congestionControl = (params["congestion_control"] ?: params["congestionControl"] ?: "bbr")
+                pinSHA256 = params["pinsha256"] ?: params["pin_sha256"],
+                congestionControl = (params["congestion_control"] ?: params["congestioncontrol"] ?: "bbr")
                     .takeIf { it in setOf("bbr", "cubic", "new_reno") } ?: "bbr"
             )
             config.takeIf { it.isValid() }
@@ -280,6 +280,14 @@ class SubscriptionParser @Inject constructor(
                 val key = if (separator >= 0) part.substring(0, separator) else part
                 val value = if (separator >= 0) part.substring(separator + 1) else ""
                 decodeUriComponent(key) to decodeUriComponent(value)
+            }
+            // Provider implementations differ in the capitalization of query keys
+            // (notably serviceName, publicKey and shortId). Keep original spellings
+            // and add normalized aliases so existing lookups accept either form.
+            .let { decoded ->
+                decoded + decoded.entries.associate { (key, value) ->
+                    key.lowercase(java.util.Locale.ROOT) to value
+                }
             }
 
     /**
@@ -334,7 +342,7 @@ class SubscriptionParser @Inject constructor(
             "sessionIdPlacement", "session_id_placement"
         )
         if (normalized.keys.none { it in placementKeys }) {
-            queryParams["sessionIDPlacement"]?.takeIf { it.isNotBlank() }?.let {
+            queryParams["sessionidplacement"]?.takeIf { it.isNotBlank() }?.let {
                 normalized["sessionIDPlacement"] = JsonPrimitive(it)
             }
         }
@@ -342,7 +350,7 @@ class SubscriptionParser @Inject constructor(
             "session_key", "sessionKey", "sessionIDKey", "sessionIdKey", "session_id_key"
         )
         if (normalized.keys.none { it in sessionKeyKeys }) {
-            queryParams["sessionIDKey"]?.takeIf { it.isNotBlank() }?.let {
+            queryParams["sessionidkey"]?.takeIf { it.isNotBlank() }?.let {
                 normalized["sessionIDKey"] = JsonPrimitive(it)
             }
         }
@@ -358,15 +366,15 @@ class SubscriptionParser @Inject constructor(
             val params = parseUriQuery(parsed.rawQuery)
             val transport = (params["type"] ?: params["transport"] ?: "tcp").lowercase()
             val security = (params["security"] ?: "none").lowercase()
-            val sni = params["sni"] ?: params["serverName"]
+            val sni = params["sni"] ?: params["servername"]
             // VLESS gRPC carries its service path in serviceName/authority.
             // ParsedConfig.path is consumed as Sing-box's service_name by the builder.
-            val grpcServiceName = params["serviceName"] ?: params["service_name"] ?: params["servicename"] ?: params["authority"]
+            val grpcServiceName = params["servicename"] ?: params["service_name"] ?: params["servicename"] ?: params["authority"]
             val path = if (transport == "grpc") grpcServiceName ?: params["path"] else params["path"]
             val host = params["host"]
             val fingerprint = params["fp"] ?: params["fingerprint"]
-            val publicKey = params["pbk"] ?: params["publicKey"]
-            val shortId = params["sid"] ?: params["shortId"] ?: ""
+            val publicKey = params["pbk"] ?: params["publickey"]
+            val shortId = params["sid"] ?: params["shortid"] ?: ""
             val rawFlow = params["flow"]
             val rawMode = params["mode"]
             val mode = if (transport == "xhttp") rawMode?.takeIf { it.isNotBlank() } ?: "auto" else rawMode
@@ -379,7 +387,7 @@ class SubscriptionParser @Inject constructor(
                 fingerprint = fingerprint, publicKey = publicKey,
                 shortId = shortId, flow = flow, name = name,
                 providerTag = providerTag,
-                insecure = (params["allowInsecure"] ?: params["insecure"]).isTruthy(),
+                insecure = (params["allowinsecure"] ?: params["insecure"]).isTruthy(),
                 alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
                 extra = if (transport.equals("xhttp", ignoreCase = true)) normalizeXhttpExtra(params["extra"], params) else null
             )
