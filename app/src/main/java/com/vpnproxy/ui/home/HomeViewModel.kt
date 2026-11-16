@@ -444,6 +444,9 @@ class HomeViewModel @Inject constructor(
         // Re-enter the normal connection path so Android VPN permission is requested
         // when needed and the selected profile is revalidated on the current network.
         manuallySelectedServer = server
+        // This is a second, explicit confirmation after preflight, not a duplicate
+        // tap on the original Connect button; do not let the click debounce swallow it.
+        lastConnectClickMs = 0L
         logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}; starting normal permission and preflight flow"))
         connect()
     }
