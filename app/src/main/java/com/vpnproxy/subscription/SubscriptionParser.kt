@@ -132,11 +132,8 @@ class SubscriptionParser @Inject constructor(
             if (yamlResult.isNotEmpty()) return yamlResult
         }
 
-        if (
-            trimmed.contains("vless://") || trimmed.contains("hysteria2://") || trimmed.contains("hy2://") ||
-            trimmed.contains("tuic://") || trimmed.contains("ss://") || trimmed.contains("vmess://") ||
-            trimmed.contains("trojan://") || trimmed.contains("socks://") || trimmed.contains("socks5://")
-        ) {
+        if (containsSupportedUri(trimmed)) {
+            // Keep scheme detection case-insensitive, matching parseVlessLines().
             return parseVlessLines(trimmed, providerTag)
         }
 
