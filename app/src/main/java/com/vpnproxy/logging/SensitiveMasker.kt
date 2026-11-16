@@ -26,13 +26,13 @@ object SensitiveMasker {
 
     /** Short ID in URI query or JSON-like log output. */
     private val SHORT_ID_REGEX = Regex(
-        """(?:^|[^A-Za-z0-9_])["']?(?:sid|shortId)["']?\s*[:=]\s*["']?([a-fA-F0-9]{6,})""",
+        """(?:^|[^A-Za-z0-9_])["']?(?:sid|shortId|short_id)["']?\s*[:=]\s*["']?([a-fA-F0-9]{6,})""",
         RegexOption.IGNORE_CASE
     )
 
     /** Credential-like key/value pairs, including quoted JSON keys and bearer tokens. */
     private val SECRET_PARAMETER_REGEX = Regex(
-        """(?i)["']?(password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
+        """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
     /** token=XXX / token: XXX. */
