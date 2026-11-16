@@ -834,18 +834,22 @@ class VpnProxyService : VpnService() {
             Log.e(TAG, "onDestroy background-work cleanup failed", t)
         }
 
-        // Invalidate and stop any temporary profile-probe core before shutting down
-        // the service core. DeepProbeEngine.cancel() is idempotent and advances its
-        // generation so an in-flight scan cannot publish stale results.
-        try {
-            deepProbeEngine.cancel()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy DeepProbe cancellation failed", t)
-        }
-        try {
-            lifecycleController?.stopCore()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy stopCore failed", t)
+        // ServerScanner.cancelBackgroundWork() above also invalidates DeepProbeEngine.
+        // Serialize the final core stop with the same lock order as the normal stop path:
+        // lifecycle lock first, then the shared proxy-port lease. Use an independent IO
+        // scope because the service scope is cancelled below and onDestroy must not block
+        // Android's main thread while waiting for a native core transition.
+        val controllerForTeardown = lifecycleController
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                controllerForTeardown?.withLifecycleLock {
+                    CorePortLease.mutex.withLock {
+                        controllerForTeardown.stopCore()
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "onDestroy serialized stopCore failed", t)
+            }
         }
         _isRunning.value = false
         _isCoreTransitioning.value = false
