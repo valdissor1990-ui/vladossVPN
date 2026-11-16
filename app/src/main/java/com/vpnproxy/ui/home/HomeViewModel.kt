@@ -433,23 +433,19 @@ class HomeViewModel @Inject constructor(
     }
 
     fun confirmRecommendation() {
+        if (_uiState.value.isBusy || !_uiState.value.isRecommendationMode) return
         val server = _uiState.value.pendingRecommendation ?: return
-        val traceId = TraceId.newId()
-        activeTraceId = traceId
-        permissionFlowInProgress = true
         _uiState.value = _uiState.value.copy(
             pendingRecommendation = null,
-            connectionState = ConnectionUiState.CONNECTING,
-            isBusy = true,
             currentServerName = server.config.name,
             currentRtt = server.latencyMs,
             lastErrorMessage = null
         )
-        armConnectingWatchdog()
-        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
-        connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
-        ensureServiceRunning()
-        logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}"))
+        // Re-enter the normal connection path so Android VPN permission is requested
+        // when needed and the selected profile is revalidated on the current network.
+        manuallySelectedServer = server
+        logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}; starting normal permission and preflight flow"))
+        connect()
     }
 
     private fun connect() {
@@ -614,6 +610,7 @@ class HomeViewModel @Inject constructor(
                 }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
+                if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 pendingRankingConfigs = emptyList()
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
