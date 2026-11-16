@@ -124,7 +124,7 @@ internal object ExtraUriParsers {
                 password = password
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse ss URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse ss URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -168,7 +168,7 @@ internal object ExtraUriParsers {
                 providerTag = providerTag
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -210,7 +210,7 @@ internal object ExtraUriParsers {
                 insecure = query["allowInsecure"] == "1" || query["insecure"] == "1"
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -248,7 +248,7 @@ internal object ExtraUriParsers {
                 password = pass
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse socks URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse socks URI: ${e.javaClass.simpleName}")
             null
         }
     }
