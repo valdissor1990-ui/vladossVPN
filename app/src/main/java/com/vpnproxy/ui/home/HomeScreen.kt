@@ -437,11 +437,12 @@ fun HomeScreen(
                         )
                     }
                     Text(
-                        "Успешность проверок: ${(recommended.successRate * 100).toInt()}%",
-                        color = OnDarkSecondary
+                        "Сервер прошёл проверку доступности в текущей сети. Это не гарантирует одинаковую скорость в течение всего подключения.",
+                        color = OnDarkSecondary,
+                        style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        "Проверка выполнена в текущей сети. Скорость зависит от нагрузки и может меняться. Подключение начнётся только после вашего подтверждения.",
+                        "Подключение начнётся только после вашего подтверждения.",
                         color = OnDarkSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
