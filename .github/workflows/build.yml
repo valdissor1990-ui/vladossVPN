@@ -58,6 +58,19 @@ jobs:
       - name: Compile Direct Debug Kotlin
         run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
 
+      - name: Run unit tests
+        run: ./gradlew :app:testDirectDebugUnitTest --stacktrace
+
+      - name: Generate Gradle dependency license report
+        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
+
+      - name: Upload dependency license report
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-license-report-pr
+          path: app/build/reports/dependency-license/**
+          if-no-files-found: error
+
       - name: Clean and build Direct Debug APK
         run: ./gradlew clean :app:assembleDirectDebug --stacktrace
 
