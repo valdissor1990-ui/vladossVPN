@@ -430,8 +430,18 @@ fun HomeScreen(
                         else "Доступность подтверждена",
                         color = OnDarkSecondary
                     )
+                    if (recommended.speedMbps > 0f) {
+                        Text(
+                            "Измеренная скорость: ${recommended.speedMbps.toInt()} Мбит/с",
+                            color = OnDarkSecondary
+                        )
+                    }
                     Text(
-                        "Проверка выполнена в текущей сети. Подключение начнётся только после вашего подтверждения.",
+                        "Успешность проверок: ${(recommended.successRate * 100).toInt()}%",
+                        color = OnDarkSecondary
+                    )
+                    Text(
+                        "Проверка выполнена в текущей сети. Скорость зависит от нагрузки и может меняться. Подключение начнётся только после вашего подтверждения.",
                         color = OnDarkSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
