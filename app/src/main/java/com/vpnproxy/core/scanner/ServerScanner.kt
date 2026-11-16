@@ -384,7 +384,8 @@ class ServerScanner @Inject constructor(
 
     private fun restoreCachedResults(configs: List<ParsedConfig>) {
         val savedAt = scanCache().getLong("saved_at", 0L)
-        val cacheFresh = savedAt > 0L && System.currentTimeMillis() - savedAt <= scanCacheMaxAgeMs
+        val cacheAgeMs = System.currentTimeMillis() - savedAt
+        val cacheFresh = savedAt > 0L && cacheAgeMs in 0..scanCacheMaxAgeMs
         val restoredByKey = linkedMapOf<String, ScoredServer>()
         if (cacheFresh) {
             configs.forEach { config ->
@@ -399,7 +400,11 @@ class ServerScanner @Inject constructor(
                 )
             }
         }
+        // Keep the exact set loaded from disk separate from the older success-history
+        // hints below. Only a complete, recent disk snapshot can be reused for preflight.
+        val diskCachedKeys = restoredByKey.keys.toSet()
         val bucket = autoSwitcher.currentNetworkBucket()
+        val requestedKeys = configs.map(::scanKey).toSet()
         val now = System.currentTimeMillis()
         val historyTtlMs = 7L * 24 * 60 * 60 * 1000
         configs.forEach { config ->
@@ -412,6 +417,15 @@ class ServerScanner @Inject constructor(
         }
         if (restoredByKey.isNotEmpty()) {
             _scannedServers.value = sortForCurrentNetwork(restoredByKey.values.toList())
+            val hasReachableDiskResult = restoredByKey.values.any {
+                it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE
+            }
+            if (cacheFresh && diskCachedKeys == requestedKeys && hasReachableDiskResult) {
+                scannedAtMs = savedAt
+                scannedConfigKeys = requestedKeys
+                scannedNetworkBucket = bucket
+                logCollector.info(TAG, "Complete fresh scan cache is eligible for connection preflight reuse: profiles=${requestedKeys.size}; ageMs=$cacheAgeMs; network=$bucket")
+            }
             logCollector.info(TAG, "Restored ${restoredByKey.size} cached/history server results (cacheFresh=$cacheFresh)")
         }
     }
