@@ -318,12 +318,12 @@ class SubscriptionParser @Inject constructor(
                     is JsonObject -> element
                     is JsonNull -> JsonObject(emptyMap())
                     else -> {
-                        logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
+                        logCollector.warn(TAG, "XHTTP extra rejected: expected JSON object, chars=${trimmed.length}")
                         return null
                     }
                 }
             } catch (e: Exception) {
-                logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.message}")
+                logCollector.warn(TAG, "Invalid XHTTP extra JSON: ${e.javaClass.simpleName}")
                 return null
             }
         }
@@ -389,7 +389,7 @@ class SubscriptionParser @Inject constructor(
             }
             config
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse vless URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse vless URI: ${e.javaClass.simpleName}")
             null
         }
     }
