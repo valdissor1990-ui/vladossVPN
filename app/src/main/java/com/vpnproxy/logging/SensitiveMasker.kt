@@ -24,15 +24,15 @@ object SensitiveMasker {
         RegexOption.IGNORE_CASE
     )
 
-    /** Short ID in both common URI and JSON spellings. */
+    /** Short ID in URI query or JSON-like log output. */
     private val SHORT_ID_REGEX = Regex(
-        """(?:^|[^A-Za-z0-9_])(?:sid|shortId)\s*=\s*([a-fA-F0-9]{6,})""",
+        """(?:^|[^A-Za-z0-9_])["']?(?:sid|shortId)["']?\s*[:=]\s*["']?([a-fA-F0-9]{6,})""",
         RegexOption.IGNORE_CASE
     )
 
-    /** Credential-like key/value pairs, including bearer tokens. */
+    /** Credential-like key/value pairs, including quoted JSON keys and bearer tokens. */
     private val SECRET_PARAMETER_REGEX = Regex(
-        """(?i)\b(password|passwd|secret|access_token|refresh_token|client_secret|private_key|authorization)\s*([=:]\s*|\s+)(?:"([^"]*)"|\'([^\']*)\'|([^\s,;&}]+))"""
+        """(?i)["']?(password|passwd|secret|access_token|refresh_token|client_secret|private_key|authorization)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
     /** token=XXX / token: XXX. */
