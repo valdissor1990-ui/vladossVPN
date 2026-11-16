@@ -230,7 +230,7 @@ class SubscriptionParser @Inject constructor(
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse hysteria2 URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse hysteria2 URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -263,7 +263,7 @@ class SubscriptionParser @Inject constructor(
             )
             config.takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse tuic URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse tuic URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -431,7 +431,7 @@ class SubscriptionParser @Inject constructor(
             logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size} schemaKinds=$schemaKinds supportedSchema=sing-box_outbound_or_legacy_xray_vless")
             configs
         } catch (e: Exception) {
-            logCollector.warn(TAG, "JSON parse failed: ${e.message}")
+            logCollector.warn(TAG, "JSON parse failed: ${e.javaClass.simpleName}")
             emptyList()
         }
     }
@@ -609,7 +609,7 @@ class SubscriptionParser @Inject constructor(
                 } catch (_: Exception) { null }
             }
         } catch (e: Exception) {
-            logCollector.warn(TAG, "Clash YAML parse failed: ${e.message}")
+            logCollector.warn(TAG, "Clash YAML parse failed: ${e.javaClass.simpleName}")
             emptyList()
         }
     }
