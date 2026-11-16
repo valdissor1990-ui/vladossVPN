@@ -188,6 +188,10 @@ internal object ExtraUriParsers {
                 if (i < 0) it to ""
                 else URLDecoder.decode(it.substring(0, i), "UTF-8") to
                     URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            }.let { decoded ->
+                decoded + decoded.entries.associate { (key, value) ->
+                    key.lowercase(java.util.Locale.ROOT) to value
+                }
             }
             val name = rawFragment?.let(::decodeFragmentSafely) ?: "Trojan $host"
             SubscriptionParser.ParsedConfig(
@@ -207,7 +211,7 @@ internal object ExtraUriParsers {
                 name = name,
                 providerTag = providerTag,
                 password = password,
-                insecure = query["allowInsecure"] == "1" || query["insecure"] == "1"
+                insecure = query["allowinsecure"] == "1" || query["insecure"] == "1"
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
             logCollector.debug(TAG, "Failed to parse trojan URI: ${e.message}")
