@@ -557,7 +557,9 @@ class HomeViewModel @Inject constructor(
                 }
                 val verifiedServers = reachable
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-                    .sortedBy { it.latencyMs }
+                    // ScoredServer ordering combines latency, measured throughput and
+                    // observed probe success. Sorting by RTT alone would discard that model.
+                    .sorted()
                 val verifiedConfigs = verifiedServers.map { it.config }
                 val manualFallback = if (verifiedConfigs.isEmpty()) {
                     manuallySelectedServer?.takeIf { manual ->
