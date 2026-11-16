@@ -20,7 +20,7 @@ object SensitiveMasker {
 
     /** Reality public key in URI/query or JSON-like log output. */
     private val REALITY_KEY_REGEX = Regex(
-        """(?:pbk\s*=\s*|publicKey["\']?\s*[:=]\s*["\']?)([A-Za-z0-9_\-]+)""",
+        """(?:pbk|publicKey|public_key)["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]+)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -32,7 +32,7 @@ object SensitiveMasker {
 
     /** Credential-like key/value pairs, including quoted JSON keys and bearer tokens. */
     private val SECRET_PARAMETER_REGEX = Regex(
-        """(?i)["']?(password|passwd|secret|access_token|refresh_token|client_secret|private_key|authorization)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
+        """(?i)["']?(password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
     /** token=XXX / token: XXX. */
