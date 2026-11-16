@@ -849,10 +849,12 @@ class VpnProxyService : VpnService() {
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "onDestroy serialized stopCore failed", t)
+            } finally {
+                // Keep preflight blocked until the native core has actually stopped.
+                _isRunning.value = false
+                _isCoreTransitioning.value = false
             }
         }
-        _isRunning.value = false
-        _isCoreTransitioning.value = false
         scope.cancel()
         lifecycleController = null
         super.onDestroy()
