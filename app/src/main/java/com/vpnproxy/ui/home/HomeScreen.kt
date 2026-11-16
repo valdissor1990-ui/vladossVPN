@@ -53,6 +53,7 @@ fun HomeScreen(
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     var subscriptionMenuExpanded by remember { mutableStateOf(false) }
+    var modeMenuExpanded by remember { mutableStateOf(false) }
 
     var showServers by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
@@ -230,7 +231,7 @@ fun HomeScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 val selectedName = when {
-                                    !uiState.isAutomaticMode -> "Ручной выбор"
+                                    uiState.selectionMode == "manual" -> "Ручной выбор"
                                     uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID -> "Все подписки"
                                     else -> subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
                                         ?.let { "Только: $it" }
@@ -303,21 +304,59 @@ fun HomeScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (uiState.isAutomaticMode) "Автоматический режим" else "Ручной выбор сервера",
+                                text = when (uiState.selectionMode) {
+                                    "automatic" -> "Автоматический режим"
+                                    "manual" -> "Ручной выбор сервера"
+                                    else -> "Рекомендация сервера"
+                                },
                                 style = MaterialTheme.typography.titleSmall,
                                 color = OnDark
                             )
                             Text(
-                                text = if (uiState.isAutomaticMode) "Приложение выберет сервер само" else "Выберите сервер в списке ниже",
+                                text = when (uiState.selectionMode) {
+                                    "automatic" -> "Приложение выбирает сервер самостоятельно"
+                                    "manual" -> "Вы выбираете сервер из списка"
+                                    else -> "Приложение проверит серверы и предложит лучший"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = OnDarkSecondary
                             )
                         }
-                        Switch(
-                            checked = uiState.isAutomaticMode,
-                            onCheckedChange = viewModel::setAutomaticMode,
-                            enabled = !uiState.isBusy
-                        )
+                        Box {
+                            TextButton(
+                                onClick = { modeMenuExpanded = true },
+                                enabled = !uiState.isBusy
+                            ) {
+                                Text("Изменить")
+                                Icon(Icons.Default.ExpandMore, contentDescription = null)
+                            }
+                            DropdownMenu(
+                                expanded = modeMenuExpanded,
+                                onDismissRequest = { modeMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Рекомендовать сервер") },
+                                    onClick = {
+                                        viewModel.setSelectionMode("recommend")
+                                        modeMenuExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Автоматический выбор") },
+                                    onClick = {
+                                        viewModel.setSelectionMode("automatic")
+                                        modeMenuExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Ручной выбор") },
+                                    onClick = {
+                                        viewModel.setSelectionMode("manual")
+                                        modeMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -375,6 +414,40 @@ fun HomeScreen(
             viewModel.onServerSelected(server)
             pendingSelection = null
         }
+    }
+
+    uiState.pendingRecommendation?.let { recommended ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissRecommendation,
+            containerColor = CosmosSurface,
+            title = { Text("Нашли подходящий сервер", color = OnDark) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(recommended.config.name, color = OnDark, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = if (recommended.latencyMs != Long.MAX_VALUE)
+                            "Задержка: ${recommended.latencyMs} мс"
+                        else "Доступность подтверждена",
+                        color = OnDarkSecondary
+                    )
+                    Text(
+                        "Проверка выполнена в текущей сети. Подключение начнётся только после вашего подтверждения.",
+                        color = OnDarkSecondary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = viewModel::confirmRecommendation) {
+                    Text("Подключиться")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissRecommendation) {
+                    Text("Не сейчас")
+                }
+            }
+        )
     }
 
     if (showServers) {
