@@ -65,6 +65,10 @@ class HomeViewModel @Inject constructor(
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 80_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
+        private const val KEY_SELECTION_MODE = "server_selection_mode"
+        private const val MODE_RECOMMEND = "recommend"
+        private const val MODE_AUTOMATIC = "automatic"
+        private const val MODE_MANUAL = "manual"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
     }
@@ -80,7 +84,10 @@ class HomeViewModel @Inject constructor(
         val isScanningServers: Boolean = false,
         val scannedAvailableServers: Int = 0,
         val scanTotalServers: Int = 0,
-        val isAutomaticMode: Boolean = true,
+        val isAutomaticMode: Boolean = false,
+        val isRecommendationMode: Boolean = true,
+        val selectionMode: String = MODE_RECOMMEND,
+        val pendingRecommendation: ScoringEngine.ScoredServer? = null,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
         val lastErrorMessage: String? = null,
         val dualPathEnabled: Boolean = false,
@@ -88,9 +95,23 @@ class HomeViewModel @Inject constructor(
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+    private fun readSelectionMode(): String {
+        val saved = modePreferences.getString(KEY_SELECTION_MODE, null)
+        if (saved == MODE_RECOMMEND || saved == MODE_AUTOMATIC || saved == MODE_MANUAL) return saved!!
+        // Existing automatic users move to recommendation mode; users who explicitly
+        // chose manual selection keep that preference.
+        val migrated = if (modePreferences.contains(KEY_AUTOMATIC_MODE) &&
+            !modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true)
+        ) MODE_MANUAL else MODE_RECOMMEND
+        modePreferences.edit().putString(KEY_SELECTION_MODE, migrated).apply()
+        return migrated
+    }
+    private val initialSelectionMode = readSelectionMode()
     private val _uiState = MutableStateFlow(
         UiState(
-            isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true),
+            isAutomaticMode = initialSelectionMode == MODE_AUTOMATIC,
+            isRecommendationMode = initialSelectionMode == MODE_RECOMMEND,
+            selectionMode = initialSelectionMode,
             selectedSubscriptionId = modePreferences.getString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID)
                 ?: ALL_SUBSCRIPTIONS_ID
         )
@@ -336,7 +357,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
-        if (!_uiState.value.isAutomaticMode) return configs
+        if (_uiState.value.selectionMode == MODE_MANUAL) return configs
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
@@ -346,12 +367,13 @@ class HomeViewModel @Inject constructor(
 
     private fun updateAutoSwitcherProviderScope() {
         val state = _uiState.value
-        val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
+        val scopedSelection = state.selectionMode != MODE_MANUAL && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
         val selectedSubscription = if (scopedSelection) subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId } else null
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
-        autoSwitcher.setManualSelectionMode(!state.isAutomaticMode)
-        connectionCoordinator.setManualSelectionMode(!state.isAutomaticMode)
+        val recommendationOnly = state.isRecommendationMode
+        autoSwitcher.setManualSelectionMode(!state.isAutomaticMode || recommendationOnly)
+        connectionCoordinator.setManualSelectionMode(!state.isAutomaticMode || recommendationOnly)
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
         connectionCoordinator.setProviderScope(providerTag, blocked = blocked)
     }
@@ -385,10 +407,50 @@ class HomeViewModel @Inject constructor(
     }
 
     fun setAutomaticMode(enabled: Boolean) {
-        modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
-        _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
+        setSelectionMode(if (enabled) MODE_AUTOMATIC else MODE_MANUAL)
+    }
+
+    fun setSelectionMode(mode: String) {
+        val normalized = mode.takeIf { it == MODE_RECOMMEND || it == MODE_AUTOMATIC || it == MODE_MANUAL }
+            ?: MODE_RECOMMEND
+        modePreferences.edit()
+            .putString(KEY_SELECTION_MODE, normalized)
+            .putBoolean(KEY_AUTOMATIC_MODE, normalized == MODE_AUTOMATIC)
+            .apply()
+        if (normalized == MODE_RECOMMEND) manuallySelectedServer = null
+        _uiState.value = _uiState.value.copy(
+            selectionMode = normalized,
+            isAutomaticMode = normalized == MODE_AUTOMATIC,
+            isRecommendationMode = normalized == MODE_RECOMMEND,
+            pendingRecommendation = null
+        )
         updateAutoSwitcherProviderScope()
         if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+    }
+
+    fun dismissRecommendation() {
+        _uiState.value = _uiState.value.copy(pendingRecommendation = null)
+    }
+
+    fun confirmRecommendation() {
+        val server = _uiState.value.pendingRecommendation ?: return
+        val traceId = TraceId.newId()
+        activeTraceId = traceId
+        manuallySelectedServer = server
+        permissionFlowInProgress = true
+        _uiState.value = _uiState.value.copy(
+            pendingRecommendation = null,
+            connectionState = ConnectionUiState.CONNECTING,
+            isBusy = true,
+            currentServerName = server.config.name,
+            currentRtt = server.latencyMs,
+            lastErrorMessage = null
+        )
+        armConnectingWatchdog()
+        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
+        connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
+        ensureServiceRunning()
+        logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}"))
     }
 
     private fun connect() {
@@ -523,7 +585,7 @@ class HomeViewModel @Inject constructor(
                     withTimeoutOrNull(5_000L) {
                         ConnectServerSelector.select(
                             configs = verifiedConfigs,
-                            isAutomaticMode = _uiState.value.isAutomaticMode,
+                            isAutomaticMode = _uiState.value.isAutomaticMode || _uiState.value.isRecommendationMode,
                             manuallySelected = manuallySelectedServer,
                             scannedCandidates = verifiedServers,
                             lastServerStore = lastServerStore,
@@ -539,6 +601,18 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
+                if (_uiState.value.isRecommendationMode && manuallySelectedServer == null) {
+                    cancelConnectingWatchdog()
+                    endConnectFlow()
+                    _uiState.value = _uiState.value.copy(
+                        connectionState = ConnectionUiState.DISCONNECTED,
+                        isBusy = false,
+                        pendingRecommendation = selected,
+                        lastErrorMessage = null
+                    )
+                    logCollector.info(TAG, tmsg("Server recommendation is ready; waiting for explicit user confirmation"))
+                    return@launch
+                }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 pendingRankingConfigs = emptyList()
