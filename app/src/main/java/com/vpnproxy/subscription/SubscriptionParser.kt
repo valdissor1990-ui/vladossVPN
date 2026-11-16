@@ -366,7 +366,7 @@ class SubscriptionParser @Inject constructor(
             val sni = params["sni"] ?: params["servername"]
             // VLESS gRPC carries its service path in serviceName/authority.
             // ParsedConfig.path is consumed as Sing-box's service_name by the builder.
-            val grpcServiceName = params["servicename"] ?: params["service_name"] ?: params["servicename"] ?: params["authority"]
+            val grpcServiceName = params["servicename"] ?: params["service_name"] ?: params["authority"]
             val path = if (transport == "grpc") grpcServiceName ?: params["path"] else params["path"]
             val host = params["host"]
             val fingerprint = params["fp"] ?: params["fingerprint"]
