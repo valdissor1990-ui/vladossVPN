@@ -177,15 +177,29 @@ class AutoSwitcher @Inject constructor(
 
         // With VpnService active, activeNetwork is normally TRANSPORT_VPN. Inspect
         // validated non-VPN networks to identify the underlying Wi-Fi/mobile transport.
+        // When the VPN is active, activeNetwork points at the VPN itself. Select the
+        // same preferred validated physical path deterministically instead of relying on
+        // ConnectivityManager.allNetworks iteration order (which can vary during handover).
         val underlying = manager.allNetworks
             .asSequence()
             .filter { it != active }
-            .mapNotNull { network -> manager.getNetworkCapabilities(network) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
-            .mapNotNull(::bucket)
-            .firstOrNull { it == "wifi" || it == "cellular" }
+            .mapNotNull { network ->
+                val capabilities = manager.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) ||
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                ) return@mapNotNull null
+                val networkBucket = bucket(capabilities) ?: return@mapNotNull null
+                val priority = when (networkBucket) {
+                    "wifi" -> 3
+                    "other" -> 2
+                    "cellular" -> 1
+                    else -> 0
+                }
+                networkBucket to priority
+            }
+            .maxByOrNull { it.second }
+            ?.first
         return underlying ?: if (active == null) "offline" else "other"
     }
 
