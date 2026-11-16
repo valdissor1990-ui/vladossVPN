@@ -417,7 +417,7 @@ class HomeViewModel @Inject constructor(
             .putString(KEY_SELECTION_MODE, normalized)
             .putBoolean(KEY_AUTOMATIC_MODE, normalized == MODE_AUTOMATIC)
             .apply()
-        if (normalized == MODE_RECOMMEND) manuallySelectedServer = null
+        if (normalized != MODE_MANUAL) manuallySelectedServer = null
         _uiState.value = _uiState.value.copy(
             selectionMode = normalized,
             isAutomaticMode = normalized == MODE_AUTOMATIC,
