@@ -18,24 +18,28 @@ object SensitiveMasker {
     /** https?://... — обрезаем до host, маскируем query/path. */
     private val URL_REGEX = Regex("https?://[^\\s\"']+")
 
-    /** pbk=XXXX или publicKey=XXXX / "publicKey": "XXXX" — захватываем значение в группу. */
+    /** Reality public key in URI/query or JSON-like log output. */
     private val REALITY_KEY_REGEX = Regex(
-        """(?:pbk=|publicKey["']?\\s*[:=]\\s*["']?)([A-Za-z0-9_\\-]+)""",
+        """(?:pbk\s*=\s*|publicKey["\']?\s*[:=]\s*["\']?)([A-Za-z0-9_\-]+)""",
         RegexOption.IGNORE_CASE
     )
 
-    /** sid=XXXX или shortId=XXXX / "shortId": "XXXX". */
+    /** Short ID in both common URI and JSON spellings. */
     private val SHORT_ID_REGEX = Regex(
-        """(?:^|[^A-Za-z0-9_])sid=([a-fA-F0-9]{6,})""",
+        """(?:^|[^A-Za-z0-9_])(?:sid|shortId)\s*=\s*([a-fA-F0-9]{6,})""",
         RegexOption.IGNORE_CASE
+    )
+
+    /** Credential-like key/value pairs, including bearer tokens. */
+    private val SECRET_PARAMETER_REGEX = Regex(
+        """(?i)\b(password|passwd|secret|access_token|refresh_token|client_secret|private_key|authorization)\s*([=:]\s*|\s+)(?:"([^"]*)"|\'([^\']*)\'|([^\s,;&}]+))"""
     )
 
     /** token=XXX / token: XXX. */
     private val TOKEN_REGEX = Regex(
-        """(?:token[=:]\\s*)([A-Za-z0-9_\\-]+)""",
+        """(?:token[=:]\s*)([A-Za-z0-9_\-]+)""",
         RegexOption.IGNORE_CASE
     )
-
     /**
      * Заменяет чувствительные значения на ***.
      * Безопасно вызывается многократно; никаких исключений не бросает.
@@ -57,13 +61,21 @@ object SensitiveMasker {
                 val schemeEnd = url.indexOf("://") + 3
                 if (schemeEnd in 1 until url.length) {
                     val afterScheme = url.substring(schemeEnd)
-                    val hostEnd = afterScheme.indexOfFirst { it == '/' || it == '?' || it == '#' }
-                    val host = if (hostEnd > 0) afterScheme.substring(0, hostEnd) else afterScheme
-                    val hostOnly = host.substringBefore(':')
-                    if (hostOnly == "127.0.0.1" || hostOnly.equals("localhost", ignoreCase = true)) {
+                    val authorityEnd = afterScheme.indexOfFirst { it == '/' || it == '?' || it == '#' }
+                    val authority = if (authorityEnd > 0) afterScheme.substring(0, authorityEnd) else afterScheme
+                    // Never retain URL user-info (user:password@host), even for local proxy URLs.
+                    val hostAndPort = authority.substringAfterLast('@')
+                    val hostOnly = if (hostAndPort.startsWith("[")) {
+                        hostAndPort.substringBefore("]") + "]"
+                    } else {
+                        hostAndPort.substringBefore(':')
+                    }
+                    if ((hostOnly == "127.0.0.1" || hostOnly.equals("localhost", ignoreCase = true)) &&
+                        authority == hostAndPort
+                    ) {
                         url
                     } else {
-                        "${url.substring(0, schemeEnd)}$host/***"
+                        "${url.substring(0, schemeEnd)}$hostAndPort/***"
                     }
                 } else "***URL***"
             }
@@ -83,7 +95,12 @@ object SensitiveMasker {
                 full.substring(0, prefixLen) + "***SID***"
             }
 
-            // 5. token
+            // 5. Generic credential-like parameters.
+            result = SECRET_PARAMETER_REGEX.replace(result) { m ->
+                m.groupValues[1] + m.groupValues[2] + "***SECRET***"
+            }
+
+            // 6. token
             result = TOKEN_REGEX.replace(result) { m ->
                 val full = m.value
                 val prefixLen = full.length - m.groupValues[1].length
@@ -92,8 +109,8 @@ object SensitiveMasker {
 
             result
         } catch (t: Throwable) {
-            // Маскировщик НИКОГДА не должен ронять приложение — лучше вернуть оригинал
-            "[masker-error:${t.javaClass.simpleName}] $input"
+            // Fail closed: never return the unmasked input when sanitization fails.
+            "[masker-error:${t.javaClass.simpleName}; content redacted]"
         }
     }
 }
