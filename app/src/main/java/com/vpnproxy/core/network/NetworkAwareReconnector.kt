@@ -114,7 +114,7 @@ class NetworkAwareReconnector(
                 val sameNetwork = chosen.key == previous
                 val sameSignature = chosen.value == previousSignature
                 if (!sameNetwork || !sameSignature) {
-                    trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+                    trySendEvent(NetEvent.UnderlyingChanged(chosen.key, chosen.value))
                 } else {
                     logCollector.debug(TAG, "Physical network unchanged; suppress reconnect: netId=${chosen.key.hashCode()} signature=${chosen.value}")
                 }
