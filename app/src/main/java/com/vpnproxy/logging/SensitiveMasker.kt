@@ -35,6 +35,15 @@ object SensitiveMasker {
         """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
+    /** Public/private IPv4 literals in diagnostic text; loopback remains useful for local proxy debugging. */
+    private val IPV4_REGEX = Regex(
+        """(?<![A-Za-z0-9_.])(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(?![A-Za-z0-9_.])"""
+    )
+    /** IPv6 literals, including bracketed addresses retained as URL authorities. */
+    private val IPV6_REGEX = Regex(
+        """(?<![A-Za-z0-9:])(?:[0-9A-Fa-f]{1,4}:){2,}[0-9A-Fa-f:]{0,}(?![A-Za-z0-9:])"""
+    )
+
     /** token=XXX / token: XXX. */
     private val TOKEN_REGEX = Regex(
         """(?:token[=:]\s*)([A-Za-z0-9_\-]+)""",
@@ -103,7 +112,15 @@ object SensitiveMasker {
                 m.groupValues[1] + m.groupValues[2] + "***SECRET***"
             }
 
-            // 6. token
+            // 6. IP addresses. Keep only the loopback endpoints needed to diagnose local proxy routing.
+            result = IPV4_REGEX.replace(result) { match ->
+                if (match.value == "127.0.0.1" || match.value == "0.0.0.0") match.value else "***IP***"
+            }
+            result = IPV6_REGEX.replace(result) { match ->
+                if (match.value == "::1") match.value else "***IPV6***"
+            }
+
+            // 7. token
             result = TOKEN_REGEX.replace(result) { m ->
                 val full = m.value
                 val prefixLen = full.length - m.groupValues[1].length
