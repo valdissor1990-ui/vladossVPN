@@ -133,11 +133,12 @@ class ServerScanner @Inject constructor(
                     }
                 }
                 val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
+                val networkStillCurrent = networkSnapshot.sameNetwork(autoSwitcher.currentNetworkSnapshot())
                 if (scanGeneration.get() != generation) {
                     logCollector.info(TAG, "Discarded cancelled scan results")
                     return@withLock _scannedServers.value
                 }
-                val complete = probedCount >= probeConfigs.size
+                val complete = probedCount >= probeConfigs.size && networkStillCurrent
                 scannedConfigKeys = if (complete) requestedKeys else emptySet()
                 scannedNetworkBucket = networkBucket
                 scannedNetworkSnapshot = networkSnapshot
@@ -278,9 +279,13 @@ class ServerScanner @Inject constructor(
                 logCollector.warn(TAG, "Staged connection scan failed: ${error.message}")
             }
             val results = sortForCurrentNetwork(unique.map { resultByKey[scanKey(it)] ?: unavailable(it) })
+            val networkAtCompletion = autoSwitcher.currentNetworkSnapshot()
+            val networkStillCurrent = networkSnapshot.sameNetwork(networkAtCompletion)
             if (scanGeneration.get() == generationForScan) {
                 val reachableCount = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-                val complete = probedCount >= probeConfigs.size && unique.none { autoSwitcher.isBlacklisted(it) }
+                val complete = probedCount >= probeConfigs.size &&
+                    unique.none { autoSwitcher.isBlacklisted(it) } &&
+                    networkStillCurrent
                 // A technically complete scan with zero reachable endpoints must not become a
                 // reusable "fresh" result. Otherwise the next Connect can reuse the all-zero
                 // snapshot and reject the user's manually selected server without retrying it.
@@ -303,7 +308,11 @@ class ServerScanner @Inject constructor(
             }
             val reachable = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
             logCollector.info(TAG, "Connection preflight complete: reachable=$reachable target=$targetAvailableCount total=${unique.size}; only freshly probed reachable profiles may be selected")
-            results.filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+            results.filter {
+                it.successRate > 0.5f &&
+                    it.latencyMs != Long.MAX_VALUE &&
+                    it.evidence?.isFresh(networkAtCompletion, maxAgeMs = CONNECTION_SCAN_REUSE_MAX_AGE_MS) == true
+            }
         } finally {
             activeScanJob = null
             _isScanning.value = false
