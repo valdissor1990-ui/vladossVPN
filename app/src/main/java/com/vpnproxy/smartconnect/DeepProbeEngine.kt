@@ -184,7 +184,7 @@ class DeepProbeEngine @Inject constructor(
                 "VPN начал запускаться до начала проверки профилей"
             }
             checkProbeActive(probeGeneration)
-            val started = SingboxProxyClient.start(context, configJson)
+            val started = runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             check(started) { "Sing-box failed to start for profile ping" }
             logCollector.info(TAG, "Profile probe session started: generation=$probeGeneration profiles=${configs.size} attemptsPerProfile=$PROFILE_PING_ATTEMPTS requiredSuccessSamples=2 concurrency=8 endpoints=${PROFILE_PING_URLS.size}")
 
@@ -294,7 +294,7 @@ class DeepProbeEngine @Inject constructor(
             checkProbeActive(probeGeneration)
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
-                SingboxProxyClient.start(context, configJson)
+                runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
