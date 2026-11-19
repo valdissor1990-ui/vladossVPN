@@ -70,9 +70,12 @@ object SensitiveMasker {
                     } else {
                         hostAndPort.substringBefore(':')
                     }
-                    if ((hostOnly == "127.0.0.1" || hostOnly.equals("localhost", ignoreCase = true)) &&
-                        authority == hostAndPort
-                    ) {
+                    val isBareLocalProxy = (hostOnly == "127.0.0.1" ||
+                        hostOnly.equals("localhost", ignoreCase = true)) &&
+                        authority == hostAndPort && authorityEnd < 0
+                    if (isBareLocalProxy) {
+                        // Preserve a bare local proxy endpoint, but never preserve local URL
+                        // paths or query strings: those can still carry credentials.
                         url
                     } else {
                         "${url.substring(0, schemeEnd)}$hostAndPort/***"
