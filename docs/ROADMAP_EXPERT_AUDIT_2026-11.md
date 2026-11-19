@@ -323,7 +323,7 @@ PR #174 намеренно не включён: его persistent scan-cache reu
 
 В `.github/workflows/build.yml` добавлены Direct Debug и Play Debug сборки, проверка merged Play manifest на отсутствие `REQUEST_INSTALL_PACKAGES`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` и `FOREGROUND_SERVICE_DATA_SYNC`, загрузка обоих APK и dependency-license report.
 
-HEAD PR #197 на момент последнего обновления: `fd219c4188d1c9e69f11dc2510c069faf6ca6909`. После каждого интеграционного исправления CI запускается заново; на этом exact HEAD первые задания поставлены в очередь, итоговых проверок пока нет.
+Актуальный HEAD PR #197 всегда берётся из GitHub; CI считается действительным только для самого последнего коммита. После каждого интеграционного исправления проверки запускаются заново, результаты предыдущего HEAD не переносятся.
 
 Ручные тесты и проверки на Android не выполнялись. После успешного CI Direct Debug APK будет предложен пользователю для единого цикла проверки; Play Debug APK служит проверке flavor/manifest. Play Store release дополнительно требует privacy policy, Data Safety, VPN disclosure и подписывающий keystore.
 
