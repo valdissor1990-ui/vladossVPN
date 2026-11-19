@@ -27,8 +27,8 @@ class NetworkBucketProvider @Inject constructor(
     private var lastIdentity: String? = null
     private var generation: Long = 0L
     private var lastObservedEventGeneration: Long = 0L
-    private val networkEventGeneration = AtomicLong(0L)
-    private val observedPhysicalNetworks = ConcurrentHashMap<String, Boolean>()
+    private val observedPhysicalNetworks = ConcurrentHashMap<String, String>()
+    private val networkEventGenerations = ConcurrentHashMap<String, AtomicLong>()
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -39,16 +39,20 @@ class NetworkBucketProvider @Inject constructor(
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val key = network.toString()
             if (isValidatedPhysicalNetwork) {
-                val previous = observedPhysicalNetworks.put(key, true)
-                if (previous != true) networkEventGeneration.incrementAndGet()
-            } else if (observedPhysicalNetworks.remove(key) == true) {
-                networkEventGeneration.incrementAndGet()
+                val nextSignature = signature(capabilities)
+                val previous = observedPhysicalNetworks.put(key, nextSignature)
+                if (previous != nextSignature) {
+                    networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
+                }
+            } else if (observedPhysicalNetworks.remove(key) != null) {
+                networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
             }
         }
 
         override fun onLost(network: Network) {
-            if (observedPhysicalNetworks.remove(network.toString()) == true) {
-                networkEventGeneration.incrementAndGet()
+            val key = network.toString()
+            if (observedPhysicalNetworks.remove(key) != null) {
+                networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
             }
         }
     }
@@ -125,10 +129,26 @@ class NetworkBucketProvider @Inject constructor(
         else -> null
     }
 
-    private fun snapshotFor(bucket: String, network: Network?): PhysicalNetworkSnapshot =
-        snapshotFor(bucket, network?.toString() ?: "none")
+    /** Only selected-network capability changes should invalidate its probe evidence. */
+    private fun signature(capabilities: NetworkCapabilities): String =
+        listOf(
+            bucket(capabilities) ?: "none",
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        ).joinToString(":")
 
-    private fun snapshotFor(bucket: String, rawNetworkIdentity: String): PhysicalNetworkSnapshot {
+    private fun snapshotFor(bucket: String, network: Network?): PhysicalNetworkSnapshot {
+        val rawIdentity = network?.toString() ?: "none"
+        val observedEventGeneration = network?.let { networkEventGenerations[it.toString()]?.get() } ?: 0L
+        return snapshotFor(bucket, rawIdentity, observedEventGeneration)
+    }
+
+    private fun snapshotFor(
+        bucket: String,
+        rawNetworkIdentity: String,
+        observedEventGeneration: Long
+    ): PhysicalNetworkSnapshot {
         // Network.toString() contains a process-local handle. Hash it so the raw value is
         // neither exposed in diagnostics nor stored in the probe result.
         val rawIdentity = "$bucket|$rawNetworkIdentity"
@@ -137,7 +157,6 @@ class NetworkBucketProvider @Inject constructor(
             .take(12)
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-        val observedEventGeneration = networkEventGeneration.get()
         if (lastIdentity != networkId || lastObservedEventGeneration != observedEventGeneration) {
             lastIdentity = networkId
             lastObservedEventGeneration = observedEventGeneration
