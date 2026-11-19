@@ -285,7 +285,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
-                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val bodyKey = "subscription_body_${subscriptionCacheKey(sub.url)}"
                     val cachedOutcome = runCatching {
                         encryptedPrefs.getString(bodyKey, null)
                             ?.takeIf { it.isNotBlank() }
@@ -381,6 +381,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
         }
     }
 
+    private fun subscriptionCacheKey(url: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(url.toByteArray(Charsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
     private suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
         withContext(Dispatchers.IO) {
             val sources = listOf(sub.url)
@@ -389,9 +394,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
             for (sourceUrl in sources) {
                 try {
                     val sendDeviceMetadata = _deviceMetadataConsent.value
-                    val cacheKey = MessageDigest.getInstance("SHA-256")
-                        .digest(sourceUrl.toByteArray(Charsets.UTF_8))
-                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val cacheKey = subscriptionCacheKey(sourceUrl)
                     val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
                     if (legacyCacheKey != cacheKey) {
                         encryptedPrefs.edit()
