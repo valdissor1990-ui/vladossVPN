@@ -27,28 +27,31 @@ class NetworkBucketProvider @Inject constructor(
     private var lastIdentity: String? = null
     private var generation: Long = 0L
     private var lastObservedEventGeneration: Long = 0L
-    private val networkEventGeneration = AtomicLong(0L)
-    private val observedPhysicalNetworks = ConcurrentHashMap<String, Boolean>()
+    private val observedPhysicalNetworks = ConcurrentHashMap<String, String>()
+    private val networkEventGenerations = ConcurrentHashMap<String, AtomicLong>()
+    // Fold registration-time callbacks into the initial baseline instead of treating
+    // their first delivery as a real network change during an in-flight probe.
+    @Volatile private var initializingNetworks = true
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            val isValidatedPhysicalNetwork =
-                bucket(capabilities) != null &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val isValidated = isValidatedPhysicalNetwork(capabilities)
             val key = network.toString()
-            if (isValidatedPhysicalNetwork) {
-                val previous = observedPhysicalNetworks.put(key, true)
-                if (previous != true) networkEventGeneration.incrementAndGet()
-            } else if (observedPhysicalNetworks.remove(key) == true) {
-                networkEventGeneration.incrementAndGet()
+            if (isValidated) {
+                val nextSignature = signature(capabilities)
+                val previous = observedPhysicalNetworks.put(key, nextSignature)
+                if (!initializingNetworks && previous != nextSignature) {
+                    networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
+                }
+            } else if (observedPhysicalNetworks.remove(key) != null && !initializingNetworks) {
+                networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
             }
         }
 
         override fun onLost(network: Network) {
-            if (observedPhysicalNetworks.remove(network.toString()) == true) {
-                networkEventGeneration.incrementAndGet()
+            val key = network.toString()
+            if (observedPhysicalNetworks.remove(key) != null && !initializingNetworks) {
+                networkEventGenerations.computeIfAbsent(key) { AtomicLong(0L) }.incrementAndGet()
             }
         }
     }
@@ -56,6 +59,17 @@ class NetworkBucketProvider @Inject constructor(
     init {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         if (manager != null) {
+            // Seed before registration, then fold any callbacks racing with registration
+            // into the same baseline. The first callback for an already-present Wi-Fi or
+            // cellular network must not invalidate probe evidence by itself.
+            runCatching {
+                manager.allNetworks.forEach { network ->
+                    val capabilities = manager.getNetworkCapabilities(network) ?: return@forEach
+                    if (isValidatedPhysicalNetwork(capabilities)) {
+                        observedPhysicalNetworks[network.toString()] = signature(capabilities)
+                    }
+                }
+            }
             runCatching {
                 val request = NetworkRequest.Builder()
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -63,6 +77,7 @@ class NetworkBucketProvider @Inject constructor(
                     .build()
                 manager.registerNetworkCallback(request, networkCallback)
             }
+            initializingNetworks = false
         }
     }
 
@@ -117,6 +132,12 @@ class NetworkBucketProvider @Inject constructor(
 
     fun currentBucket(): String = snapshot().bucket
 
+    private fun isValidatedPhysicalNetwork(capabilities: NetworkCapabilities): Boolean =
+        bucket(capabilities) != null &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
     private fun bucket(capabilities: NetworkCapabilities?): String? = when {
         capabilities == null -> null
         capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -125,10 +146,26 @@ class NetworkBucketProvider @Inject constructor(
         else -> null
     }
 
-    private fun snapshotFor(bucket: String, network: Network?): PhysicalNetworkSnapshot =
-        snapshotFor(bucket, network?.toString() ?: "none")
+    /** Only selected-network capability changes should invalidate its probe evidence. */
+    private fun signature(capabilities: NetworkCapabilities): String =
+        listOf(
+            bucket(capabilities) ?: "none",
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        ).joinToString(":")
 
-    private fun snapshotFor(bucket: String, rawNetworkIdentity: String): PhysicalNetworkSnapshot {
+    private fun snapshotFor(bucket: String, network: Network?): PhysicalNetworkSnapshot {
+        val rawIdentity = network?.toString() ?: "none"
+        val observedEventGeneration = network?.let { networkEventGenerations[it.toString()]?.get() } ?: 0L
+        return snapshotFor(bucket, rawIdentity, observedEventGeneration)
+    }
+
+    private fun snapshotFor(
+        bucket: String,
+        rawNetworkIdentity: String,
+        observedEventGeneration: Long
+    ): PhysicalNetworkSnapshot {
         // Network.toString() contains a process-local handle. Hash it so the raw value is
         // neither exposed in diagnostics nor stored in the probe result.
         val rawIdentity = "$bucket|$rawNetworkIdentity"
@@ -137,7 +174,6 @@ class NetworkBucketProvider @Inject constructor(
             .take(12)
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-        val observedEventGeneration = networkEventGeneration.get()
         if (lastIdentity != networkId || lastObservedEventGeneration != observedEventGeneration) {
             lastIdentity = networkId
             lastObservedEventGeneration = observedEventGeneration
