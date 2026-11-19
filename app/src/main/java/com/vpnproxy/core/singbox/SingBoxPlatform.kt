@@ -357,7 +357,6 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
                     if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
                         monitoredDefaultNetwork = network
-                        networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                         publishDefaultInterface(connectivity, network, this, 0)
                     }
                 }
@@ -366,7 +365,6 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
                     if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
                         monitoredDefaultNetwork = network
-                        networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                         publishDefaultInterface(connectivity, network, this, 0)
                     }
                 }
