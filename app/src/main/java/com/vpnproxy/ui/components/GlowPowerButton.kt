@@ -79,20 +79,28 @@ fun GlowPowerButton(
     val infinite = rememberInfiniteTransition(label = "power")
     val pulse by infinite.animateFloat(
         initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100),
-            repeatMode = RepeatMode.Reverse
-        ),
+        targetValue = if (connected) 1f else 0.35f,
+        animationSpec = if (connected) {
+            infiniteRepeatable(
+                animation = tween(1100),
+                repeatMode = RepeatMode.Reverse
+            )
+        } else {
+            tween(0)
+        },
         label = "pulse"
     )
     val spin by infinite.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
+        targetValue = if (busy) 360f else 0f,
+        animationSpec = if (busy) {
+            infiniteRepeatable(
+                animation = tween(1400, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            )
+        } else {
+            tween(0)
+        },
         label = "spin"
     )
 
