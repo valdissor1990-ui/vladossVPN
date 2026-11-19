@@ -823,13 +823,8 @@ class HomeViewModel @Inject constructor(
         userStopRequested = true
         manualReconnectJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                lastServerStore.save(
-                    address = server.config.address,
-                    port = server.config.port,
-                    name = server.config.name,
-                    uuid = server.config.uuid,
-                    connectionKey = server.config.connectionKey()
-                )
+                // Persist only after the new tunnel is actually Connected; a selected
+                // but unreachable profile must not replace the last known-good boot target.
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 // Ensure a service instance is present to consume the stop request even
                 // if the previous connect had not finished starting the foreground service.
