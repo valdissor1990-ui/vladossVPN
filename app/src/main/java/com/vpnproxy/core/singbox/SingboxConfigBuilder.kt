@@ -1,5 +1,6 @@
 package com.vpnproxy.core.singbox
 
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import com.vpnproxy.logging.LogCollectorHolder
 import kotlinx.serialization.json.Json
@@ -202,6 +203,23 @@ object SingboxConfigBuilder {
         val isTrojan = transportKey == "trojan"
         val isVmess = transportKey == "vmess"
         val isVless = !isHy2 && !isTuic && !isShadowsocks && !isSocks && !isTrojan && !isVmess
+        if (BuildConfig.IS_PLAY_STORE) {
+            val encryptedTransport = when {
+                isSocks -> false
+                isVless -> config.security.equals("tls", ignoreCase = true) ||
+                    config.security.equals("reality", ignoreCase = true)
+                else -> true // VMess/SS use protocol-level encryption; Trojan/Hy2/TUIC require TLS.
+            }
+            require(encryptedTransport) {
+                "This profile does not provide an encrypted transport and is disabled in the Play Store build."
+            }
+            val usesTls = isHy2 || isTuic || isTrojan ||
+                config.security.equals("tls", ignoreCase = true) ||
+                config.security.equals("reality", ignoreCase = true)
+            require(!usesTls || !config.insecure) {
+                "Certificate verification cannot be disabled in the Play Store build."
+            }
+        }
         require(isVless || isHy2 || isTuic || isShadowsocks || isSocks || isTrojan || isVmess) {
             "Unsupported Sing-box outbound: ${config.transport}"
         }
