@@ -6,6 +6,7 @@ import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -231,7 +232,7 @@ class DeepProbeEngine @Inject constructor(
                                                 TAG,
                                                 "Profile probe failed: profile=${configs[index].name} attempt=${attempt + 1} " +
                                                     "endpoint=${PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]} " +
-                                                    "reason=${failure.javaClass.simpleName}: ${failure.message}"
+                                                    "reason=${failure.javaClass.simpleName}: ${SensitiveMasker.mask(failure.message.orEmpty())}"
                                             )
                                         }
                                     }
