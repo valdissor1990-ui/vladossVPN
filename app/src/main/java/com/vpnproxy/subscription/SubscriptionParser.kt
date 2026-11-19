@@ -568,25 +568,40 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
+                        val expected = countJsonCandidates(item)
                         val parsed = extractAllFromJsonObject(item, providerTag)
-                        candidateCount += parsed.size.coerceAtLeast(1)
-                        if (parsed.isNotEmpty()) configs.addAll(parsed)
-                        else rejectionCounts?.increment(classifyJsonRejection(item))
+                        candidateCount += expected
+                        configs.addAll(parsed)
+                        val rejected = (expected - parsed.size).coerceAtLeast(0)
+                        if (rejected > 0) {
+                            val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                            repeat(rejected) { rejectionCounts?.increment(reason) }
+                        }
                     }
                 }
                 is JsonObject -> {
                     element["outbounds"]?.jsonArray?.forEach { item ->
                         if (item is JsonObject) {
+                            val expected = countJsonCandidates(item)
                             val parsed = extractAllFromJsonObject(item, providerTag)
-                            candidateCount += parsed.size.coerceAtLeast(1)
-                            if (parsed.isNotEmpty()) configs.addAll(parsed)
-                            else rejectionCounts?.increment(classifyJsonRejection(item))
+                            candidateCount += expected
+                            configs.addAll(parsed)
+                            val rejected = (expected - parsed.size).coerceAtLeast(0)
+                            if (rejected > 0) {
+                                val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                                repeat(rejected) { rejectionCounts?.increment(reason) }
+                            }
                         }
                     } ?: run {
+                        val expected = countJsonCandidates(element)
                         val parsed = extractAllFromJsonObject(element, providerTag)
-                        candidateCount = parsed.size.coerceAtLeast(1)
-                        if (parsed.isNotEmpty()) configs.addAll(parsed)
-                        else rejectionCounts?.increment(classifyJsonRejection(element))
+                        candidateCount = expected
+                        configs.addAll(parsed)
+                        val rejected = (expected - parsed.size).coerceAtLeast(0)
+                        if (rejected > 0) {
+                            val reason = if (parsed.isEmpty()) classifyJsonRejection(element) else "invalid_or_malformed_entry"
+                            repeat(rejected) { rejectionCounts?.increment(reason) }
+                        }
                     }
                 }
                 else -> {}
@@ -636,7 +651,16 @@ class SubscriptionParser @Inject constructor(
                 })
                 extractFromJsonObject(singleOutbound, providerTag)
             }
-        }.distinctBy { it.connectionKey() }
+        }
+    }
+
+    private fun countJsonCandidates(obj: JsonObject): Int {
+        if (!obj["protocol"]?.jsonPrimitive?.contentOrNull.equals("vless", ignoreCase = true)) return 1
+        val vnext = (obj["settings"] as? JsonObject)?.get("vnext") as? JsonArray ?: return 1
+        val count = vnext.sumOf { rawNode ->
+            ((rawNode as? JsonObject)?.get("users") as? JsonArray)?.size ?: 0
+        }
+        return count.coerceAtLeast(1)
     }
 
     private fun extractFromJsonObject(obj: JsonObject, providerTag: String): ParsedConfig? {
