@@ -35,6 +35,11 @@ object SensitiveMasker {
         """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
+    /** Domain values attached to endpoint-related keys in diagnostic messages. */
+    private val HOST_PARAMETER_REGEX = Regex(
+        """(?i)\b(server(?:_name|Name)?|hostname|address|host|sni|domain)(\s*[=:]\s*)((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?::\d{1,5})?"""
+    )
+
     /** Public/private IPv4 literals in diagnostic text; loopback remains useful for local proxy debugging. */
     private val IPV4_REGEX = Regex(
         """(?<![A-Za-z0-9_.])(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(?![A-Za-z0-9_.])"""
@@ -64,7 +69,7 @@ object SensitiveMasker {
                 if (prefix.contains("traceId", ignoreCase = true)) m.value else "***-UUID-***"
             }
 
-            // 2. URL подписок — оставляем схему+host; не маскируем localhost / 127.0.0.1 (proxy=...)
+            // 2. URLs: preserve only the scheme; keep bare localhost/127.0.0.1 proxy endpoints for diagnostics.
             result = URL_REGEX.replace(result) { m ->
                 val url = m.value
                 val schemeEnd = url.indexOf("://") + 3
@@ -87,7 +92,7 @@ object SensitiveMasker {
                         // paths or query strings: those can still carry credentials.
                         url
                     } else {
-                        "${url.substring(0, schemeEnd)}$hostAndPort/***"
+                        "${url.substring(0, schemeEnd)}***"
                     }
                 } else "***URL***"
             }
@@ -112,7 +117,12 @@ object SensitiveMasker {
                 m.groupValues[1] + m.groupValues[2] + "***SECRET***"
             }
 
-            // 6. IP addresses. Keep only the loopback endpoints needed to diagnose local proxy routing.
+            // 6. Endpoint hostnames. URLs are masked above; also mask endpoint values in key/value diagnostics.
+            result = HOST_PARAMETER_REGEX.replace(result) { match ->
+                match.groupValues[1] + match.groupValues[2] + "***HOST***"
+            }
+
+            // 7. IP addresses. Keep only the loopback endpoints needed to diagnose local proxy routing.
             result = IPV4_REGEX.replace(result) { match ->
                 if (match.value == "127.0.0.1" || match.value == "0.0.0.0") match.value else "***IP***"
             }
@@ -126,7 +136,7 @@ object SensitiveMasker {
                 }
             }
 
-            // 7. token
+            // 8. token
             result = TOKEN_REGEX.replace(result) { m ->
                 val full = m.value
                 val prefixLen = full.length - m.groupValues[1].length
