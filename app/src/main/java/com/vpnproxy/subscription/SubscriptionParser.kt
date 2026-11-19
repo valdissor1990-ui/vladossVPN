@@ -90,6 +90,99 @@ class SubscriptionParser @Inject constructor(
                 transport.equals("xhttp", ignoreCase = true)
     }
 
+    /**
+     * Safe, structured summary of one parsed subscription payload.
+     * It intentionally contains no raw URI, UUID, password, key or source URL.
+     */
+    data class ParseReport(
+        val detectedFormat: String,
+        val candidateCount: Int?,
+        val acceptedCount: Int,
+        val rejectedCount: Int?,
+        val duplicateCount: Int,
+        val protocolCounts: Map<String, Int>,
+        val rejectionReasons: Map<String, Int>,
+        val decodedBase64: Boolean
+    )
+
+    data class ParseOutcome(
+        val configs: List<ParsedConfig>,
+        val report: ParseReport
+    )
+
+    /**
+     * Parse once through the existing parser and return an explainable count summary.
+     * Rejection reasons are deliberately format-level until individual parser branches
+     * can provide precise, non-sensitive reason codes.
+     */
+    fun parseWithReport(rawContent: String, providerTag: String = ""): ParseOutcome {
+        val trimmed = rawContent.trim()
+        val decoded = trimmed.takeIf { it.isNotBlank() }?.let(::tryBase64Decode)?.trim()
+        val useDecoded = !decoded.isNullOrBlank() && decoded != trimmed &&
+            detectPayloadFormat(decoded) != "unknown"
+        val effective = if (useDecoded) decoded!! else trimmed
+        val format = detectPayloadFormat(effective)
+        val configs = parse(rawContent, providerTag)
+        val countedCandidates = countPayloadCandidates(effective, format)
+        val candidateCount = countedCandidates?.coerceAtLeast(configs.size)
+        val rejectedCount = candidateCount?.minus(configs.size)?.coerceAtLeast(0)
+        val rejectionReasons = when {
+            rejectedCount != null && rejectedCount > 0 -> mapOf(
+                when (format) {
+                    "uri" -> "invalid_or_unsupported_uri"
+                    "json" -> "invalid_or_unsupported_json_entry"
+                    "clash_yaml" -> "invalid_or_unsupported_clash_proxy"
+                    else -> "unrecognized_or_malformed_payload"
+                } to rejectedCount
+            )
+            candidateCount == null && configs.isEmpty() -> mapOf("unrecognized_or_malformed_payload" to 1)
+            else -> emptyMap()
+        }
+        val duplicateCount = (configs.size - configs.distinctBy { it.connectionKey() }.size).coerceAtLeast(0)
+        val report = ParseReport(
+            detectedFormat = format,
+            candidateCount = candidateCount,
+            acceptedCount = configs.size,
+            rejectedCount = rejectedCount,
+            duplicateCount = duplicateCount,
+            protocolCounts = configs.groupingBy { it.transport.lowercase(java.util.Locale.ROOT) }.eachCount(),
+            rejectionReasons = rejectionReasons,
+            decodedBase64 = useDecoded
+        )
+        return ParseOutcome(configs, report)
+    }
+
+    private fun detectPayloadFormat(content: String): String = when {
+        content.isBlank() -> "empty"
+        content.startsWith("[") || content.startsWith("{") -> "json"
+        content.contains("proxies:") || content.contains("proxy-groups:") -> "clash_yaml"
+        containsSupportedUri(content) -> "uri"
+        else -> "unknown"
+    }
+
+    private fun countPayloadCandidates(content: String, format: String): Int? = runCatching {
+        when (format) {
+            "uri" -> content.lineSequence().count { line ->
+                val candidate = line.trim()
+                listOf("vless://", "hysteria2://", "hy2://", "tuic://", "ss://", "vmess://", "trojan://", "socks://", "socks5://")
+                    .any { candidate.startsWith(it, ignoreCase = true) }
+            }
+            "json" -> when (val element = Json.parseToJsonElement(content)) {
+                is JsonArray -> element.count { it is JsonObject }
+                is JsonObject -> {
+                    val outbounds = element["outbounds"]
+                    if (outbounds is JsonArray) outbounds.count { it is JsonObject } else 1
+                }
+                else -> 0
+            }
+            "clash_yaml" -> {
+                val root = Yaml().load<Map<String, Any>>(content)
+                (root?.get("proxies") as? List<*>)?.size
+            }
+            else -> null
+        }
+    }.getOrNull()
+
     fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) {
