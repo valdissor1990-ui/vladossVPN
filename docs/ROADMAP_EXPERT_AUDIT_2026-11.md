@@ -43,9 +43,9 @@
 
 - [x] P2.1 Проследить реальные call sites ScoringEngine, DeepProbeEngine, ServerScanner и AutoSwitcher; документировать, какие метрики реально участвуют в каждом решении.
 - [x] P2.2 Зафиксировать единый контракт измерений и скоринга; определить безопасное применение preflight, active health-check и deep diagnostic. Документ: `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`.
-- [ ] P2.3 Разделить scoring history по physical network bucket и корректно привязать hard failures к network epoch (Draft PR #186; CI выполняется).
-- [ ] P2.4 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
-- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать. Отличать исторический успех от измеренного ping (Draft PR #187; CI выполняется).
+- [x] P2.3 Разделить scoring history по physical network bucket и привязать hard failures к network bucket, зафиксированному на момент validation (Draft PR #186; CI 7/7 успешно на HEAD `9c3ec475fa8c44dfd2d357d76252feeaa8d9deda`; runtime не проверен).
+- [ ] P2.4 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity (первая интегрированная часть — Draft PR #188: ProbeEvidence, physical network snapshot/generation, freshness и перенос evidence через HealthChecker/DeepProbe/ServerScanner; callback-driven epoch и оставшиеся метрики ещё не закрыты).
+- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать. Отличать исторический успех от измеренного ping (PR #187: CI 7/7 успешно на HEAD `6fd6e93269ed95d29a5882874a51cec69b3cc633`; scanner freshness продолжена в Draft PR #188; runtime не проверен).
 - [ ] P2.6 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
 - Критерий: каждый score имеет объяснимые исходные измерения; отсутствие метрики не подменяется фиктивным успехом.
 
@@ -227,7 +227,7 @@
 - текущий HEAD `6fd6e93269ed95d29a5882874a51cec69b3cc633`;
 - исторический hint `successRate=0.75` сохранён;
 - latency теперь `Long.MAX_VALUE`, score — `0f`, чтобы UI показывал «н/д», а не 1 ms;
-- Unit Tests и Gradle Dependency Graph прошли. Первая попытка CodeQL не смогла разрешить Gradle plugin `com.google.dagger.hilt.android:2.53.1` до анализа исходников; job перезапущен. Остальные проверки выполняются. Runtime/UI проверка на устройстве не проводилась.
+- GitHub Actions: 7/7 checks успешно на этом точном HEAD, включая повторный CodeQL. Runtime/UI проверка на устройстве не проводилась.
 
 ### 2026-11-19 — P2.3: изоляция истории качества по физической сети
 
@@ -241,6 +241,20 @@
 Текущий HEAD: `9c3ec475fa8c44dfd2d357d76252feeaa8d9deda`. Все 7/7 GitHub Actions checks завершились успешно на этом SHA, включая CodeQL. Предыдущий SHA не использовался как подтверждение. Ручные тесты не добавлялись и не запускались; runtime проверка на Wi-Fi/cellular не выполнялась.
 
 Остаточный риск: network bucket — это coarse class (Wi-Fi/cellular/other), а не уникальный Network handle/epoch. Полноценный типизированный результат с network generation и freshness остаётся P2.4/P2.5.
+
+### 2026-11-19 — P2.4: типизированное доказательство измерений (первая интегрированная часть)
+
+Создан Draft PR #188, ветка `feat/typed-probe-evidence-p2-4`, stacked на #186:
+- Добавлен `ProbeEvidence`: метод, время начала/окончания, число попыток/успешных samples, physical network snapshot до и после измерения.
+- `NetworkBucketProvider` теперь вычисляет privacy-safe hash идентификатора Android Network и наблюдаемое поколение сети; raw network handle не сохраняется.
+- Evidence добавлено в isolated latency/speed checks, DeepProbe profile ping и DeepProbe diagnostic metrics.
+- `ScoringEngine` отбрасывает результаты, если измерение пересекло обнаруженную смену сети, evidence устарело или не соответствует текущей network generation.
+- `ServerScanner` переносит evidence в `ScoredServer`, не переиспользует кэш без typed evidence как текущий ping и отбрасывает preflight-результаты, если сеть сменилась во время проверки.
+- Отдельно сохранён правильный интервал speed measurement: время запуска временного Sing-box core не входит в throughput.
+
+Текущий HEAD PR #188: `6241da448349b6458bc0258f716107cbe11f65ec`. PR остаётся Draft. Для stacked PR пока не опубликованы GitHub Actions runs/status checks; CI не подтверждён. Ручные тесты и APK/device validation не выполнялись.
+
+Ограничение: generation увеличивается при наблюдаемом изменении network identity. Callback-driven epoch ещё не подключён; быстрый A→B→A переход, целиком прошедший между snapshots, теоретически может быть пропущен. Это остаётся обязательной частью P2.4 перед релизом.
 
 ### 2026-11-19 — P2.2: контракт измерений Smart Autopilot
 
@@ -261,4 +275,4 @@ P2.2 завершён как проектирование контракта. К
 
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 реализован в Draft PR #186 (network-scoped scoring history), CI 7/7 успешно. P2.5 начат в Draft PR #187 (исторический успех больше не отображается как 1 ms), CI выполняется; первая попытка CodeQL потребовала повторного запуска из-за недоступности Gradle plugin artifact. P2.4 typed measurement contract и полная freshness/network epoch логика ещё впереди. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 реализован в Draft PR #186 (network-scoped scoring history), CI 7/7 успешно. PR #187 (исторический успех больше не отображается как 1 ms) также прошёл CI 7/7. P2.4 начат в Draft PR #188: typed ProbeEvidence, network identity/generation, freshness и фильтрация результатов при handover; CI для stacked PR пока не подтверждён, callback-driven epoch остаётся открытым. Никакие PR не слиты автоматически. Никакие PR не слиты автоматически.
