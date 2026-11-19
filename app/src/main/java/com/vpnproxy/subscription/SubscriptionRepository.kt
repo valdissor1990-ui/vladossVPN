@@ -392,6 +392,13 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     val cacheKey = MessageDigest.getInstance("SHA-256")
                         .digest(sourceUrl.toByteArray(Charsets.UTF_8))
                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
+                    if (legacyCacheKey != cacheKey) {
+                        encryptedPrefs.edit()
+                            .remove("subscription_body_$legacyCacheKey")
+                            .remove("subscription_etag_$legacyCacheKey")
+                            .apply()
+                    }
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
                     val cachedBody = encryptedPrefs.getString(bodyKey, null)
