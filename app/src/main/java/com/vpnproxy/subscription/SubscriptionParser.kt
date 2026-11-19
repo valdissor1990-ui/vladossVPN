@@ -229,10 +229,12 @@ class SubscriptionParser @Inject constructor(
                 candidate.contains("://") && !candidate.startsWith("#")
             }
             "json" -> when (val element = Json.parseToJsonElement(content)) {
-                is JsonArray -> element.count { it is JsonObject }
+                is JsonArray -> element.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
                 is JsonObject -> {
                     val outbounds = element["outbounds"]
-                    if (outbounds is JsonArray) outbounds.count { it is JsonObject } else 1
+                    if (outbounds is JsonArray) {
+                        outbounds.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
+                    } else countJsonCandidates(element)
                 }
                 else -> 0
             }
