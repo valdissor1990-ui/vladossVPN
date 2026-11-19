@@ -480,7 +480,7 @@ class SubscriptionParser @Inject constructor(
                     is JsonObject -> element
                     is JsonNull -> JsonObject(emptyMap())
                     else -> {
-                        logCollector.warn(TAG, "XHTTP extra is not a JSON object: $trimmed")
+                        logCollector.warn(TAG, "XHTTP extra is not a JSON object; extended options skipped")
                         return null
                     }
                 }
