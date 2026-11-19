@@ -2,6 +2,7 @@ package com.vpnproxy.core.singbox
 
 import android.content.Context
 import com.vpnproxy.logging.LogCollectorHolder
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -52,6 +53,10 @@ object SingboxProxyClient {
             activeCore = core
             LogCollectorHolder.get()?.info(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
             true
+        } catch (cancelled: CancellationException) {
+            LogCollectorHolder.get()?.warn(TAG, "Temporary Sing-box startup cancelled")
+            runCatching { core.stop() }
+            throw cancelled
         } catch (t: Throwable) {
             LogCollectorHolder.get()?.error(TAG, "Temporary Sing-box startup failed", t)
             runCatching { core.stop() }
