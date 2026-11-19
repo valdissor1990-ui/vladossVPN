@@ -161,6 +161,9 @@ class NetworkBucketProvider @Inject constructor(
         return snapshotFor(bucket, rawIdentity, observedEventGeneration)
     }
 
+    private fun snapshotFor(bucket: String, rawNetworkIdentity: String): PhysicalNetworkSnapshot =
+        snapshotFor(bucket, rawNetworkIdentity, observedEventGeneration = 0L)
+
     private fun snapshotFor(
         bucket: String,
         rawNetworkIdentity: String,
