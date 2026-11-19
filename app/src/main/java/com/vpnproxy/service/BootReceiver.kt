@@ -90,6 +90,8 @@ class BootReceiver : BroadcastReceiver() {
                     val live = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
                     if (live.isNotEmpty()) live
                     else jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (t: Throwable) {
                     logCollector.warn(TAG, "Failed to load configs: ${t.message}")
                     emptyList()
@@ -102,6 +104,8 @@ class BootReceiver : BroadcastReceiver() {
 
                 val saved = try {
                     lastServerStore.load()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (t: Throwable) {
                     logCollector.warn(TAG, "Failed to load saved server: ${t.message}")
                     null
