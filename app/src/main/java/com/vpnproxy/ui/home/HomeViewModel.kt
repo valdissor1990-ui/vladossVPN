@@ -778,6 +778,8 @@ class HomeViewModel @Inject constructor(
                 subscriptionRepository.refreshAll()
                 updateAutoSwitcherProviderScope()
                 if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
             } finally {
