@@ -3,6 +3,7 @@ package com.vpnproxy.subscription
 import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
+import org.json.JSONObject
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
@@ -853,7 +854,12 @@ class SubscriptionParser @Inject constructor(
                                     } else {
                                         wsHeaders?.get("Host") as? String ?: wsHeaders?.get("host") as? String
                                     },
-                                    mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
+                                    mode = xhttpOptions?.get("mode") as? String,
+                                    // Preserve the full Clash/Mihomo XHTTP options object.
+                                    // SingboxConfigBuilder filters and normalizes supported keys.
+                                    extra = if (network.equals("xhttp", ignoreCase = true)) {
+                                        xhttpOptions?.let { JSONObject(it).toString() }
+                                    } else null,
                                     fingerprint = proxy["client-fingerprint"] as? String,
                                     publicKey = reality?.get("public-key") as? String,
                                     shortId = reality?.get("short-id") as? String,
