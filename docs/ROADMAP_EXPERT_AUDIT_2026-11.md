@@ -45,7 +45,7 @@
 - [x] P2.2 Зафиксировать единый контракт измерений и скоринга; определить безопасное применение preflight, active health-check и deep diagnostic. Документ: `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`.
 - [ ] P2.3 Разделить scoring history по physical network bucket и корректно привязать hard failures к network epoch (Draft PR #186; CI выполняется).
 - [ ] P2.4 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
-- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать. Отдельно устранить placeholder `latencyMs=1` из 7-дневной истории успешных подключений: история не должна выглядеть как актуальный ping.
+- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать. Отличать исторический успех от измеренного ping (Draft PR #187; CI выполняется).
 - [ ] P2.6 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
 - Критерий: каждый score имеет объяснимые исходные измерения; отсутствие метрики не подменяется фиктивным успехом.
 
@@ -216,6 +216,19 @@
 
 Ручные тесты не запускались; runtime поведение не проверялось.
 
+### 2026-11-19 — P2.5: исторический успех не должен выглядеть как измеренный ping
+
+При проверке кэша `ServerScanner.restoreCachedResults()` обнаружено:
+- если свежего scan cache нет, успешное подключение за последние 7 дней восстанавливалось как `ScoredServer(latencyMs=1, successRate=0.75, score=0.5)`;
+- 1 ms не является измерением RTT и может отображаться как актуальный ping, когда свежий scan невозможен (например, пока VPN core активен);
+- preflight уже отфильтровывает `Long.MAX_VALUE`, поэтому исторический успех можно сохранить отдельно, не превращая его в кандидата с выдуманной задержкой.
+
+Создан Draft PR #187, ветка `fix/scanner-history-not-current-latency`:
+- текущий HEAD `6fd6e93269ed95d29a5882874a51cec69b3cc633`;
+- исторический hint `successRate=0.75` сохранён;
+- latency теперь `Long.MAX_VALUE`, score — `0f`, чтобы UI показывал «н/д», а не 1 ms;
+- CI автоматически выполняется; runtime/UI проверка на устройстве не проводилась.
+
 ### 2026-11-19 — P2.3: изоляция истории качества по физической сети
 
 Создан Draft PR #186, ветка `fix/scoring-history-network-scope`:
@@ -248,4 +261,4 @@ P2.2 завершён как проектирование контракта. К
 
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 начат в Draft PR #186 (network-scoped scoring history), CI для актуального SHA выполняется. P2.4/P2.5 — typed measurement contract и freshness/network epoch ещё впереди. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 начат в Draft PR #186 (network-scoped scoring history), CI выполняется. P2.5 начат в Draft PR #187 (исторический успех больше не отображается как 1 ms), CI выполняется. P2.4 typed measurement contract и полная freshness/network epoch логика ещё впереди. Никакие PR не слиты автоматически.
