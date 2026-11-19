@@ -17,6 +17,7 @@ import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.logging.LogCollectorHolder
+import com.vpnproxy.smartconnect.NetworkBucketProvider
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
 import java.net.Inet6Address
@@ -33,7 +34,8 @@ import kotlinx.coroutines.runBlocking
 class SingBoxPlatform(
     private val context: Context,
     private val vpnService: VpnService? = null,
-    private val splitTunnelManager: SplitTunnelManager? = null
+    private val splitTunnelManager: SplitTunnelManager? = null,
+    private val networkBucketProvider: NetworkBucketProvider? = null
 ) : PlatformInterface {
     companion object { private const val TAG = "SingBoxPlatform" }
 
@@ -348,6 +350,7 @@ class SingBoxPlatform(
                         return
                     }
                     monitoredDefaultNetwork = network
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                     publishDefaultInterface(connectivity, network, this, 0)
                 }
 
@@ -355,6 +358,7 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
                     if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
                         monitoredDefaultNetwork = network
+                        networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                         publishDefaultInterface(connectivity, network, this, 0)
                     }
                 }
@@ -363,6 +367,7 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || !isPhysicalInternetNetwork(connectivity, network)) return
                     if (monitoredDefaultNetwork == null || monitoredDefaultNetwork == network) {
                         monitoredDefaultNetwork = network
+                        networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                         publishDefaultInterface(connectivity, network, this, 0)
                     }
                 }
@@ -371,6 +376,7 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || monitoredDefaultNetwork != network) return
                     val replacement = findCurrentPhysicalNetwork(connectivity, exclude = network)
                     monitoredDefaultNetwork = replacement
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(replacement)
                     if (replacement == null) {
                         notifyDefaultInterface(listener, "", -1, false)
                         logMonitor("DefaultInterfaceMonitor: network lost; no physical default network")
@@ -383,6 +389,7 @@ class SingBoxPlatform(
             // Seed the current physical network before registration. The callback may fire
             // immediately; do not overwrite its newer selection after register returns.
             monitoredDefaultNetwork = findCurrentPhysicalNetwork(connectivity)
+            networkBucketProvider?.updatePlatformSelectedUnderlay(monitoredDefaultNetwork)
             interfaceMonitorListener = listener
             interfaceMonitorCallback = callback
             interfaceMonitorThread = thread
@@ -407,6 +414,7 @@ class SingBoxPlatform(
                 interfaceMonitorHandler = null
                 interfaceMonitorThread = null
                 monitoredDefaultNetwork = null
+                networkBucketProvider?.clearPlatformSelectedUnderlay()
                 thread.quitSafely()
                 logError( "DefaultInterfaceMonitor registration failed", t)
                 throw IllegalStateException("Unable to register Android default network monitor: ${t.message}", t)
@@ -445,6 +453,7 @@ class SingBoxPlatform(
             interfaceMonitorThread = null
             monitoredDefaultNetwork = null
         }
+        networkBucketProvider?.clearPlatformSelectedUnderlay()
         if (callback != null && connectivity != null) {
             runCatching { connectivity.unregisterNetworkCallback(callback) }
                 .onFailure { logWarn( "DefaultInterfaceMonitor unregister failed: ${it.message}") }
