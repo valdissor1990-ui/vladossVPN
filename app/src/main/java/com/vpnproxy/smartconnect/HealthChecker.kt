@@ -222,7 +222,7 @@ class HealthChecker @Inject constructor(
                 check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                     "VPN core became active before health probe acquired the shared port lease"
                 }
-                val started = SingboxProxyClient.start(context, SingboxConfigBuilder.build(config))
+                val started = runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, SingboxConfigBuilder.build(config)) }
                 if (!started) {
                     SingboxProxyClient.stop(context)
                     error("Sing-box failed to start for health check")
