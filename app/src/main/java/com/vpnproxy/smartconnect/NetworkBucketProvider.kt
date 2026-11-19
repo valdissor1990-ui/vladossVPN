@@ -77,6 +77,20 @@ class NetworkBucketProvider @Inject constructor(
                     .build()
                 manager.registerNetworkCallback(request, networkCallback)
             }
+            // Reconcile networks that appeared between the first seed and callback
+            // registration. Their initial onCapabilitiesChanged delivery may be queued
+            // until after this constructor returns; recording them here prevents that
+            // delayed initial delivery from looking like a real network handover.
+            runCatching {
+                manager.allNetworks.forEach { network ->
+                    val capabilities = manager.getNetworkCapabilities(network) ?: return@forEach
+                    if (isValidatedPhysicalNetwork(capabilities)) {
+                        observedPhysicalNetworks[network.toString()] = signature(capabilities)
+                    } else {
+                        observedPhysicalNetworks.remove(network.toString())
+                    }
+                }
+            }
             initializingNetworks = false
         }
     }
