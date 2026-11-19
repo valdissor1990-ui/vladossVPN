@@ -63,11 +63,13 @@ android {
             dimension = "distribution"
             applicationIdSuffix = ".direct"
             buildConfigField("boolean", "ENABLE_SELF_UPDATE", "true")
+            buildConfigField("boolean", "ENABLE_BATTERY_EXEMPTION", "true")
         }
         create("play") {
             dimension = "distribution"
             applicationIdSuffix = ".play"
             buildConfigField("boolean", "ENABLE_SELF_UPDATE", "false")
+            buildConfigField("boolean", "ENABLE_BATTERY_EXEMPTION", "false")
         }
     }
 
