@@ -46,7 +46,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val raw = uri.removePrefix("ss://")
+            val raw = uri.substringAfter("://")
             val hashIdx = raw.indexOf('#')
             val name = if (hashIdx >= 0) {
                 decodeFragmentSafely(raw.substring(hashIdx + 1))
@@ -124,7 +124,7 @@ internal object ExtraUriParsers {
                 password = password
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse ss URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse ss URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -135,7 +135,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val b64 = uri.removePrefix("vmess://")
+            val b64 = uri.substringAfter("://")
             val jsonText = String(
                 Base64.decode(b64, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP)
             )
@@ -168,7 +168,7 @@ internal object ExtraUriParsers {
                 providerTag = providerTag
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -188,6 +188,10 @@ internal object ExtraUriParsers {
                 if (i < 0) it to ""
                 else URLDecoder.decode(it.substring(0, i), "UTF-8") to
                     URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            }.let { decoded ->
+                decoded + decoded.entries.associate { (key, value) ->
+                    key.lowercase(java.util.Locale.ROOT) to value
+                }
             }
             val name = rawFragment?.let(::decodeFragmentSafely) ?: "Trojan $host"
             SubscriptionParser.ParsedConfig(
@@ -207,10 +211,10 @@ internal object ExtraUriParsers {
                 name = name,
                 providerTag = providerTag,
                 password = password,
-                insecure = query["allowInsecure"] == "1" || query["insecure"] == "1"
+                insecure = query["allowinsecure"] == "1" || query["insecure"] == "1"
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -248,7 +252,7 @@ internal object ExtraUriParsers {
                 password = pass
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse socks URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse socks URI: ${e.javaClass.simpleName}")
             null
         }
     }
