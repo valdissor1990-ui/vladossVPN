@@ -33,8 +33,9 @@ class NetworkBucketProvider @Inject constructor(
     // their first delivery as a real network change during an in-flight probe.
     @Volatile private var initializingNetworks = true
     // The libbox default-interface monitor reports the physical network it actually selected.
-    @Volatile private var platformSelectionKnown = false
-    @Volatile private var platformSelectedUnderlay: Network? = null
+    // A single volatile reference keeps "known" and the selected Network consistent.
+    private data class PlatformUnderlaySelection(val network: Network?)
+    @Volatile private var platformUnderlaySelection: PlatformUnderlaySelection? = null
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -115,10 +116,9 @@ class NetworkBucketProvider @Inject constructor(
         // While the VPN is active, do not guess between simultaneously available Wi-Fi
         // and cellular networks. Prefer the exact physical underlay selected by libbox.
         if (activeCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
-            if (!platformSelectionKnown) {
-                return snapshotFor("other", "vpn-underlay-pending")
-            }
-            val selected = platformSelectedUnderlay
+            val selection = platformUnderlaySelection
+                ?: return snapshotFor("other", "vpn-underlay-pending")
+            val selected = selection.network
             val selectedCapabilities = selected?.let(manager::getNetworkCapabilities)
             val selectedBucket = bucket(selectedCapabilities)
             if (
@@ -170,14 +170,12 @@ class NetworkBucketProvider @Inject constructor(
 
     /** Called by SingBoxPlatform with the same underlay selected for libbox routing. */
     fun updatePlatformSelectedUnderlay(network: Network?) {
-        platformSelectedUnderlay = network
-        platformSelectionKnown = true
+        platformUnderlaySelection = PlatformUnderlaySelection(network)
     }
 
     /** Clear the libbox selection when its default-interface monitor is closed. */
     fun clearPlatformSelectedUnderlay() {
-        platformSelectedUnderlay = null
-        platformSelectionKnown = false
+        platformUnderlaySelection = null
     }
 
     fun currentBucket(): String = snapshot().bucket
