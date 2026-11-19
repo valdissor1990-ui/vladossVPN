@@ -122,21 +122,17 @@ class SubscriptionParser @Inject constructor(
             detectPayloadFormat(decoded) != "unknown"
         val effective = if (useDecoded) decoded!! else trimmed
         val format = detectPayloadFormat(effective)
-        val configs = parse(rawContent, providerTag)
+        val rejectionReasons = linkedMapOf<String, Int>()
+        val configs = parseInternal(rawContent, providerTag, rejectionReasons)
         val countedCandidates = countPayloadCandidates(effective, format)
         val candidateCount = countedCandidates?.coerceAtLeast(configs.size)
         val rejectedCount = candidateCount?.minus(configs.size)?.coerceAtLeast(0)
-        val rejectionReasons = when {
-            rejectedCount != null && rejectedCount > 0 -> mapOf(
-                when (format) {
-                    "uri" -> "invalid_or_unsupported_uri"
-                    "json" -> "invalid_or_unsupported_json_entry"
-                    "clash_yaml" -> "invalid_or_unsupported_clash_proxy"
-                    else -> "unrecognized_or_malformed_payload"
-                } to rejectedCount
-            )
-            candidateCount == null && configs.isEmpty() -> mapOf("unrecognized_or_malformed_payload" to 1)
-            else -> emptyMap()
+        val reportedRejections = rejectionReasons.toMutableMap()
+        val classifiedCount = reportedRejections.values.sum()
+        if (rejectedCount != null && classifiedCount < rejectedCount) {
+            reportedRejections["malformed_or_unclassified_entry"] = rejectedCount - classifiedCount
+        } else if (rejectedCount == null && configs.isEmpty()) {
+            reportedRejections.putIfAbsent("unrecognized_or_malformed_payload", 1)
         }
         val duplicateCount = (configs.size - configs.distinctBy { it.connectionKey() }.size).coerceAtLeast(0)
         val report = ParseReport(
@@ -146,7 +142,7 @@ class SubscriptionParser @Inject constructor(
             rejectedCount = rejectedCount,
             duplicateCount = duplicateCount,
             protocolCounts = configs.groupingBy { it.transport.lowercase(java.util.Locale.ROOT) }.eachCount(),
-            rejectionReasons = rejectionReasons,
+            rejectionReasons = reportedRejections,
             decodedBase64 = useDecoded
         )
         return ParseOutcome(configs, report)
@@ -158,6 +154,71 @@ class SubscriptionParser @Inject constructor(
         content.contains("proxies:") || content.contains("proxy-groups:") -> "clash_yaml"
         content.lineSequence().any { it.trim().contains("://") && !it.trim().startsWith("#") } -> "uri"
         else -> "unknown"
+    }
+
+    private fun MutableMap<String, Int>.increment(reason: String) {
+        this[reason] = (this[reason] ?: 0) + 1
+    }
+
+    private fun classifyUriRejection(line: String, scheme: String): String {
+        if (scheme !in setOf("vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5")) return "unsupported_scheme"
+        val uri = runCatching { URI(line.substringBefore('#')) }.getOrElse { return "malformed_uri" }
+        if (uri.host.isNullOrBlank()) return "missing_server"
+        if (uri.port > 65535 || uri.port == 0) return "invalid_port"
+        if (scheme in setOf("vless", "hysteria2", "hy2", "tuic") && uri.rawUserInfo.isNullOrBlank()) return "missing_credentials"
+        if (scheme == "vless") {
+            val query = parseUriQuery(uri.rawQuery)
+            if (query["security"].equals("reality", ignoreCase = true) &&
+                query["publickey"].isNullOrBlank() && query["pbk"].isNullOrBlank()
+            ) return "missing_reality_public_key"
+        }
+        return "invalid_or_malformed_entry"
+    }
+
+    private fun classifyJsonRejection(obj: JsonObject): String {
+        val type = obj["type"]?.jsonPrimitive?.contentOrNull
+        if (!type.isNullOrBlank()) {
+            if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
+            if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+            val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return "missing_port"
+            if (port !in 1..65535) return "invalid_port"
+            if (obj["uuid"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+            val reality = obj["tls"]?.jsonObject?.get("reality")?.jsonObject
+            if (reality?.get("enabled")?.jsonPrimitive?.booleanOrNull == true &&
+                reality["public_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            ) return "missing_reality_public_key"
+            return "invalid_or_malformed_entry"
+        }
+        val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull ?: return "missing_protocol"
+        if (!protocol.equals("vless", ignoreCase = true) && !protocol.equals("hysteria", ignoreCase = true)) return "unsupported_protocol"
+        if (protocol.equals("hysteria", ignoreCase = true)) {
+            val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+            val stream = obj["streamSettings"]?.jsonObject
+            val version = settings["version"]?.jsonPrimitive?.intOrNull
+                ?: stream?.get("hysteriaSettings")?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull
+            if (version != 2) return "unsupported_protocol_version"
+            if (settings["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                settings["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            ) return "missing_server"
+            if (settings["auth"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                settings["password"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                stream?.get("hysteriaSettings")?.jsonObject?.get("auth")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            ) return "missing_credentials"
+            return "invalid_or_malformed_entry"
+        }
+        val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+        val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_server"
+        if (vnext["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+        val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_credentials"
+        if (user["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+        val port = vnext["port"]?.jsonPrimitive?.intOrNull ?: 443
+        if (port !in 1..65535) return "invalid_port"
+        val stream = obj["streamSettings"]?.jsonObject
+        val reality = stream?.get("realitySettings")?.jsonObject
+        if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
+            reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+        ) return "missing_reality_public_key"
+        return "invalid_or_malformed_entry"
     }
 
     private fun countPayloadCandidates(content: String, format: String): Int? = runCatching {
@@ -182,7 +243,14 @@ class SubscriptionParser @Inject constructor(
         }
     }.getOrNull()
 
-    fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> {
+    fun parse(rawContent: String, providerTag: String = ""): List<ParsedConfig> =
+        parseInternal(rawContent, providerTag, null)
+
+    private fun parseInternal(
+        rawContent: String,
+        providerTag: String,
+        rejectionCounts: MutableMap<String, Int>?
+    ): List<ParsedConfig> {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) {
             logCollector.warn(TAG, "Subscription import rejected: empty payload provider=$providerTag")
@@ -201,32 +269,32 @@ class SubscriptionParser @Inject constructor(
         if (!decoded.isNullOrBlank() && decoded != trimmed) {
             // Some providers Base64-wrap JSON as well as plain URI lists.
             if (decoded.startsWith("[") || decoded.startsWith("{")) {
-                val jsonResult = tryParseJson(decoded, providerTag)
+                val jsonResult = tryParseJson(decoded, providerTag, rejectionCounts)
                 if (jsonResult.isNotEmpty()) {
                     logCollector.info(TAG, "Decoded Base64 JSON subscription: parsed=${jsonResult.size}")
                     return jsonResult
                 }
             }
             if (decoded.contains("proxies:") || decoded.contains("proxy-groups:")) {
-                val yamlResult = tryParseClashYaml(decoded, providerTag)
+                val yamlResult = tryParseClashYaml(decoded, providerTag, rejectionCounts)
                 if (yamlResult.isNotEmpty()) return yamlResult
             }
-            if (containsSupportedUri(decoded)) return parseVlessLines(decoded, providerTag)
+            if (containsSupportedUri(decoded)) return parseVlessLines(decoded, providerTag, rejectionCounts)
         }
 
         if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-            val jsonResult = tryParseJson(trimmed, providerTag)
+            val jsonResult = tryParseJson(trimmed, providerTag, rejectionCounts)
             if (jsonResult.isNotEmpty()) return jsonResult
         }
 
         if (trimmed.contains("proxies:") || trimmed.contains("proxy-groups:")) {
-            val yamlResult = tryParseClashYaml(trimmed, providerTag)
+            val yamlResult = tryParseClashYaml(trimmed, providerTag, rejectionCounts)
             if (yamlResult.isNotEmpty()) return yamlResult
         }
 
         if (containsSupportedUri(trimmed)) {
             // Keep scheme detection case-insensitive, matching parseVlessLines().
-            return parseVlessLines(trimmed, providerTag)
+            return parseVlessLines(trimmed, providerTag, rejectionCounts)
         }
 
         logCollector.warn(TAG, "Unknown subscription format", mapOf("length" to trimmed.length))
@@ -248,19 +316,15 @@ class SubscriptionParser @Inject constructor(
         listOf("vless://", "hysteria2://", "hy2://", "tuic://", "ss://", "vmess://", "trojan://", "socks://", "socks5://")
             .any { text.contains(it, ignoreCase = true) }
 
-    private fun parseVlessLines(text: String, providerTag: String): List<ParsedConfig> {
+    private fun parseVlessLines(
+        text: String,
+        providerTag: String,
+        rejectionCounts: MutableMap<String, Int>? = null
+    ): List<ParsedConfig> {
         val candidates = text.lineSequence()
             .map { it.trim() }
             .filter { line ->
-                line.startsWith("vless://", ignoreCase = true) ||
-                    line.startsWith("hysteria2://", ignoreCase = true) ||
-                    line.startsWith("hy2://", ignoreCase = true) ||
-                    line.startsWith("tuic://", ignoreCase = true) ||
-                    line.startsWith("ss://", ignoreCase = true) ||
-                    line.startsWith("vmess://", ignoreCase = true) ||
-                    line.startsWith("trojan://", ignoreCase = true) ||
-                    line.startsWith("socks://", ignoreCase = true) ||
-                    line.startsWith("socks5://", ignoreCase = true)
+                line.contains("://") && !line.startsWith("#")
             }.toList()
         val parsed = mutableListOf<ParsedConfig>()
         val skippedByScheme = linkedMapOf<String, Int>()
@@ -280,6 +344,7 @@ class SubscriptionParser @Inject constructor(
                 parsed += config
             } else {
                 skippedByScheme[scheme] = (skippedByScheme[scheme] ?: 0) + 1
+                rejectionCounts?.increment(classifyUriRejection(line, scheme))
                 val label = line.substringAfter('#', "").take(64).ifBlank { "no-name" }
                     .replace(Regex("[^\\p{L}\\p{N} _.,()\\-]"), "_")
                 // Never log the URI itself: it contains UUIDs/passwords/Reality keys.
@@ -491,7 +556,11 @@ class SubscriptionParser @Inject constructor(
         }
     }
 
-    private fun tryParseJson(json: String, providerTag: String): List<ParsedConfig> {
+    private fun tryParseJson(
+        json: String,
+        providerTag: String,
+        rejectionCounts: MutableMap<String, Int>? = null
+    ): List<ParsedConfig> {
         return try {
             val element = Json.parseToJsonElement(json)
             val configs = mutableListOf<ParsedConfig>()
@@ -500,18 +569,24 @@ class SubscriptionParser @Inject constructor(
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
                         candidateCount++
-                        extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
+                        val parsed = extractFromJsonObject(item, providerTag)
+                        if (parsed != null) configs.add(parsed)
+                        else rejectionCounts?.increment(classifyJsonRejection(item))
                     }
                 }
                 is JsonObject -> {
                     element["outbounds"]?.jsonArray?.forEach { item ->
                         if (item is JsonObject) {
                             candidateCount++
-                            extractFromJsonObject(item, providerTag)?.let { configs.add(it) }
+                            val parsed = extractFromJsonObject(item, providerTag)
+                            if (parsed != null) configs.add(parsed)
+                            else rejectionCounts?.increment(classifyJsonRejection(item))
                         }
                     } ?: run {
                         candidateCount = 1
-                        extractFromJsonObject(element, providerTag)?.let { configs.add(it) }
+                        val parsed = extractFromJsonObject(element, providerTag)
+                        if (parsed != null) configs.add(parsed)
+                        else rejectionCounts?.increment(classifyJsonRejection(element))
                     }
                 }
                 else -> {}
@@ -662,52 +737,79 @@ class SubscriptionParser @Inject constructor(
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun tryParseClashYaml(yamlText: String, providerTag: String): List<ParsedConfig> {
+    private fun tryParseClashYaml(
+        yamlText: String,
+        providerTag: String,
+        rejectionCounts: MutableMap<String, Int>? = null
+    ): List<ParsedConfig> {
         return try {
             val yaml = Yaml()
             val root = yaml.load<Map<String, Any>>(yamlText) ?: return emptyList()
             val proxies = root["proxies"] as? List<Map<String, Any>> ?: return emptyList()
-            proxies.mapNotNull { proxy ->
-                try {
-                    val type = proxy["type"] as? String ?: return@mapNotNull null
-                    if (type != "vless") return@mapNotNull null
-                    val name = proxy["name"] as? String ?: "unknown"
-                    val server = proxy["server"] as? String ?: return@mapNotNull null
-                    val port = (proxy["port"] as? Number)?.toInt() ?: 443
-                    val uuid = proxy["uuid"] as? String ?: return@mapNotNull null
-                    val network = proxy["network"] as? String ?: "tcp"
-                    val tls = proxy["tls"] as? Boolean ?: false
-                    val reality = proxy["reality-opts"] as? Map<String, Any>
-                    val security = when {
-                        reality != null -> "reality"
-                        tls -> "tls"
-                        else -> "none"
-                    }
-                    ParsedConfig(
-                        uuid = uuid, address = server, port = port,
-                        transport = network, security = security,
-                        sni = proxy["servername"] as? String ?: proxy["sni"] as? String,
-                        path = if (network.equals("grpc", ignoreCase = true)) {
-                            val grpcOptions = proxy["grpc-opts"] as? Map<String, Any>
-                            grpcOptions?.get("grpc-service-name") as? String
-                                ?: grpcOptions?.get("service-name") as? String
+            buildList {
+                proxies.forEach { proxy ->
+                    val parsed = try {
+                        val type = proxy["type"] as? String
+                        if (!type.equals("vless", ignoreCase = true)) {
+                            null
                         } else {
-                            (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
-                                ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String
-                        },
-                        host = ((proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>)?.get("Host") as? String,
-                        mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
-                        fingerprint = proxy["client-fingerprint"] as? String,
-                        publicKey = reality?.get("public-key") as? String,
-                        shortId = reality?.get("short-id") as? String,
-                        flow = proxy["flow"] as? String,
-                        name = name, providerTag = providerTag
-                    ).takeIf { it.isValid() }
-                } catch (_: Exception) { null }
+                            val name = proxy["name"] as? String ?: "unknown"
+                            val server = proxy["server"] as? String
+                            val port = (proxy["port"] as? Number)?.toInt() ?: 443
+                            val uuid = proxy["uuid"] as? String
+                            if (server.isNullOrBlank() || uuid.isNullOrBlank()) null
+                            else {
+                                val network = proxy["network"] as? String ?: "tcp"
+                                val tls = proxy["tls"] as? Boolean ?: false
+                                val reality = proxy["reality-opts"] as? Map<String, Any>
+                                val security = when {
+                                    reality != null -> "reality"
+                                    tls -> "tls"
+                                    else -> "none"
+                                }
+                                ParsedConfig(
+                                    uuid = uuid, address = server, port = port,
+                                    transport = network, security = security,
+                                    sni = proxy["servername"] as? String ?: proxy["sni"] as? String,
+                                    path = if (network.equals("grpc", ignoreCase = true)) {
+                                        val grpcOptions = proxy["grpc-opts"] as? Map<String, Any>
+                                        grpcOptions?.get("grpc-service-name") as? String
+                                            ?: grpcOptions?.get("service-name") as? String
+                                    } else {
+                                        (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
+                                            ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String
+                                    },
+                                    host = ((proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>)?.get("Host") as? String,
+                                    mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
+                                    fingerprint = proxy["client-fingerprint"] as? String,
+                                    publicKey = reality?.get("public-key") as? String,
+                                    shortId = reality?.get("short-id") as? String,
+                                    flow = proxy["flow"] as? String,
+                                    name = name, providerTag = providerTag
+                                ).takeIf { it.isValid() }
+                            }
+                        }
+                    } catch (_: Exception) { null }
+                    if (parsed != null) add(parsed)
+                    else rejectionCounts?.increment(classifyClashRejection(proxy))
+                }
             }
         } catch (e: Exception) {
-            logCollector.warn(TAG, "Clash YAML parse failed: ${e.message}")
+            logCollector.warn(TAG, "Clash YAML parse failed: " + e.javaClass.simpleName)
             emptyList()
         }
+    }
+
+    private fun classifyClashRejection(proxy: Map<String, Any>): String {
+        if (!(proxy["type"] as? String).equals("vless", ignoreCase = true)) return "unsupported_protocol"
+        if ((proxy["server"] as? String).isNullOrBlank()) return "missing_server"
+        if ((proxy["uuid"] as? String).isNullOrBlank()) return "missing_credentials"
+        val port = (proxy["port"] as? Number)?.toInt() ?: 443
+        if (port !in 1..65535) return "invalid_port"
+        if (proxy["reality-opts"] is Map<*, *>) {
+            val reality = proxy["reality-opts"] as? Map<*, *>
+            if ((reality?.get("public-key") as? String).isNullOrBlank()) return "missing_reality_public_key"
+        }
+        return "invalid_or_malformed_entry"
     }
 }
