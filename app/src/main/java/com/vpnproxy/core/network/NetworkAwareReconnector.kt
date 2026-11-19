@@ -51,6 +51,9 @@ class NetworkAwareReconnector(
     @Volatile private var selectedNetwork: Network? = null
     @Volatile private var selectedNetworkSignature: String? = null
     @Volatile private var hasSelectedNetworkBaseline = false
+    // NetworkCallback may deliver onAvailable while allNetworks is still being seeded.
+    // Suppress selection events until the initial snapshot is complete.
+    @Volatile private var initializingSnapshot = false
 
     private sealed class NetEvent {
         data class Lost(val network: Network) : NetEvent()
@@ -98,8 +101,14 @@ class NetworkAwareReconnector(
         val previousSignature = selectedNetworkSignature
         selectedNetwork = chosen?.key
         selectedNetworkSignature = chosen?.value
-        // The first snapshot establishes a baseline. Emitting an event for this
-        // initial selection can immediately restart a freshly connected VPN.
+        // Callback delivery can race with the allNetworks seed. During that window
+        // the candidate set is incomplete, so no selection is authoritative yet.
+        if (initializingSnapshot) {
+            logCollector.debug(TAG, "Collecting initial physical-network snapshot; suppress selection event")
+            return
+        }
+        // The completed first snapshot establishes a baseline. Emitting an event for
+        // this initial selection can immediately restart a freshly connected VPN.
         if (!hasSelectedNetworkBaseline) {
             hasSelectedNetworkBaseline = true
             logCollector.info(TAG, "Physical-network baseline established: netId=${chosen?.key?.hashCode() ?: "none"} signature=${chosen?.value ?: "none"}")
@@ -125,6 +134,8 @@ class NetworkAwareReconnector(
     }
 
     private val networkStatusFlow = callbackFlow {
+        initializingSnapshot = true
+        hasSelectedNetworkBaseline = false
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val caps = cm.getNetworkCapabilities(network) ?: return
@@ -176,8 +187,13 @@ class NetworkAwareReconnector(
                     physicalNetworks[network] = signature(caps)
                 }
             }
-            refreshSelectedNetwork { trySend(it) }
-        }.onFailure { logCollector.warn(TAG, "Initial physical-network snapshot failed: ${it.message}") }
+        }.onFailure {
+            logCollector.warn(TAG, "Initial physical-network snapshot failed: ${it.message}")
+        }
+        // Only now is the initial candidate set complete. Establish the baseline once,
+        // so callback ordering cannot turn a late Wi-Fi/cellular seed into a false handover.
+        initializingSnapshot = false
+        refreshSelectedNetwork { trySend(it) }
 
         awaitClose {
             try {
@@ -186,6 +202,7 @@ class NetworkAwareReconnector(
                 selectedNetwork = null
                 selectedNetworkSignature = null
                 hasSelectedNetworkBaseline = false
+                initializingSnapshot = false
                 logCollector.info(TAG, "Unregistered physical-network callback")
             } catch (t: Throwable) {
                 logCollector.warn(TAG, "Unregister failed: ${t.message}")
