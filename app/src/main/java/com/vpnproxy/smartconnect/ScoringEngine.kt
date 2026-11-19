@@ -90,9 +90,14 @@ class ScoringEngine @Inject constructor(
      * Record a hard connect/traffic failure (not a soft latency miss).
      * Counts as failed attempts so chronic free-pool nodes lose rank quickly.
      */
-    fun recordHardFailure(config: ParsedConfig, weight: Int = 2) {
+    fun currentNetworkBucket(): String = networkBucketProvider?.currentBucket() ?: "other"
+
+    fun recordHardFailure(
+        config: ParsedConfig,
+        weight: Int = 2,
+        networkBucket: String = currentNetworkBucket()
+    ) {
         val w = weight.coerceIn(1, 5)
-        val networkBucket = networkBucketProvider?.currentBucket() ?: "other"
         repeat(w) { recordProbe(config, success = false, networkBucket = networkBucket) }
     }
 
@@ -100,7 +105,7 @@ class ScoringEngine @Inject constructor(
         latencyResults: List<LatencyResult>,
         speedResults: List<SpeedResult> = emptyList()
     ): List<ScoredServer> {
-        val networkBucket = networkBucketProvider?.currentBucket() ?: "other"
+        val networkBucket = currentNetworkBucket()
         latencyResults.forEach { recordProbe(it.config, it.success, networkBucket) }
         val speedMap = speedResults
             .filter { it.success && it.speedMbps.isFinite() && it.speedMbps > 0f }
