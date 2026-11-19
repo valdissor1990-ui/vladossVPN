@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -37,6 +38,7 @@ class NetworkAwareReconnector(
         private const val TAG = "NetworkAwareReconnector"
         private const val DEBOUNCE_MS = 4_000L
         private const val COOLDOWN_MS = 8_000L
+        private const val MAX_BUSY_WAIT_MS = 90_000L
     }
 
     private val appContext = context.applicationContext
@@ -201,8 +203,16 @@ class NetworkAwareReconnector(
                 // change and process it after the current lifecycle transition settles.
                 .conflate()
                 .collect { event ->
-                    while (isBusy()) {
-                        kotlinx.coroutines.delay(250L)
+                    val settled = withTimeoutOrNull(MAX_BUSY_WAIT_MS) {
+                        while (isBusy()) {
+                            kotlinx.coroutines.delay(250L)
+                        }
+                        true
+                    } ?: false
+                    if (!settled) {
+                        logCollector.warn(TAG, "Skip queued network change — VPN transition stayed busy beyond ${MAX_BUSY_WAIT_MS}ms")
+                        onReconnectStateChanged(false)
+                        return@collect
                     }
                     if (!isVpnActive()) {
                         logCollector.debug(TAG, "Skip queued network change — VPN is no longer active")
