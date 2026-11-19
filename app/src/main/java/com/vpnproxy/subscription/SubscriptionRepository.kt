@@ -481,10 +481,14 @@ class SubscriptionRepository @Inject constructor(
             val jsonStr = json.encodeToString(configsSerializer, cached)
             // Server profiles contain UUIDs, passwords and Reality credentials. Keep the
             // complete cache inside the same encrypted preferences store as subscriptions.
-            encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).apply()
-            deleteLegacyPlaintextCache()
+            check(encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).commit()) {
+                "Encrypted cache commit failed"
+            }
         } catch (e: Exception) {
             logCollector.warn(TAG, "Encrypted cache save failed: ${e.javaClass.simpleName}")
+        } finally {
+            // Never leave the legacy credential-bearing file behind after a save attempt.
+            deleteLegacyPlaintextCache()
         }
     }
 
@@ -509,7 +513,10 @@ class SubscriptionRepository @Inject constructor(
             }
 
             if (decoded.isNotEmpty()) {
-                encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, legacyJson).apply()
+                val stored = encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, legacyJson).commit()
+                if (!stored) {
+                    logCollector.warn(TAG, "Legacy cache could not be committed to encrypted preferences")
+                }
             }
             // Do not retain credentials in plaintext even if the old cache is malformed
             // or the encrypted migration cannot preserve it. The subscription can refresh it.
