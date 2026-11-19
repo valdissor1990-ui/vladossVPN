@@ -161,6 +161,7 @@ fun SubscriptionsScreen(
                                 Text(provider.providerName, style = MaterialTheme.typography.titleSmall)
                                 val sourceLabel = when (provider.source) {
                                     "network" -> "загружено из сети"
+                                    "etag_cache" -> "ответ не изменился, использован ETag-кэш"
                                     "encrypted_body" -> "восстановлено из защищённого кэша"
                                     "aggregate_cache" -> "восстановлено из локального кэша"
                                     else -> "не обновлено"
