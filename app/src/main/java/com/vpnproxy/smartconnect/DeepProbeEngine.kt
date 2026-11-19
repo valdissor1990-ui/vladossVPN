@@ -170,8 +170,9 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
+                try {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                 "Проверка отдельных профилей доступна только при полностью остановленном VPN"
@@ -184,7 +185,7 @@ class DeepProbeEngine @Inject constructor(
                 "VPN начал запускаться до начала проверки профилей"
             }
             checkProbeActive(probeGeneration)
-            val started = SingboxProxyClient.start(context, configJson)
+            val started = runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             check(started) { "Sing-box failed to start for profile ping" }
             logCollector.info(TAG, "Profile probe session started: generation=$probeGeneration profiles=${configs.size} attemptsPerProfile=$PROFILE_PING_ATTEMPTS requiredSuccessSamples=2 concurrency=8 endpoints=${PROFILE_PING_URLS.size}")
 
@@ -270,9 +271,10 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
             }
+                }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
@@ -280,8 +282,9 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
+                try {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
@@ -294,7 +297,7 @@ class DeepProbeEngine @Inject constructor(
             checkProbeActive(probeGeneration)
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
-                SingboxProxyClient.start(context, configJson)
+                runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -403,9 +406,10 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
             }
+                }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
