@@ -173,9 +173,14 @@ class NetworkAwareReconnector(
                 callback
             )
             logCollector.info(TAG, "Registered physical-network callback (VPN networks excluded)")
-        } catch (t: Throwable) {
-            logCollector.error(TAG, "Failed to register physical-network callback", t)
-            close(t)
+        } catch (failure: Exception) {
+            initializingSnapshot = false
+            physicalNetworks.clear()
+            selectedNetwork = null
+            selectedNetworkSignature = null
+            hasSelectedNetworkBaseline = false
+            logCollector.error(TAG, "Failed to register physical-network callback", failure)
+            close(failure)
             return@callbackFlow
         }
 
@@ -200,14 +205,16 @@ class NetworkAwareReconnector(
         awaitClose {
             try {
                 cm.unregisterNetworkCallback(callback)
+                logCollector.info(TAG, "Unregistered physical-network callback")
+            } catch (failure: Exception) {
+                logCollector.warn(TAG, "Unregister failed: ${failure.message}")
+            } finally {
+                // Always clear shared snapshot state, even if Android rejects unregister.
                 physicalNetworks.clear()
                 selectedNetwork = null
                 selectedNetworkSignature = null
                 hasSelectedNetworkBaseline = false
                 initializingSnapshot = false
-                logCollector.info(TAG, "Unregistered physical-network callback")
-            } catch (t: Throwable) {
-                logCollector.warn(TAG, "Unregister failed: ${t.message}")
             }
         }
     }
