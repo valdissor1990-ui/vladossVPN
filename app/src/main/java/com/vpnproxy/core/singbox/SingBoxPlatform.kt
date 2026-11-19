@@ -350,7 +350,6 @@ class SingBoxPlatform(
                         return
                     }
                     monitoredDefaultNetwork = network
-                    networkBucketProvider?.updatePlatformSelectedUnderlay(network)
                     publishDefaultInterface(connectivity, network, this, 0)
                 }
 
@@ -376,9 +375,10 @@ class SingBoxPlatform(
                     if (!isCurrentMonitor(this) || monitoredDefaultNetwork != network) return
                     val replacement = findCurrentPhysicalNetwork(connectivity, exclude = network)
                     monitoredDefaultNetwork = replacement
-                    networkBucketProvider?.updatePlatformSelectedUnderlay(replacement)
                     if (replacement == null) {
-                        notifyDefaultInterface(listener, "", -1, false)
+                        if (notifyDefaultInterface(listener, "", -1, false)) {
+                            networkBucketProvider?.updatePlatformSelectedUnderlay(null)
+                        }
                         logMonitor("DefaultInterfaceMonitor: network lost; no physical default network")
                     } else {
                         publishDefaultInterface(connectivity, replacement, this, 0)
@@ -389,7 +389,6 @@ class SingBoxPlatform(
             // Seed the current physical network before registration. The callback may fire
             // immediately; do not overwrite its newer selection after register returns.
             monitoredDefaultNetwork = findCurrentPhysicalNetwork(connectivity)
-            networkBucketProvider?.updatePlatformSelectedUnderlay(monitoredDefaultNetwork)
             interfaceMonitorListener = listener
             interfaceMonitorCallback = callback
             interfaceMonitorThread = thread
@@ -425,9 +424,13 @@ class SingBoxPlatform(
             val initialName = initial?.name.orEmpty()
             val initialIndex = initial?.index ?: -1
             if (initialNetwork == null) {
-                notifyDefaultInterface(listener, "", -1, false)
+                if (notifyDefaultInterface(listener, "", -1, false)) {
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(null)
+                }
             } else if (initial != null) {
-                notifyDefaultInterface(listener, initialName, initialIndex, isNetworkMetered(connectivity, initialNetwork))
+                if (notifyDefaultInterface(listener, initialName, initialIndex, isNetworkMetered(connectivity, initialNetwork))) {
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(initialNetwork)
+                }
             } else {
                 // LinkProperties may not be ready yet; publish the real interface from the
                 // callback once Android finishes configuring the network.
@@ -603,7 +606,10 @@ class SingBoxPlatform(
 
         if (monitoredDefaultNetwork != network) return
         val currentListener = interfaceMonitorListener ?: return
-        notifyDefaultInterface(currentListener, snapshot.name, snapshot.index, isNetworkMetered(connectivity, network))
+        if (notifyDefaultInterface(currentListener, snapshot.name, snapshot.index, isNetworkMetered(connectivity, network))) {
+            // Publish the probe bucket only after libbox accepted this interface update.
+            networkBucketProvider?.updatePlatformSelectedUnderlay(network)
+        }
         logMonitor("DefaultInterfaceMonitor: network changed to ${snapshot.name} index=${snapshot.index}")
     }
 
@@ -612,9 +618,10 @@ class SingBoxPlatform(
         name: String,
         index: Int,
         isExpensive: Boolean
-    ) {
-        runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
-            .onFailure { logError( "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+    ): Boolean {
+        val result = runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
+        result.onFailure { logError( "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+        return result.isSuccess
     }
 
     private fun logMonitor(message: String) {
