@@ -709,7 +709,10 @@ class SubscriptionParser @Inject constructor(
                     name = obj["tag"]?.jsonPrimitive?.content ?: "$address:$port",
                     providerTag = providerTag,
                     insecure = tls?.get("insecure")?.jsonPrimitive?.boolean ?: false,
-                    alpn = tls?.get("alpn")?.jsonArray?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList()
+                    alpn = tls?.get("alpn")?.jsonArray?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList(),
+                    // Preserve sing-box XHTTP transport options (padding/session headers,
+                    // uplink method, etc.). The builder applies its explicit allow-list.
+                    extra = if (transport.equals("xhttp", ignoreCase = true)) transportObject?.toString() else null
                 )
                 return parsed.takeIf { it.isValid() }
             }
