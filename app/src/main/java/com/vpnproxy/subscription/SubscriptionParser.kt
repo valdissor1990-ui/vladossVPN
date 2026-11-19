@@ -646,7 +646,12 @@ class SubscriptionParser @Inject constructor(
                     name = obj["tag"]?.jsonPrimitive?.content ?: "$address:$port",
                     providerTag = providerTag,
                     insecure = tls?.get("insecure")?.jsonPrimitive?.boolean ?: false,
-                    alpn = tls?.get("alpn")?.jsonArray?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList()
+                    alpn = tls?.get("alpn")?.jsonArray?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList(),
+                    // Sing-box stores XHTTP's extended transport options directly on
+                    // the transport object (padding/session/header settings included).
+                    extra = if (transport.equals("xhttp", ignoreCase = true)) {
+                        normalizeXhttpExtra(transportObject?.toString())
+                    } else null
                 )
                 return parsed.takeIf { it.isValid() }
             }
@@ -731,7 +736,12 @@ class SubscriptionParser @Inject constructor(
                 insecure = tls?.get("allowInsecure")?.jsonPrimitive?.booleanOrNull ?: false,
                 alpn = tls?.get("alpn")?.jsonArray
                     ?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
-                    ?: emptyList()
+                    ?: emptyList(),
+                // Xray's XHTTP extension object contains options not represented by
+                // the legacy path/host/mode fields.
+                extra = if (transport.equals("xhttp", ignoreCase = true)) {
+                    normalizeXhttpExtra(xhttp?.get("extra")?.toString())
+                } else null
             ).takeIf { it.isValid() }
         } catch (_: Exception) { null }
     }
