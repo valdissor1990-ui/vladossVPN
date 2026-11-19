@@ -764,6 +764,9 @@ class SubscriptionParser @Inject constructor(
                                 val network = proxy["network"] as? String ?: "tcp"
                                 val tls = proxy["tls"] as? Boolean ?: false
                                 val reality = proxy["reality-opts"] as? Map<String, Any>
+                                val xhttpOptions = proxy["xhttp-opts"] as? Map<String, Any>
+                                val xhttpHeaders = xhttpOptions?.get("headers") as? Map<String, Any>
+                                val wsHeaders = (proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>
                                 val security = when {
                                     reality != null -> "reality"
                                     tls -> "tls"
@@ -777,11 +780,18 @@ class SubscriptionParser @Inject constructor(
                                         val grpcOptions = proxy["grpc-opts"] as? Map<String, Any>
                                         grpcOptions?.get("grpc-service-name") as? String
                                             ?: grpcOptions?.get("service-name") as? String
+                                    } else if (network.equals("xhttp", ignoreCase = true)) {
+                                        xhttpOptions?.get("path") as? String
                                     } else {
                                         (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
-                                            ?: (proxy["xhttp-opts"] as? Map<String, Any>)?.get("path") as? String
                                     },
-                                    host = ((proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>)?.get("Host") as? String,
+                                    host = if (network.equals("xhttp", ignoreCase = true)) {
+                                        xhttpOptions?.get("host") as? String
+                                            ?: xhttpHeaders?.get("Host") as? String
+                                            ?: xhttpHeaders?.get("host") as? String
+                                    } else {
+                                        wsHeaders?.get("Host") as? String ?: wsHeaders?.get("host") as? String
+                                    },
                                     mode = (proxy["xhttp-opts"] as? Map<String, Any>)?.get("mode") as? String,
                                     fingerprint = proxy["client-fingerprint"] as? String,
                                     publicKey = reality?.get("public-key") as? String,
