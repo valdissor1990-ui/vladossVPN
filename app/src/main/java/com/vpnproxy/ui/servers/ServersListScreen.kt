@@ -82,6 +82,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -129,6 +130,10 @@ class ServersListViewModel @Inject constructor(
 
     fun rescanServers() {
         if (serverScanner.isScanning.value) return
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            Toast.makeText(context, "Остановите VPN перед полной проверкой серверов", Toast.LENGTH_SHORT).show()
+            return
+        }
         viewModelScope.launch {
             val configs = repository.getAllConfigs()
             serverScanner.scanAll(configs, force = true)
@@ -137,6 +142,10 @@ class ServersListViewModel @Inject constructor(
 
     fun runDeepProbe() {
         if (_deepProbeRunning.value) return
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            Toast.makeText(context, "Глубокий анализ доступен после отключения VPN", Toast.LENGTH_SHORT).show()
+            return
+        }
         deepProbeJob?.cancel()
         deepProbeJob = viewModelScope.launch {
             _deepProbeRunning.value = true
@@ -182,9 +191,11 @@ class ServersListViewModel @Inject constructor(
             // Profile probing uses a temporary Sing-box core and cannot run safely beside
             // the active VPN core. Wait for a real disconnect instead of leaving the list
             // permanently populated with unprobed "н/д" placeholders.
-            while (VpnProxyService.isRunning.value) {
-                VpnProxyService.isRunning.first { running -> !running }
-            }
+            combine(
+                VpnProxyService.isRunning,
+                VpnProxyService.isCoreTransitioning
+            ) { running, transitioning -> !running && !transitioning }
+                .first { ready -> ready }
             // The server list requires exhaustive results; the staged scan is only for
             // quick connection selection and intentionally stops after a successful batch.
             serverScanner.scanAll(configs)
