@@ -802,6 +802,13 @@ class HomeViewModel @Inject constructor(
         )
 
         val current = connectionCoordinator.state.value
+        if (current is ConnectionState.Disconnected && permissionFlowInProgress) {
+            // ConnectRequested deliberately keeps the coordinator Disconnected while
+            // permission/preflight is in progress. Record this choice for the active
+            // selection job instead of cancelling it and trying to start a second flow.
+            logCollector.info(TAG, "Manual server choice updated during active permission/preflight flow: ${server.config.name}")
+            return
+        }
         if (current is ConnectionState.Disconnected || current is ConnectionState.Error) {
             connect()
             return
