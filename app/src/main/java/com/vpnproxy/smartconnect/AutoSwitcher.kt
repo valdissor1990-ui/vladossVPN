@@ -1,8 +1,6 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.util.Log
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
@@ -34,6 +32,7 @@ enum class AutoSwitchState { MONITORING, SUSPECT, VALIDATING, MICRO_PROBE, SWITC
 class AutoSwitcher @Inject constructor(
     private val healthChecker: HealthChecker,
     private val scoringEngine: ScoringEngine,
+    private val networkBucketProvider: NetworkBucketProvider,
     private val logCollector: LogCollector,
     private val connectionCoordinator: ConnectionCoordinator,
     @ApplicationContext private val context: Context
@@ -161,33 +160,8 @@ class AutoSwitcher @Inject constructor(
             .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    fun currentNetworkBucket(): String {
-        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return "other"
-        val active = manager.activeNetwork
-        val activeCapabilities = active?.let(manager::getNetworkCapabilities)
-        fun bucket(capabilities: NetworkCapabilities?): String? = when {
-            capabilities == null -> null
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "other"
-            else -> null
-        }
-        bucket(activeCapabilities)?.let { return it }
-
-        // With VpnService active, activeNetwork is normally TRANSPORT_VPN. Inspect
-        // validated non-VPN networks to identify the underlying Wi-Fi/mobile transport.
-        val underlying = manager.allNetworks
-            .asSequence()
-            .filter { it != active }
-            .mapNotNull { network -> manager.getNetworkCapabilities(network) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-            .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
-            .mapNotNull(::bucket)
-            .firstOrNull { it == "wifi" || it == "cellular" }
-        return underlying ?: if (active == null) "offline" else "other"
-    }
+    fun currentNetworkBucket(): String = networkBucketProvider.currentBucket()
+    fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
 
     private fun blacklistKey(config: ParsedConfig): String =
         "${currentNetworkBucket()}|${serverKey(config)}"
@@ -598,7 +572,11 @@ class AutoSwitcher @Inject constructor(
                     logCollector.info(TAG, "Discarding background ranking: VPN disconnected before results were published")
                     return@launch
                 }
-                val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                val networkAfterProbes = healthChecker.currentNetworkSnapshot()
+                val ranked = scoringEngine.computeScore(
+                    ruResults + foreignResults,
+                    currentNetworkSnapshot = networkAfterProbes
+                )
                 if (scopeGeneration != providerScopeGeneration) {
                     logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
                     return@launch
@@ -718,8 +696,12 @@ class AutoSwitcher @Inject constructor(
         val foreign = allowed.filterNot(::isRussian)
         val ordered = russian + foreign
         val results = healthChecker.testLatency(ordered)
+        val networkAfterProbes = healthChecker.currentNetworkSnapshot()
         // Use the same measured-quality ordering as background ranking; region is not a score.
-        val ranked = scoringEngine.computeScore(results)
+        val ranked = scoringEngine.computeScore(
+            results,
+            currentNetworkSnapshot = networkAfterProbes
+        )
         _rankedServers.value = ranked
         val best = ranked.firstOrNull() ?: return null
         _currentServer.value = best
