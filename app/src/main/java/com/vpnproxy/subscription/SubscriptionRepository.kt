@@ -179,7 +179,8 @@ class SubscriptionRepository @Inject constructor(
             )
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
-            logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
+            // Subscription URLs can contain access tokens; never put them in diagnostics.
+            logCollector.info(TAG, "Subscription added")
             true
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
