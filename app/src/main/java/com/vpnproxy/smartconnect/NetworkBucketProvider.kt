@@ -38,8 +38,12 @@ class NetworkBucketProvider @Inject constructor(
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val key = network.toString()
-            val previous = observedPhysicalNetworks.put(key, isValidatedPhysicalNetwork)
-            if (previous != isValidatedPhysicalNetwork) networkEventGeneration.incrementAndGet()
+            if (isValidatedPhysicalNetwork) {
+                val previous = observedPhysicalNetworks.put(key, true)
+                if (previous != true) networkEventGeneration.incrementAndGet()
+            } else if (observedPhysicalNetworks.remove(key) == true) {
+                networkEventGeneration.incrementAndGet()
+            }
         }
 
         override fun onLost(network: Network) {
