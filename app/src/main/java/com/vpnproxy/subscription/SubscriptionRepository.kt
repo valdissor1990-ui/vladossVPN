@@ -28,6 +28,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.security.MessageDigest
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -388,7 +389,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
             for (sourceUrl in sources) {
                 try {
                     val sendDeviceMetadata = _deviceMetadataConsent.value
-                    val cacheKey = sourceUrl.hashCode().toUInt().toString(16)
+                    val cacheKey = MessageDigest.getInstance("SHA-256")
+                        .digest(sourceUrl.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
                     val cachedBody = encryptedPrefs.getString(bodyKey, null)
