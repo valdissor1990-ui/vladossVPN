@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.update.UpdateCheckWorker
 import com.vpnproxy.smartconnect.BatteryPolicy
+import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +26,8 @@ private val Context.settingsDataStore by preferencesDataStore(name = "vpnproxy_s
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val dualPathStore: DualPathStore
+    private val dualPathStore: DualPathStore,
+    private val subscriptionRepository: SubscriptionRepository
 ) : ViewModel() {
 
     companion object {
@@ -45,6 +47,12 @@ class SettingsViewModel @Inject constructor(
     val checkUpdates: StateFlow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_CHECK_UPDATES] ?: true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    val deviceMetadataConsent: StateFlow<Boolean> = subscriptionRepository.deviceMetadataConsent
+
+    fun setDeviceMetadataConsent(enabled: Boolean) {
+        subscriptionRepository.setDeviceMetadataConsent(enabled)
+    }
 
     private val _batteryEconomyMode = MutableStateFlow(BatteryPolicy.isEconomyModeEnabled(context))
     val batteryEconomyMode: StateFlow<Boolean> = _batteryEconomyMode.asStateFlow()
