@@ -30,12 +30,14 @@ fun SettingsScreen(
     val batteryEconomyMode by viewModel.batteryEconomyMode.collectAsStateWithLifecycle()
     val dualPathEnabled by viewModel.dualPathEnabled.collectAsStateWithLifecycle()
     val dualPathSelectedCount by viewModel.dualPathSelectedCount.collectAsStateWithLifecycle()
+    val deviceMetadataConsent by viewModel.deviceMetadataConsent.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
     var showSplitTunnelScreen by remember { mutableStateOf(false) }
     var showDualPathScreen by remember { mutableStateOf(false) }
     var showOpenSourceLicenses by remember { mutableStateOf(false) }
+    var showDeviceMetadataConsentDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -93,6 +95,29 @@ fun SettingsScreen(
                 Switch(checked = killSwitch, onCheckedChange = { viewModel.setKillSwitch(it) })
             }
 
+            Text("КОНФИДЕНЦИАЛЬНОСТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Передавать данные устройства подписке", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (deviceMetadataConsent) "Разрешено: HWID, модель и версия Android"
+                        else "Выключено: эти данные не отправляются",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(
+                    checked = deviceMetadataConsent,
+                    onCheckedChange = { enabled ->
+                        if (enabled) showDeviceMetadataConsentDialog = true
+                        else viewModel.setDeviceMetadataConsent(false)
+                    }
+                )
+            }
+
             Text("СЕТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().clickable { showSplitTunnelScreen = true }.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -138,31 +163,40 @@ fun SettingsScreen(
             }
 
             Text("ОБНОВЛЕНИЯ ПРИЛОЖЕНИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Проверять обновления", style = MaterialTheme.typography.bodyLarge)
-                    Text("Уведомлять о новых версиях", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (BuildConfig.ENABLE_SELF_UPDATE) {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Проверять обновления", style = MaterialTheme.typography.bodyLarge)
+                        Text("Уведомлять о новых версиях", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                    Switch(checked = checkUpdates, onCheckedChange = { viewModel.setCheckUpdates(it) })
                 }
-                Switch(checked = checkUpdates, onCheckedChange = { viewModel.setCheckUpdates(it) })
-            }
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Проверить обновления сейчас", style = MaterialTheme.typography.bodyLarge)
-                    Text("Запросить GitHub Releases", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                }
-                TextButton(
-                    onClick = { updateViewModel.check(force = true) },
-                    enabled = !isCheckingUpdates
-                ) {
-                    if (isCheckingUpdates) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Проверить")
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Проверить обновления сейчас", style = MaterialTheme.typography.bodyLarge)
+                        Text("Запросить GitHub Releases", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                    TextButton(
+                        onClick = { updateViewModel.check(force = true) },
+                        enabled = !isCheckingUpdates
+                    ) {
+                        if (isCheckingUpdates) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Проверить")
+                        }
                     }
                 }
+            } else {
+                Text(
+                    "Обновления устанавливаются через Google Play. Самостоятельная установка APK отключена.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
             }
 
             Text("О ПРИЛОЖЕНИИ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
@@ -187,6 +221,31 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showDeviceMetadataConsentDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeviceMetadataConsentDialog = false },
+            title = { Text("Разрешить передачу данных устройства?") },
+            text = {
+                Text(
+                    "При обновлении подписок приложение будет передавать на адрес каждого включённого вами поставщика: " +
+                        "уникальный псевдонимный HWID (хеш Android ID с отдельной солью приложения), модель устройства и версию Android. " +
+                        "Сам исходный Android ID не отправляется. Эти данные получает сервер поставщика подписки и он определяет, как их использовать. " +
+                        "Они могут применяться для ограничения числа устройств. Если оставить настройку выключенной, подписки продолжат загружаться без этих заголовков, " +
+                        "но проверка лимита устройств у некоторых поставщиков может не работать."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setDeviceMetadataConsent(true)
+                    showDeviceMetadataConsentDialog = false
+                }) { Text("Разрешить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeviceMetadataConsentDialog = false }) { Text("Не разрешать") }
+            }
+        )
     }
 
     UpdateDialog(
