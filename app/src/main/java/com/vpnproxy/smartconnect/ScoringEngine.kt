@@ -121,6 +121,9 @@ class ScoringEngine @Inject constructor(
             recordProbe(result.config, result.success, result.evidence?.startNetwork?.bucket ?: networkBucket)
         }
 
+        val candidates = usableLatencyResults
+            .filter { it.success && it.latencyMs != Long.MAX_VALUE }
+
         val speedMap = speedResults
             .filter { result ->
                 result.success &&
@@ -131,27 +134,50 @@ class ScoringEngine @Inject constructor(
             }
             .associateBy { it.config.connectionKey() }
 
-        val maxSpeed = speedMap.values.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
-
-        return usableLatencyResults
-            .filter { it.success && it.latencyMs != Long.MAX_VALUE }
-            .map { latencyResult ->
-                val speedResult = speedMap[latencyResult.config.connectionKey()]?.takeIf { speed ->
-                    val latencyEvidence = latencyResult.evidence
-                    val speedEvidence = speed.evidence
-                    latencyEvidence == null || speedEvidence == null ||
-                        latencyEvidence.startNetwork.sameNetwork(speedEvidence.startNetwork)
+        fun matchingSpeedResult(latencyResult: LatencyResult): SpeedResult? =
+            speedMap[latencyResult.config.connectionKey()]?.takeIf { speed ->
+                val latencyEvidence = latencyResult.evidence
+                val speedEvidence = speed.evidence
+                when {
+                    latencyEvidence == null && speedEvidence == null -> true
+                    latencyEvidence != null && speedEvidence != null ->
+                        speedEvidence.method == ProbeMethod.ISOLATED_PROFILE_SPEED &&
+                            latencyEvidence.startNetwork.sameNetwork(speedEvidence.startNetwork)
+                    else -> false
                 }
-                val speed = speedResult?.speedMbps ?: 0f
+            }
+
+        // A composite score is comparable only when every candidate has the same metric set.
+        // rankAll currently measures throughput for at most five candidates, so omit the
+        // speed dimension for the whole cohort whenever that measurement is incomplete.
+        val matchedSpeeds = candidates.mapNotNull { candidate ->
+            matchingSpeedResult(candidate)?.let { candidate.config.connectionKey() to it }
+        }.toMap()
+        val includeSpeedMetric = candidates.isNotEmpty() && matchedSpeeds.size == candidates.size
+        val maxSpeed = if (includeSpeedMetric) {
+            matchedSpeeds.values.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
+        } else {
+            1f
+        }
+
+        return candidates
+            .map { latencyResult ->
+                val speed = if (includeSpeedMetric) {
+                    matchedSpeeds[latencyResult.config.connectionKey()]?.speedMbps ?: 0f
+                } else {
+                    0f
+                }
                 val normalizedLatency = 1.0f / (latencyResult.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
-                val normalizedSpeed = speed / maxSpeed
+                val normalizedSpeed = if (includeSpeedMetric) speed / maxSpeed else 0f
                 val evidenceBucket = latencyResult.evidence?.startNetwork?.bucket ?: networkBucket
                 val observedSuccessRate = successRate(latencyResult.config, evidenceBucket)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
-                var score = 0.40f * normalizedLatency +
-                    0.25f * normalizedSpeed +
-                    0.35f * observedSuccessRate
+                val score = (
+                    0.40f * normalizedLatency +
+                        (if (includeSpeedMetric) 0.25f * normalizedSpeed else 0f) +
+                        0.35f * observedSuccessRate
+                    ) / if (includeSpeedMetric) 1f else 0.75f
                 val key = historyKey(latencyResult.config, evidenceBucket)
                 val hist = history.computeIfAbsent(key) { loadHistory(latencyResult.config, evidenceBucket) }
                 val attempts = synchronized(hist) { hist.attempts }
@@ -191,7 +217,11 @@ class ScoringEngine @Inject constructor(
             .sortedBy { it.latencyMs }
             .take(5)
 
-        val speedResults = if (top5.isNotEmpty()) {
+        // Partial throughput samples would bias the score toward the measured top five.
+        // Only measure speed when the entire comparable candidate cohort fits in this batch.
+        val speedResults = if (top5.isNotEmpty() && top5.size == latencyResults.count {
+                it.success && it.latencyMs != Long.MAX_VALUE
+            }) {
             healthChecker.testSpeed(top5.map { it.config })
         } else emptyList()
 
