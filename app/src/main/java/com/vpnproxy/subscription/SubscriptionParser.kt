@@ -167,7 +167,8 @@ class SubscriptionParser @Inject constructor(
         if (uri.port > 65535 || uri.port == 0) return "invalid_port"
         if (scheme in setOf("vless", "hysteria2", "hy2", "tuic") && uri.rawUserInfo.isNullOrBlank()) return "missing_credentials"
         if (scheme == "vless") {
-            val query = parseUriQuery(uri.rawQuery)
+            val query = runCatching { parseUriQuery(uri.rawQuery) }
+                .getOrElse { return "invalid_query_parameters" }
             if (query["security"].equals("reality", ignoreCase = true) &&
                 query["publickey"].isNullOrBlank() && query["pbk"].isNullOrBlank()
             ) return "missing_reality_public_key"
