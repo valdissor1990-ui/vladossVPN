@@ -238,7 +238,7 @@
 - `ConnectionCoordinator` фиксирует network bucket при выборе сервера и при начале TrafficValidator probe, чтобы поздний результат не записывал hard failure в другой bucket после handover;
 - существующий конструктор `ScoringEngine(context)` сохранён для совместимости текущих call sites и тестов.
 
-Текущий HEAD: `9c3ec475fa8c44dfd2d357d76252feeaa8d9deda`. CI для этого SHA запущен, все семь checks пока pending/queued. Предыдущий SHA не считается подтверждением. Ручные тесты не добавлялись и не запускались; runtime проверка на Wi-Fi/cellular не выполнялась.
+Текущий HEAD: `9c3ec475fa8c44dfd2d357d76252feeaa8d9deda`. Все 7/7 GitHub Actions checks завершились успешно на этом SHA, включая CodeQL. Предыдущий SHA не использовался как подтверждение. Ручные тесты не добавлялись и не запускались; runtime проверка на Wi-Fi/cellular не выполнялась.
 
 Остаточный риск: network bucket — это coarse class (Wi-Fi/cellular/other), а не уникальный Network handle/epoch. Полноценный типизированный результат с network generation и freshness остаётся P2.4/P2.5.
 
@@ -261,4 +261,4 @@ P2.2 завершён как проектирование контракта. К
 
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 начат в Draft PR #186 (network-scoped scoring history), CI выполняется. P2.5 начат в Draft PR #187 (исторический успех больше не отображается как 1 ms), CI выполняется. P2.4 typed measurement contract и полная freshness/network epoch логика ещё впереди. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 реализован в Draft PR #186 (network-scoped scoring history), CI 7/7 успешно. P2.5 начат в Draft PR #187 (исторический успех больше не отображается как 1 ms), CI выполняется; первая попытка CodeQL потребовала повторного запуска из-за недоступности Gradle plugin artifact. P2.4 typed measurement contract и полная freshness/network epoch логика ещё впереди. Никакие PR не слиты автоматически.
