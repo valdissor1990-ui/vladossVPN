@@ -48,7 +48,10 @@ data class ProbeEvidence(
         maxAgeMs: Long
     ): Boolean {
         val ageMs = nowEpochMs - completedAtEpochMs
-        return networkStable &&
+        return startedAtEpochMs > 0L &&
+            completedAtEpochMs >= startedAtEpochMs &&
+            maxAgeMs >= 0L &&
+            networkStable &&
             endNetwork.sameNetwork(currentNetwork) &&
             ageMs in 0..maxAgeMs &&
             attemptedSamples > 0 &&
