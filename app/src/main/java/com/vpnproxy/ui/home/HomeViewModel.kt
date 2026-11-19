@@ -749,8 +749,13 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val next = autoSwitcher.switchToNext() ?: return@launch
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
-                ensureServiceRunning()
+                withContext(Dispatchers.Main.immediate) {
+                    // Route the explicit switch through the same teardown + fresh preflight
+                    // path as tapping a server row.
+                    onServerSelected(next)
+                }
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "switchServer failed", e)
             }
