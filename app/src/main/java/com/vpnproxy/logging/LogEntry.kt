@@ -22,12 +22,13 @@ data class LogEntry(
 
     fun toFormattedString(maskSensitive: Boolean = true): String {
         val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
-        val msg = if (maskSensitive) SensitiveMasker.mask(message) else message
-        val sb = StringBuilder("$iso | ${level.name} | $tag | $msg")
+        val sb = StringBuilder("$iso | ${level.name} | $tag | $message")
         server?.let { sb.append(" | server=$it") }
         rttMs?.let { sb.append(" | rtt=${it}ms") }
+        // Throwable messages and stack traces can contain serialized configs or credentials.
         stackTrace?.let { sb.append("\n$it") }
-        return sb.toString()
+        val formatted = sb.toString()
+        return if (maskSensitive) SensitiveMasker.mask(formatted) else formatted
     }
 }
 
