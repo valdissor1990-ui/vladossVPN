@@ -164,7 +164,19 @@ class VpnProxyService : VpnService() {
             context = this,
             logCollector = logCollector,
             isVpnActive = { _isRunning.value },
-            isBusy = { _serviceState.value == ServiceState.Starting || _serviceState.value == ServiceState.Stopping || autoSwitcher.isSwitching() },
+            isBusy = {
+                // A physical-network change during traffic verification or an actor-driven
+                // reconnect must remain pending. ConnectionCoordinator intentionally ignores
+                // NetworkChanged while Connecting/Reconnecting/Verifying, so let the current
+                // attempt settle before delivering the latest handover event.
+                val connectionState = connectionCoordinator.state.value
+                _serviceState.value == ServiceState.Starting ||
+                    _serviceState.value == ServiceState.Stopping ||
+                    autoSwitcher.isSwitching() ||
+                    connectionState is ConnectionState.Connecting ||
+                    connectionState is ConnectionState.Reconnecting ||
+                    connectionState is ConnectionState.Verifying
+            },
             onReconnectRequested = {
                 Log.d(TAG, "Network reconnect → ConnectionEvent.NetworkChanged")
                 connectionCoordinator.send(ConnectionEvent.NetworkChanged)
