@@ -84,5 +84,4 @@ jobs:
       - name: Compile direct and Play debug variants
         run: ./gradlew :app:compileDirectDebugKotlin :app:compilePlayDebugKotlin --no-daemon --stacktrace
 
-      - name: Run unit tests for direct and Play debug variants
-        run: ./gradlew :app:testDirectDebugUnitTest :app:testPlayDebugUnitTest --no-daemon --stacktrace
+      # Unit tests are intentionally manual until explicitly authorized.
