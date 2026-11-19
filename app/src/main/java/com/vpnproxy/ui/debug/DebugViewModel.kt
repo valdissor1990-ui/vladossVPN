@@ -20,6 +20,7 @@ import com.vpnproxy.logging.LogLevel
 import com.vpnproxy.logging.SensitiveMasker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -123,8 +124,13 @@ class DebugViewModel @Inject constructor(
         viewModelScope.launch {
             val server = autoSwitcher.currentServer.value?.config?.name ?: "manual"
             _probeResult.value = "Проба выполняется…"
-            _probeResult.value = runCatching { DiagnosticProbe.runOnce(server, logCollector).toString() }
-                .getOrElse { "Probe failed: ${it.javaClass.simpleName}: ${it.message}" }
+            _probeResult.value = try {
+                DiagnosticProbe.runOnce(server, logCollector).toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                "Probe failed: ${failure.javaClass.simpleName}: ${failure.message}"
+            }
         }
     }
 
