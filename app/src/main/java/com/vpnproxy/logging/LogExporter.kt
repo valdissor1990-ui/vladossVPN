@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import androidx.core.content.FileProvider
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
@@ -40,8 +39,6 @@ class LogExporter @Inject constructor(
     /** Export always contains a header and explicit sections for both sources. */
     fun buildExportText(): String = runCatching {
         val sources = readSources()
-        Log.i(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
-        Log.i(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
         logCollector.info(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
         logCollector.info(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
         buildString {
@@ -57,8 +54,8 @@ class LogExporter @Inject constructor(
             append("=== NATIVE LIBBOX LOG END ===\n")
         }
     }.getOrElse { t ->
-        Log.e(TAG, "buildExportText failed", t)
-        "=== DIAG SESSION HEADER ===\napp_version=${BuildConfig.VERSION_NAME}\ncommit=${BuildConfig.GIT_COMMIT}\nbuild_type=${BuildConfig.BUILD_TYPE}\ndevice=${Build.MANUFACTURER} ${Build.MODEL}\nandroid_api=${Build.VERSION.SDK_INT}\nexport_error=${t.javaClass.simpleName}: ${t.message}\n=== APP LOG START ===\n=== APP LOG END ===\n=== NATIVE LIBBOX LOG START ===\n=== NATIVE LIBBOX LOG END ===\n"
+        logCollector.error(TAG, "buildExportText failed", t)
+        "=== DIAG SESSION HEADER ===\napp_version=${BuildConfig.VERSION_NAME}\ncommit=${BuildConfig.GIT_COMMIT}\nbuild_type=${BuildConfig.BUILD_TYPE}\ndevice=${Build.MANUFACTURER} ${Build.MODEL}\nandroid_api=${Build.VERSION.SDK_INT}\nexport_error=${t.javaClass.simpleName}: ${SensitiveMasker.mask(t.message.orEmpty())}\n=== APP LOG START ===\n=== APP LOG END ===\n=== NATIVE LIBBOX LOG START ===\n=== NATIVE LIBBOX LOG END ===\n"
     }
 
     /** Writes a test file and returns byte/line metrics for each source. */
