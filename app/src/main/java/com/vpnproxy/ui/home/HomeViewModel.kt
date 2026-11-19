@@ -193,7 +193,7 @@ class HomeViewModel @Inject constructor(
                         cancelConnectingWatchdog()
                         permissionFlowInProgress = false
                         autoSwitcher.currentServer.value?.config?.let { server ->
-                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
+                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid, connectionKey = server.connectionKey())
                             serverScanner.recordSuccessfulConnection(server)
                         }
                         pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
@@ -820,7 +820,8 @@ class HomeViewModel @Inject constructor(
                     address = server.config.address,
                     port = server.config.port,
                     name = server.config.name,
-                    uuid = server.config.uuid
+                    uuid = server.config.uuid,
+                    connectionKey = server.config.connectionKey()
                 )
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 // Ensure a service instance is present to consume the stop request even
