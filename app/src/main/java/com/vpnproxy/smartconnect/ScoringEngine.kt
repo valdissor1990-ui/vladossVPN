@@ -16,8 +16,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ScoringEngine @Inject constructor(
-    @ApplicationContext private val context: Context?,
-    private val networkBucketProvider: NetworkBucketProvider? = null
+    @ApplicationContext private val context: Context?
 ) {
 
     data class ScoredServer(
@@ -43,6 +42,7 @@ class ScoringEngine @Inject constructor(
         context?.getSharedPreferences("server_scoring_history_v2", Context.MODE_PRIVATE)
     }
     private val history = ConcurrentHashMap<String, ProbeHistory>()
+    private val networkBucketProvider by lazy { context?.let(::NetworkBucketProvider) }
 
     private fun historyKey(config: ParsedConfig, networkBucket: String): String =
         MessageDigest.getInstance("SHA-256")
