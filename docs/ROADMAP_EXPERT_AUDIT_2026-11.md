@@ -198,14 +198,16 @@ CI для актуального HEAD PR #185 запущен автоматич�
 Проверены `ScoringEngine.kt`, `AutoSwitcher.kt`, `DeepProbeEngine.kt`, `ServerScanner.kt`, `HealthChecker.kt` и production call sites через поиск по репозиторию.
 
 Подтверждённые факты:
-- `AutoSwitcher.rankInBackground()` вызывает `HealthChecker.testLatency()` для RU/foreign групп и затем `ScoringEngine.computeScore(ruResults + foreignResults)` без speedResults. Поэтому компонент `0.25 * normalizedSpeed` в этом основном background ranking pipeline всегда получает нулевую скорость.
-- `ScoringEngine.rankAll()` действительно умеет измерить скорость для top-5 latency-кандидатов, но production-вызовов `rankAll()` в доступном коде не найдено. Метод фактически не участвует в основном AutoSwitcher ranking.
+- `HomeViewModel` вызывает `AutoSwitcher.rankInBackground()` после `ConnectionState.Connected`, но сам метод первым делом отменяет ranking и возвращает управление, если `VpnProxyService.isRunning` или core transition активны. Это нормальное состояние после успешного подключения; поэтому обычный post-connect путь не запускает сравнительное ранжирование через ScoringEngine.
+- Если `rankInBackground()` всё же выполняется в допустимом состоянии, он вызывает `HealthChecker.testLatency()` для RU/foreign групп и затем `ScoringEngine.computeScore(ruResults + foreignResults)` без speedResults. В таком вызове компонент `0.25 * normalizedSpeed` получает нулевую скорость.
+- `ScoringEngine.rankAll()` умеет измерить скорость для top-5 latency-кандидатов, но production-вызовов `rankAll()` в доступном коде не найдено. Метод не участвует в основном AutoSwitcher path.
 - `ServerScanner.scoredServer()` преобразует результат `DeepProbeEngine.pingProfiles()` в `ScoredServer` с `speedMbps=0`, `successRate=1/0` и отдельной формулой `1 / (1 + latency/1000)`. Сортировка списка при этом использует успешность, историю успешных подключений в текущем network bucket и latency, а не общий composite score.
 - `DeepProbeEngine.pingProfiles()` делает до четырёх HTTP GET попыток по двум endpoint-ам, считает профиль успешным при двух успешных samples и возвращает median RTT. Этот режим используется scanner/preflight, но не измеряет speed/jitter.
 - `DeepProbeEngine.run()` собирает latency, jitter, loss и скорость загрузки 1 MB, затем вызывает `scoreMetrics()` с весами 0.4/0.3/0.2/0.1. Найденный production call site — ручной запуск из `ServersListScreen`; связь этого composite score с AutoSwitcher не обнаружена.
 
 Вывод:
 - В проекте существуют как минимум три разных модели оценки: ScoringEngine composite (latency/speed/history), ServerScanner simple latency score и DeepProbe manual composite (latency/speed/jitter/loss).
+- Обычный post-connect путь сейчас не использует comparative ScoringEngine ranking: HomeViewModel вызывает его после Connected, а AutoSwitcher блокирует запуск при активном VPN. При этом ServerScanner уже поставляет проверенные preflight-кандидаты с latency-only score и отдельной сортировкой.
 - Это архитектурная несогласованность, а не доказательство сетевого дефекта. Нельзя просто заменить все формулы одной без анализа пользовательских сценариев и порогов.
 - Следующий шаг P2.2: описать единый контракт качества и определить, какие измерения допустимы для preflight, фонового мониторинга и ручной диагностики; отдельно сохранить быстрый preflight и запретить автоматическое переключение по несопоставимым/устаревшим метрикам.
 
