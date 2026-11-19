@@ -814,6 +814,9 @@ class HomeViewModel @Inject constructor(
                     uuid = server.config.uuid
                 )
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                // Ensure a service instance is present to consume the stop request even
+                // if the previous connect had not finished starting the foreground service.
+                ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
                 val stopped = withTimeoutOrNull(20_000L) {
                     while (
                         VpnProxyService.isRunning.value ||
