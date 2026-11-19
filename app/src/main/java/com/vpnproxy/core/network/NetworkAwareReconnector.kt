@@ -5,7 +5,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.SystemClock
 import com.vpnproxy.logging.LogCollector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +53,9 @@ class NetworkAwareReconnector(
     @Volatile private var selectedNetwork: Network? = null
     @Volatile private var selectedNetworkSignature: String? = null
     @Volatile private var hasSelectedNetworkBaseline = false
+    // NetworkCallback may deliver onAvailable while allNetworks is still being seeded.
+    // Suppress selection events until the initial snapshot is complete.
+    @Volatile private var initializingSnapshot = false
 
     private sealed class NetEvent {
         data class Lost(val network: Network) : NetEvent()
@@ -98,8 +103,14 @@ class NetworkAwareReconnector(
         val previousSignature = selectedNetworkSignature
         selectedNetwork = chosen?.key
         selectedNetworkSignature = chosen?.value
-        // The first snapshot establishes a baseline. Emitting an event for this
-        // initial selection can immediately restart a freshly connected VPN.
+        // Callback delivery can race with the allNetworks seed. During that window
+        // the candidate set is incomplete, so no selection is authoritative yet.
+        if (initializingSnapshot) {
+            logCollector.debug(TAG, "Collecting initial physical-network snapshot; suppress selection event")
+            return
+        }
+        // The completed first snapshot establishes a baseline. Emitting an event for
+        // this initial selection can immediately restart a freshly connected VPN.
         if (!hasSelectedNetworkBaseline) {
             hasSelectedNetworkBaseline = true
             logCollector.info(TAG, "Physical-network baseline established: netId=${chosen?.key?.hashCode() ?: "none"} signature=${chosen?.value ?: "none"}")
@@ -125,6 +136,8 @@ class NetworkAwareReconnector(
     }
 
     private val networkStatusFlow = callbackFlow {
+        initializingSnapshot = true
+        hasSelectedNetworkBaseline = false
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val caps = cm.getNetworkCapabilities(network) ?: return
@@ -160,9 +173,14 @@ class NetworkAwareReconnector(
                 callback
             )
             logCollector.info(TAG, "Registered physical-network callback (VPN networks excluded)")
-        } catch (t: Throwable) {
-            logCollector.error(TAG, "Failed to register physical-network callback", t)
-            close(t)
+        } catch (failure: Exception) {
+            initializingSnapshot = false
+            physicalNetworks.clear()
+            selectedNetwork = null
+            selectedNetworkSignature = null
+            hasSelectedNetworkBaseline = false
+            logCollector.error(TAG, "Failed to register physical-network callback", failure)
+            close(failure)
             return@callbackFlow
         }
 
@@ -176,19 +194,27 @@ class NetworkAwareReconnector(
                     physicalNetworks[network] = signature(caps)
                 }
             }
-            refreshSelectedNetwork { trySend(it) }
-        }.onFailure { logCollector.warn(TAG, "Initial physical-network snapshot failed: ${it.message}") }
+        }.onFailure {
+            logCollector.warn(TAG, "Initial physical-network snapshot failed: ${it.message}")
+        }
+        // Only now is the initial candidate set complete. Establish the baseline once,
+        // so callback ordering cannot turn a late Wi-Fi/cellular seed into a false handover.
+        initializingSnapshot = false
+        refreshSelectedNetwork { trySend(it) }
 
         awaitClose {
             try {
                 cm.unregisterNetworkCallback(callback)
+                logCollector.info(TAG, "Unregistered physical-network callback")
+            } catch (failure: Exception) {
+                logCollector.warn(TAG, "Unregister failed: ${failure.message}")
+            } finally {
+                // Always clear shared snapshot state, even if Android rejects unregister.
                 physicalNetworks.clear()
                 selectedNetwork = null
                 selectedNetworkSignature = null
                 hasSelectedNetworkBaseline = false
-                logCollector.info(TAG, "Unregistered physical-network callback")
-            } catch (t: Throwable) {
-                logCollector.warn(TAG, "Unregister failed: ${t.message}")
+                initializingSnapshot = false
             }
         }
     }
@@ -219,8 +245,9 @@ class NetworkAwareReconnector(
                         onReconnectStateChanged(false)
                         return@collect
                     }
-                    val now = System.currentTimeMillis()
-                    if (now - lastReconnectAt < COOLDOWN_MS) {
+                    // Cooldown is a duration, so use monotonic elapsed time rather than wall clock.
+                    val now = SystemClock.elapsedRealtime()
+                    if (lastReconnectAt > 0L && now - lastReconnectAt < COOLDOWN_MS) {
                         logCollector.debug(TAG, "Cooldown active, skip NetworkChanged")
                         onReconnectStateChanged(false)
                         return@collect
@@ -235,8 +262,10 @@ class NetworkAwareReconnector(
                     logCollector.info(TAG, "Preferred physical network changed after ${DEBOUNCE_MS}ms: $event")
                     try {
                         onReconnectRequested()
-                    } catch (t: Throwable) {
-                        logCollector.error(TAG, "Reconnect request failed", t)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        logCollector.error(TAG, "Reconnect request failed", error)
                     } finally {
                         onReconnectStateChanged(false)
                     }
