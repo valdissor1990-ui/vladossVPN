@@ -129,12 +129,13 @@ class HealthChecker @Inject constructor(
                         .url(SPEED_TEST_URL)
                         .header("User-Agent", "VPNProxy/1.0")
                         .build()
+                    val speedStartedAt = System.currentTimeMillis()
                     attemptedSamples++
                     runInterruptible(Dispatchers.IO) {
                         client.newCall(request).execute().use { response ->
                             if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
                             val bytes = response.body?.bytes() ?: ByteArray(0)
-                            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+                            val elapsedMs = (System.currentTimeMillis() - speedStartedAt).coerceAtLeast(1L)
                             val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
                             val success = bytes.isNotEmpty()
                             if (success) successfulSamples++
