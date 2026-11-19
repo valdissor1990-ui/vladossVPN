@@ -1,7 +1,6 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
-import android.util.Log
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
@@ -385,7 +384,7 @@ class DeepProbeEngine @Inject constructor(
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (t: Throwable) {
-                        Log.w(TAG, "Probe failed for ${config.name}", t)
+                        logCollector.error(TAG, "Probe failed: ${t.javaClass.simpleName}", t)
                         ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                     }
                 }
