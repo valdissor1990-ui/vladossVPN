@@ -33,6 +33,8 @@ sealed class ConnectionEvent {
     data class ConnectRequested(val traceId: String, val userInitiated: Boolean = false) : ConnectionEvent()
     data class ServerSelected(val server: ScoringEngine.ScoredServer, val traceId: String? = null) : ConnectionEvent()
     data class SetFallbackCandidates(val servers: List<ScoringEngine.ScoredServer>) : ConnectionEvent()
+    data class SetProviderScope(val providerTag: String?, val blocked: Boolean) : ConnectionEvent()
+    data class SetManualSelectionMode(val enabled: Boolean) : ConnectionEvent()
     data object NetworkChanged : ConnectionEvent()
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
     data object BindRetryReady : ConnectionEvent()
@@ -91,7 +93,7 @@ class ConnectionCoordinator @Inject constructor(
 
     @Volatile private var pendingServerName: String? = null
     @Volatile private var hasServerSelected: Boolean = false
-    private var retryCount: Int = 0
+    @Volatile private var retryCount: Int = 0
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
     private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
@@ -99,7 +101,11 @@ class ConnectionCoordinator @Inject constructor(
     private val recentEndpointFailures = mutableListOf<RecentEndpointFailure>()
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
     private var trafficValidationGeneration: Long = 0L
-    private var activeScoredServer: ScoringEngine.ScoredServer? = null
+    @Volatile private var activeScoredServer: ScoringEngine.ScoredServer? = null
+    // Capture the physical network context for endpoint failures instead of resolving it
+    // after an asynchronous validation result may have crossed a network handover.
+    private var activeNetworkBucket: String = scoringEngine.currentNetworkBucket()
+    private var validationNetworkBucket: String = activeNetworkBucket
 
     @Volatile private var allowedProviderTag: String? = null
     @Volatile private var providerScopeBlocked: Boolean = false
@@ -137,25 +143,14 @@ class ConnectionCoordinator @Inject constructor(
     }
 
     fun setProviderScope(providerTag: String?, blocked: Boolean = false) {
-        val normalized = providerTag?.takeIf { it.isNotBlank() }
-        if (allowedProviderTag == normalized && providerScopeBlocked == blocked) return
-        allowedProviderTag = normalized
-        providerScopeBlocked = blocked
-        val before = fallbackCandidates.size
-        fallbackCandidates = fallbackCandidates.filter { isWithinProviderScope(it) }
-        fallbackIndex = -1
-        val scopeLabel = if (blocked) "BLOCKED" else (normalized ?: "ALL")
-        logCollector.info(TAG, "Provider scope changed: $scopeLabel; fallback candidates $before -> ${fallbackCandidates.size}")
+        // Fallback candidates and their cursor are actor-owned state. Enqueue scope
+        // changes instead of mutating those fields from the UI/ViewModel thread.
+        send(ConnectionEvent.SetProviderScope(providerTag?.takeIf { it.isNotBlank() }, blocked))
     }
 
     fun setManualSelectionMode(enabled: Boolean) {
-        manualSelectionMode = enabled
-        if (enabled) {
-            fallbackCandidates = emptyList()
-            fallbackIndex = -1
-            fallbackAttempts = 0
-        }
-        logCollector.info(TAG, "Manual selection mode=${if (enabled) "ON" else "OFF"}")
+        // Keep manual/automatic mode transitions ordered with connection events.
+        send(ConnectionEvent.SetManualSelectionMode(enabled))
     }
 
     private fun isWithinProviderScope(server: ScoringEngine.ScoredServer): Boolean =
@@ -280,6 +275,27 @@ class ConnectionCoordinator @Inject constructor(
                     }
                 }
             }
+            is ConnectionEvent.SetProviderScope -> {
+                val normalized = event.providerTag?.takeIf { it.isNotBlank() }
+                if (allowedProviderTag == normalized && providerScopeBlocked == event.blocked) return
+                allowedProviderTag = normalized
+                providerScopeBlocked = event.blocked
+                val before = fallbackCandidates.size
+                fallbackCandidates = fallbackCandidates.filter { isWithinProviderScope(it) }
+                fallbackIndex = -1
+                val scopeLabel = if (event.blocked) "BLOCKED" else (normalized ?: "ALL")
+                logI("Provider scope changed: $scopeLabel; fallback candidates $before -> ${fallbackCandidates.size}")
+            }
+            is ConnectionEvent.SetManualSelectionMode -> {
+                if (manualSelectionMode == event.enabled) return
+                manualSelectionMode = event.enabled
+                if (event.enabled) {
+                    fallbackCandidates = emptyList()
+                    fallbackIndex = -1
+                    fallbackAttempts = 0
+                }
+                logI("Manual selection mode=${if (event.enabled) "ON" else "OFF"}")
+            }
             is ConnectionEvent.SetFallbackCandidates -> {
                 val incoming = event.servers.size
                 // Keep Smart Connect's measured score order. Sorting by region here
@@ -307,6 +323,7 @@ class ConnectionCoordinator @Inject constructor(
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
                 }
+                activeNetworkBucket = scoringEngine.currentNetworkBucket()
                 trafficValidationGeneration++ // invalidate any in-flight probe for the previous selection
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
@@ -328,6 +345,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
             is ConnectionEvent.NetworkChanged -> {
+                activeNetworkBucket = scoringEngine.currentNetworkBucket()
                 recentEndpointFailures.clear()
                 if (isFatalErrorLocked) {
                     logI("NetworkChanged ignored — fatalErrorLocked")
@@ -415,6 +433,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 retryCount = 0
                 val validationId = ++trafficValidationGeneration
+                validationNetworkBucket = activeNetworkBucket
                 pendingServerName = event.serverName
                 hasServerSelected = true
                 setState(ConnectionState.Verifying(event.serverName), reason = "ServiceReady")
@@ -483,7 +502,11 @@ class ConnectionCoordinator @Inject constructor(
                             return
                         }
 
-                        scoringEngine.recordHardFailure(failedConfig, weight = 2)
+                        scoringEngine.recordHardFailure(
+                            failedConfig,
+                            weight = 2,
+                            networkBucket = validationNetworkBucket
+                        )
                         runCatching { onEndpointHardFailed?.invoke(failedConfig) }
                     }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
