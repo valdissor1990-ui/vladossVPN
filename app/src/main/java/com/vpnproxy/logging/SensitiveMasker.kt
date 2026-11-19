@@ -32,7 +32,7 @@ object SensitiveMasker {
 
     /** Credential-like key/value pairs, including quoted JSON keys and bearer tokens. */
     private val SECRET_PARAMETER_REGEX = Regex(
-        """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
+        """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|x[-_]?padding[-_]?key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
     )
 
     /** Domain values attached to endpoint-related keys in diagnostic messages. */
