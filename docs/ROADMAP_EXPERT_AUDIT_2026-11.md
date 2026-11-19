@@ -45,7 +45,7 @@
 - [x] P2.2 Зафиксировать единый контракт измерений и скоринга; определить безопасное применение preflight, active health-check и deep diagnostic. Документ: `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`.
 - [ ] P2.3 Разделить scoring history по physical network bucket и корректно привязать hard failures к network epoch (Draft PR #186; CI выполняется).
 - [ ] P2.4 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
-- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать.
+- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать. Отдельно устранить placeholder `latencyMs=1` из 7-дневной истории успешных подключений: история не должна выглядеть как актуальный ping.
 - [ ] P2.6 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
 - Критерий: каждый score имеет объяснимые исходные измерения; отсутствие метрики не подменяется фиктивным успехом.
 
