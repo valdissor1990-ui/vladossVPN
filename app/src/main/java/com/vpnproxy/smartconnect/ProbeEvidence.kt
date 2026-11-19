@@ -26,7 +26,7 @@ enum class ProbeMethod {
  * A result is reusable only when the probe stayed on one physical network and that exact
  * network generation is still current.
  */
-data class ProbeEvidence(
+data class ProbeMeasurementEvidence(
     val method: ProbeMethod,
     val startedAtEpochMs: Long,
     val completedAtEpochMs: Long,
