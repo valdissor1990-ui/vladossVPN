@@ -100,6 +100,9 @@ class ConnectionCoordinator @Inject constructor(
     /** Monotonic token invalidates probes that finish after a server switch/reconnect. */
     private var trafficValidationGeneration: Long = 0L
     private var activeScoredServer: ScoringEngine.ScoredServer? = null
+    // Capture the physical network context for endpoint failures instead of resolving it
+    // after an asynchronous validation result may have crossed a network handover.
+    private var activeNetworkBucket: String = scoringEngine.currentNetworkBucket()
 
     @Volatile private var allowedProviderTag: String? = null
     @Volatile private var providerScopeBlocked: Boolean = false
@@ -307,6 +310,7 @@ class ConnectionCoordinator @Inject constructor(
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
                 }
+                activeNetworkBucket = scoringEngine.currentNetworkBucket()
                 trafficValidationGeneration++ // invalidate any in-flight probe for the previous selection
                 pendingServerName = event.server.config.name
                 activeScoredServer = event.server
@@ -328,6 +332,7 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
             is ConnectionEvent.NetworkChanged -> {
+                activeNetworkBucket = scoringEngine.currentNetworkBucket()
                 recentEndpointFailures.clear()
                 if (isFatalErrorLocked) {
                     logI("NetworkChanged ignored — fatalErrorLocked")
@@ -483,7 +488,11 @@ class ConnectionCoordinator @Inject constructor(
                             return
                         }
 
-                        scoringEngine.recordHardFailure(failedConfig, weight = 2)
+                        scoringEngine.recordHardFailure(
+                            failedConfig,
+                            weight = 2,
+                            networkBucket = activeNetworkBucket
+                        )
                         runCatching { onEndpointHardFailed?.invoke(failedConfig) }
                     }
                     val reason = VpnFailureReason.NetworkTimeout("traffic validation failed: ${event.serverName} ($detail)")
