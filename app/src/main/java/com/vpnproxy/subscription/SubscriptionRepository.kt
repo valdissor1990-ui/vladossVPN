@@ -134,6 +134,11 @@ class SubscriptionRepository @Inject constructor(
         val completedAt: Long
     )
 
+    private data class SubscriptionFetchResult(
+        val body: String,
+        val fromEtagCache: Boolean
+    )
+
     private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
     val subscriptions: StateFlow<List<ProviderSubscription>> = _subscriptions.asStateFlow()
 
@@ -239,12 +244,12 @@ class SubscriptionRepository @Inject constructor(
 
             for (sub in subs) {
                 try {
-                    val outcome = fetchAndParseWithReport(sub)
+                    val (outcome, source) = fetchAndParseWithReport(sub)
                     val configs = outcome.configs
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
-                    providerReports += outcome.report.toProviderSummary(sub.name, source = "network")
+                    providerReports += outcome.report.toProviderSummary(sub.name, source = source)
                     val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                     _subscriptions.value = _subscriptions.value.map {
                         if (it.id == sub.id) updated else it
@@ -342,7 +347,7 @@ class SubscriptionRepository @Inject constructor(
                 providerDuplicates = providerDuplicates,
                 globalDuplicates = globalDuplicates,
                 globallyUniqueCount = globallyUniqueCount,
-                usedCache = providerReports.any { it.source == "encrypted_body" || it.source == "aggregate_cache" },
+                usedCache = providerReports.any { it.source == "encrypted_body" || it.source == "aggregate_cache" || it.source == "etag_cache" },
                 completedAt = System.currentTimeMillis()
             )
             logCollector.info(
@@ -353,7 +358,7 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
+    suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
         withContext(Dispatchers.IO) {
             val sources = listOf(sub.url)
             var lastFailure: Exception? = null
@@ -407,7 +412,7 @@ class SubscriptionRepository @Inject constructor(
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
                             logCollector.info(TAG, "Subscription unchanged (ETag 304)")
-                            return@withContext cachedBody to sourceUrl
+                            return@withContext SubscriptionFetchResult(cachedBody, fromEtagCache = true)
                         }
                         if (!response.isSuccessful) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
@@ -428,7 +433,7 @@ class SubscriptionRepository @Inject constructor(
                         else editor.remove(etagKey)
                         editor.apply()
                         logCollector.info(TAG, "Subscription source OK")
-                        return@withContext body to sourceUrl
+                        return@withContext SubscriptionFetchResult(body, fromEtagCache = false)
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
@@ -464,18 +469,18 @@ class SubscriptionRepository @Inject constructor(
 
     private suspend fun fetchAndParseWithReport(
         sub: ProviderSubscription
-    ): SubscriptionParser.ParseOutcome {
-        val (body, _) = fetchWithFallback(sub)
-        val outcome = parser.parseWithReport(body, providerTag = sub.name)
+    ): Pair<SubscriptionParser.ParseOutcome, String> {
+        val fetched = fetchWithFallback(sub)
+        val outcome = parser.parseWithReport(fetched.body, providerTag = sub.name)
         logCollector.info(
             TAG,
-            "Fetch succeeded: provider=${sub.name}, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${outcome.configs.size}, contentType=subscription-response"
+            "Fetch succeeded: provider=${sub.name}, bytes=${fetched.body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${outcome.configs.size}, contentType=subscription-response"
         )
-        return outcome
+        return outcome to if (fetched.fromEtagCache) "etag_cache" else "network"
     }
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
-        fetchAndParseWithReport(sub).configs
+        fetchAndParseWithReport(sub).first.configs
 
     private fun SubscriptionParser.ParseReport.toProviderSummary(
         providerName: String,
