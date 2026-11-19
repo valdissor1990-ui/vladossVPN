@@ -52,6 +52,8 @@ class HealthChecker @Inject constructor(
         val evidence: ProbeEvidence? = null
     )
 
+    fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
+
     private val singboxProbeMutex = Mutex()
 
     private val httpClient = OkHttpClient.Builder()
