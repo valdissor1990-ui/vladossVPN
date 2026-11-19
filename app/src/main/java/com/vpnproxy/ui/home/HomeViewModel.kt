@@ -137,6 +137,7 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     private var selectionJob: Job? = null
+    private var manualReconnectJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
@@ -700,6 +701,8 @@ class HomeViewModel @Inject constructor(
 
     fun disconnect() {
         userStopRequested = true
+        manualReconnectJob?.cancel()
+        manualReconnectJob = null
         cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
@@ -719,6 +722,8 @@ class HomeViewModel @Inject constructor(
 
     fun forceDisconnect() {
         userStopRequested = true
+        manualReconnectJob?.cancel()
+        manualReconnectJob = null
         cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
@@ -786,34 +791,68 @@ class HomeViewModel @Inject constructor(
             currentSuccessRate = server.successRate,
             selectedServerKey = server.config.connectionKey()
         )
-        // On a disconnected app, route manual selection through the same mandatory
-        // fresh preflight as the main Connect button. A stale list entry is not proof
-        // that the profile is reachable on the current network.
-        if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
-            connectionCoordinator.state.value is ConnectionState.Error
-        ) {
+
+        val current = connectionCoordinator.state.value
+        if (current is ConnectionState.Disconnected || current is ConnectionState.Error) {
             connect()
             return
         }
+
+        // A server row may be selected while another tunnel is active or starting.
+        // Never feed its possibly stale scan result directly to ServerSelected: stop
+        // the old core first, then let the normal Connect flow perform fresh preflight.
+        manualReconnectJob?.cancel()
         val traceId = TraceId.newId()
         activeTraceId = traceId
-        permissionFlowInProgress = true
-        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
-        viewModelScope.launch {
+        userStopRequested = true
+        manualReconnectJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                lastServerStore.save(address = server.config.address, port = server.config.port, name = server.config.name, uuid = server.config.uuid)
-                _uiState.value = _uiState.value.copy(currentServerName = server.config.name, currentRtt = server.latencyMs)
-                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
-                if (connectionCoordinator.state.value is ConnectionState.Disconnected || connectionCoordinator.state.value is ConnectionState.Error) {
-                    connectionCoordinator.send(ConnectionEvent.UserConnect)
+                lastServerStore.save(
+                    address = server.config.address,
+                    port = server.config.port,
+                    name = server.config.name,
+                    uuid = server.config.uuid
+                )
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                val stopped = withTimeoutOrNull(20_000L) {
+                    while (
+                        VpnProxyService.isRunning.value ||
+                        VpnProxyService.isCoreTransitioning.value ||
+                        connectionCoordinator.state.value !is ConnectionState.Disconnected
+                    ) {
+                        delay(100L)
+                    }
+                    true
+                } ?: false
+
+                if (!stopped) {
+                    if (activeTraceId == traceId) {
+                        endConnectFlow()
+                        connectionCoordinator.send(
+                            ConnectionEvent.ShowError("Не удалось остановить прежнее подключение. Повторите попытку.")
+                        )
+                    }
+                    return@launch
                 }
-                ensureServiceRunning()
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: Exception) {
-                permissionFlowInProgress = false
-                logCollector.error(TAG, "onServerSelected failed", e)
+                if (activeTraceId != traceId) return@launch
+
+                withContext(Dispatchers.Main.immediate) {
+                    endConnectFlow()
+                    // connect() will request VPN permission if needed and run the same
+                    // fresh subscription/preflight pipeline as the main Connect button.
+                    lastConnectClickMs = 0L
+                    connect()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (activeTraceId == traceId) {
+                    endConnectFlow()
+                    logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
+                    connectionCoordinator.send(
+                        ConnectionEvent.ShowError(failure.message ?: "Не удалось переключить сервер")
+                    )
+                }
             }
         }
     }
