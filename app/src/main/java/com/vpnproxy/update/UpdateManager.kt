@@ -4,6 +4,7 @@ import android.content.Context
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.logging.LogCollector
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,7 +87,13 @@ class UpdateManager @Inject constructor(
             // Keep Ready if we already have a download at least as new as remote later.
             val previousReady = _state.value as? State.Ready
             _state.value = State.Checking
-            val result = checker.check()
+            val result = try {
+                checker.check()
+            } catch (cancelled: CancellationException) {
+                _state.value = previousReady ?: State.Idle
+                if (previousReady == null) restoreReadyFromDisk()
+                throw cancelled
+            }
             lastCheckAt = System.currentTimeMillis()
             _state.value = when {
                 result.error != null -> {
@@ -170,8 +177,15 @@ class UpdateManager @Inject constructor(
         }
 
         _state.value = State.Downloading(0, release)
-        val file = downloader.download(asset.downloadUrl, asset.name, asset.size) { percent ->
-            _state.value = State.Downloading(percent.coerceIn(0, 100), release)
+        val file = try {
+            downloader.download(asset.downloadUrl, asset.name, asset.size) { percent ->
+                _state.value = State.Downloading(percent.coerceIn(0, 100), release)
+            }
+        } catch (cancelled: CancellationException) {
+            // Keep an older verified pending APK available if one existed before this download.
+            restoreReadyFromDisk()
+            if (_state.value !is State.Ready) _state.value = State.UpdateAvailable(release)
+            throw cancelled
         }
         if (file != null) {
             pendingStore.save(release, file)
