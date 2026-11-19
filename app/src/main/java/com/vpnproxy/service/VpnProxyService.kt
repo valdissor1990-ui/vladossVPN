@@ -837,18 +837,21 @@ class VpnProxyService : VpnService() {
         val controllerForTeardown = lifecycleController
         _isCoreTransitioning.value = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try {
-                // These components own independent jobs/scopes. In particular,
-                // ServerScanner.cancelBackgroundWork() invalidates DeepProbeEngine and may
-                // synchronously stop its temporary native core; keep that work off main.
-                stopPassiveProbe()
-                autoSwitcher.clearDiagnosticFreeze()
-                autoSwitcher.cancelBackgroundWork("VPN service destroyed")
-                serverScanner.cancelBackgroundWork("VPN service destroyed")
-                trafficCollector.stop()
-            } catch (t: Throwable) {
-                logCollector.error(TAG, "onDestroy background-work cleanup failed", t)
+            // Each component owns independent work. A failure in one cleanup must not
+            // prevent the remaining owners from releasing their jobs and resources.
+            suspend fun cleanupStep(name: String, action: suspend () -> Unit) {
+                try {
+                    action()
+                } catch (t: Throwable) {
+                    logCollector.error(TAG, "onDestroy cleanup step failed: $name", t)
+                }
             }
+
+            cleanupStep("passive probe") { stopPassiveProbe() }
+            cleanupStep("diagnostic freeze") { autoSwitcher.clearDiagnosticFreeze() }
+            cleanupStep("auto switcher") { autoSwitcher.cancelBackgroundWork("VPN service destroyed") }
+            cleanupStep("server scanner") { serverScanner.cancelBackgroundWork("VPN service destroyed") }
+            cleanupStep("traffic collector") { trafficCollector.stop() }
 
             // Match the normal stop lock order: lifecycle lock first, then shared port lease.
             // The lease waits for an in-flight temporary probe to release the proxy ports.
