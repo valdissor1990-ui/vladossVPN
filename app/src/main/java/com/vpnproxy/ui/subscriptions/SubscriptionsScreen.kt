@@ -195,6 +195,7 @@ fun SubscriptionsScreen(
                                         "unsupported_protocol" -> "Неподдерживаемый протокол"
                                         "unsupported_protocol_version" -> "Неподдерживаемая версия протокола"
                                         "malformed_uri" -> "Некорректная структура ссылки"
+                                        "invalid_query_parameters" -> "Некорректные параметры ссылки"
                                         "missing_server" -> "Не указан адрес сервера"
                                         "missing_port" -> "Не указан порт сервера"
                                         "invalid_port" -> "Некорректный порт сервера"
