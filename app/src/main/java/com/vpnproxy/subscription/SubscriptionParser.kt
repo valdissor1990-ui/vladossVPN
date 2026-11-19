@@ -279,7 +279,7 @@ class SubscriptionParser @Inject constructor(
                 val yamlResult = tryParseClashYaml(decoded, providerTag, rejectionCounts)
                 if (yamlResult.isNotEmpty()) return yamlResult
             }
-            if (containsSupportedUri(decoded)) return parseVlessLines(decoded, providerTag, rejectionCounts)
+            if (containsUriCandidate(decoded)) return parseVlessLines(decoded, providerTag, rejectionCounts)
         }
 
         if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
@@ -292,7 +292,7 @@ class SubscriptionParser @Inject constructor(
             if (yamlResult.isNotEmpty()) return yamlResult
         }
 
-        if (containsSupportedUri(trimmed)) {
+        if (containsUriCandidate(trimmed)) {
             // Keep scheme detection case-insensitive, matching parseVlessLines().
             return parseVlessLines(trimmed, providerTag, rejectionCounts)
         }
@@ -312,9 +312,8 @@ class SubscriptionParser @Inject constructor(
         }.getOrNull()
     }
 
-    private fun containsSupportedUri(text: String): Boolean =
-        listOf("vless://", "hysteria2://", "hy2://", "tuic://", "ss://", "vmess://", "trojan://", "socks://", "socks5://")
-            .any { text.contains(it, ignoreCase = true) }
+    private fun containsUriCandidate(text: String): Boolean =
+        text.lineSequence().any { it.trim().contains("://") && !it.trim().startsWith("#") }
 
     private fun parseVlessLines(
         text: String,
