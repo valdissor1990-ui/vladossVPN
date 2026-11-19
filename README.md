@@ -50,6 +50,7 @@ chmod +x scripts/download_libbox.sh
 ## Документация
 
 - [Архитектура](docs/ARCHITECTURE.md)
+- [Стратегия продукта](docs/PRODUCT_STRATEGY.md)
 - [Модель угроз и логирование](docs/THREAT_MODEL.md)
 - [Контрибьютинг](docs/CONTRIBUTING.md)
 - [Выпуск релиза](docs/RELEASING.md)
