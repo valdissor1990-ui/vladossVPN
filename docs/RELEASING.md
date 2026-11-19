@@ -70,7 +70,7 @@ Before creating a Play production release, complete these steps in Play Console:
 
 - Submit the VpnService declaration and accurately state that VPN tunneling is the app's core functionality.
 - Document VpnService use in the Play listing and ensure traffic is encrypted from the device to the selected VPN tunnel endpoint.
-- The Play flavor rejects unencrypted VLESS/SOCKS profiles and TLS profiles with certificate verification disabled; Direct flavor intentionally retains broader compatibility.
+- The Play flavor rejects unencrypted VLESS/SOCKS profiles, Shadowsocks `none`/`plain` ciphers and TLS profiles with certificate verification disabled; Direct flavor intentionally retains broader compatibility.
 - Complete the Data safety form and provide a public privacy policy that matches the actual app behavior, including subscription-provider requests, diagnostics, device metadata consent and retention.
 - If the app accesses or collects personal/sensitive data through VpnService beyond what users reasonably expect, add a separate prominent in-app disclosure in the normal usage flow and obtain affirmative consent before collection. A Settings-only notice or privacy-policy paragraph is not a substitute.
 - Prepare the Play Console review video showing the app opening, VPN usage, and (if applicable) the prominent disclosure and both consent/decline paths.
