@@ -39,6 +39,7 @@ sealed class ConnectionEvent {
     data class CoreError(val reason: VpnFailureReason) : ConnectionEvent()
     data object BindRetryReady : ConnectionEvent()
     data object Timeout : ConnectionEvent()
+    data class ConnectingTimeout(val generation: Long) : ConnectionEvent()
     data class ServiceReady(val serverName: String) : ConnectionEvent()
     data class TrafficValidationResult(
         val serverName: String,
@@ -117,6 +118,8 @@ class ConnectionCoordinator @Inject constructor(
         private set
 
     private var connectingTimeoutJob: Job? = null
+    /** Actor-owned generation prevents a cancelled/late timer from failing a newer attempt. */
+    private var connectingTimeoutGeneration: Long = 0L
     @Volatile private var selectionCancel: (() -> Unit)? = null
 
     fun registerSelectionCancel(cancel: (() -> Unit)?) { selectionCancel = cancel }
@@ -194,17 +197,16 @@ class ConnectionCoordinator @Inject constructor(
 
     private fun scheduleConnectingTimeout() {
         connectingTimeoutJob?.cancel()
+        val generation = ++connectingTimeoutGeneration
         connectingTimeoutJob = scope.launch {
             delay(CONNECTING_TIMEOUT_MS)
-            val s = _state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
-                logE("Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — FATAL lock + Error")
-                applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
-            }
+            // The timer only enqueues an event. State transitions remain actor-owned.
+            send(ConnectionEvent.ConnectingTimeout(generation))
         }
     }
 
     private fun cancelConnectingTimeout() {
+        connectingTimeoutGeneration++
         connectingTimeoutJob?.cancel()
         connectingTimeoutJob = null
     }
@@ -389,6 +391,22 @@ class ConnectionCoordinator @Inject constructor(
             is ConnectionEvent.Timeout -> {
                 logW("Timeout in state $current (retry=$retryCount)")
                 handleFailure(VpnFailureReason.NetworkTimeout("Timeout"), current)
+            }
+            is ConnectionEvent.ConnectingTimeout -> {
+                if (event.generation != connectingTimeoutGeneration) {
+                    logD("Ignoring stale connecting timeout generation=${event.generation} current=$connectingTimeoutGeneration")
+                    return
+                }
+                val stateNow = _state.value
+                if (stateNow is ConnectionState.Connecting ||
+                    stateNow is ConnectionState.Reconnecting ||
+                    stateNow is ConnectionState.Verifying
+                ) {
+                    logE("Connecting timeout ${CONNECTING_TIMEOUT_MS}ms — FATAL lock + Error")
+                    applyFatal(VpnFailureReason.NetworkTimeout("connecting timeout ${CONNECTING_TIMEOUT_MS}ms"))
+                } else {
+                    logD("Connecting timeout ignored in state $stateNow")
+                }
             }
             is ConnectionEvent.ShowError -> {
                 if (current is ConnectionState.Error) {
