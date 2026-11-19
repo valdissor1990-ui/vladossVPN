@@ -131,7 +131,7 @@ class DeepProbeEngine @Inject constructor(
         val jitterScore: Double = 0.0,
         val lossScore: Double = 0.0,
         val normalizedScore: Double = 0.0,
-        val evidence: ProbeEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     private val running = AtomicBoolean(false)
@@ -153,7 +153,7 @@ class DeepProbeEngine @Inject constructor(
         val latencyMs: Long,
         val success: Boolean,
         val successfulSamples: Int,
-        val evidence: ProbeEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     /**
@@ -236,7 +236,7 @@ class DeepProbeEngine @Inject constructor(
                                         }
                                     }
                                     val result = summarizeProfileLatency(configs[index], samples).copy(
-                                        evidence = ProbeEvidence(
+                                        evidence = ProbeMeasurementEvidence(
                                             method = ProbeMethod.DEEP_PROFILE_LATENCY,
                                             startedAtEpochMs = startedAtEpochMs,
                                             completedAtEpochMs = System.currentTimeMillis(),
@@ -371,7 +371,7 @@ class DeepProbeEngine @Inject constructor(
                             jitterMs = jitter,
                             lossRate = failures.toDouble() / LATENCY_SAMPLES,
                             healthOk = samples.size >= 2 && speedOk,
-                            evidence = ProbeEvidence(
+                            evidence = ProbeMeasurementEvidence(
                                 method = ProbeMethod.DEEP_DIAGNOSTIC,
                                 startedAtEpochMs = startedAtEpochMs,
                                 completedAtEpochMs = System.currentTimeMillis(),
