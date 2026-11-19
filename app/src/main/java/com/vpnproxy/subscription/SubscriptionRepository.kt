@@ -400,16 +400,16 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     val etagKey = "subscription_etag_$cacheKey"
                     val legacyBodyKey = "subscription_body_$legacyCacheKey"
                     val legacyEtagKey = "subscription_etag_$legacyCacheKey"
-                    val currentBody = encryptedPrefs.getString(bodyKey, null)
-                    val currentEtag = encryptedPrefs.getString(etagKey, null)
+                    val currentBody = encryptedPrefs.getString(bodyKey, null)?.takeIf { it.isNotBlank() }
+                    val currentEtag = encryptedPrefs.getString(etagKey, null)?.takeIf { it.isNotBlank() }
                     // Migrate the old hashCode-keyed cache before cleanup. Deleting the
                     // legacy entry before a network request succeeds would erase the only
                     // offline copy for users upgrading from older app versions.
                     val legacyBody = if (legacyCacheKey != cacheKey) {
-                        encryptedPrefs.getString(legacyBodyKey, null)
+                        encryptedPrefs.getString(legacyBodyKey, null)?.takeIf { it.isNotBlank() }
                     } else null
                     val legacyEtag = if (legacyCacheKey != cacheKey) {
-                        encryptedPrefs.getString(legacyEtagKey, null)
+                        encryptedPrefs.getString(legacyEtagKey, null)?.takeIf { it.isNotBlank() }
                     } else null
                     val cachedBody = currentBody ?: legacyBody
                     val cachedEtag = currentEtag ?: legacyEtag
