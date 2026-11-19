@@ -32,6 +32,9 @@ class NetworkBucketProvider @Inject constructor(
     // Fold registration-time callbacks into the initial baseline instead of treating
     // their first delivery as a real network change during an in-flight probe.
     @Volatile private var initializingNetworks = true
+    // The libbox default-interface monitor reports the physical network it actually selected.
+    @Volatile private var platformSelectionKnown = false
+    @Volatile private var platformSelectedUnderlay: Network? = null
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -109,6 +112,26 @@ class NetworkBucketProvider @Inject constructor(
             return snapshotFor(activeBucket, active)
         }
 
+        // While the VPN is active, do not guess between simultaneously available Wi-Fi
+        // and cellular networks. Prefer the exact physical underlay selected by libbox.
+        if (activeCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) {
+            if (!platformSelectionKnown) {
+                return snapshotFor("other", "vpn-underlay-pending")
+            }
+            val selected = platformSelectedUnderlay
+            val selectedCapabilities = selected?.let(manager::getNetworkCapabilities)
+            val selectedBucket = bucket(selectedCapabilities)
+            if (
+                selected != null &&
+                selectedBucket != null &&
+                selectedCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true &&
+                selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            ) {
+                return snapshotFor(selectedBucket, selected)
+            }
+            return snapshotFor("offline", "vpn-underlay-unavailable")
+        }
+
         val underlying = manager.allNetworks
             .asSequence()
             .filter { it != active }
@@ -142,6 +165,18 @@ class NetworkBucketProvider @Inject constructor(
         }
 
         return snapshotFor(if (active == null) "offline" else "other", active)
+    }
+
+    /** Called by SingBoxPlatform with the same underlay selected for libbox routing. */
+    fun updatePlatformSelectedUnderlay(network: Network?) {
+        platformSelectedUnderlay = network
+        platformSelectionKnown = true
+    }
+
+    /** Clear the libbox selection when its default-interface monitor is closed. */
+    fun clearPlatformSelectedUnderlay() {
+        platformSelectedUnderlay = null
+        platformSelectionKnown = false
     }
 
     fun currentBucket(): String = snapshot().bucket
