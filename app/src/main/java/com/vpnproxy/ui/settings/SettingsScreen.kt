@@ -1,5 +1,9 @@
 package com.vpnproxy.ui.settings
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,7 +30,6 @@ fun SettingsScreen(
     updateViewModel: UpdateViewModel = hiltViewModel()
 ) {
     val autoStart by viewModel.autoStart.collectAsStateWithLifecycle()
-    val killSwitch by viewModel.killSwitch.collectAsStateWithLifecycle()
     val checkUpdates by viewModel.checkUpdates.collectAsStateWithLifecycle()
     val batteryEconomyMode by viewModel.batteryEconomyMode.collectAsStateWithLifecycle()
     val dualPathEnabled by viewModel.dualPathEnabled.collectAsStateWithLifecycle()
@@ -40,6 +44,7 @@ fun SettingsScreen(
     var showDeviceMetadataConsentDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         updateViewModel.feedback.collect { feedback ->
@@ -87,12 +92,28 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             Text("БЕЗОПАСНОСТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Kill Switch", style = MaterialTheme.typography.bodyLarge)
-                    Text("Блокировать трафик при разрыве туннеля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("Системная блокировка без VPN", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Приложение не может самостоятельно включить системный Kill Switch. В настройках Android откройте VPN для vladossVPN, включите «Всегда включённый VPN» и «Блокировать соединения без VPN».",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                TextButton(
+                    onClick = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                        } catch (_: ActivityNotFoundException) {
+                            Toast.makeText(
+                                context,
+                                "Откройте Настройки Android → Сеть и интернет → VPN",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                ) {
+                    Text("Открыть настройки VPN")
                 }
-                Switch(checked = killSwitch, onCheckedChange = { viewModel.setKillSwitch(it) })
             }
 
             Text("КОНФИДЕНЦИАЛЬНОСТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
