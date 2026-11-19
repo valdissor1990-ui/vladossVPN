@@ -42,14 +42,14 @@ class HealthChecker @Inject constructor(
         val config: ParsedConfig,
         val latencyMs: Long,
         val success: Boolean,
-        val evidence: ProbeEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     data class SpeedResult(
         val config: ParsedConfig,
         val speedMbps: Float,
         val success: Boolean,
-        val evidence: ProbeEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
@@ -98,7 +98,7 @@ class HealthChecker @Inject constructor(
                 LatencyResult(config, Long.MAX_VALUE, success = false)
             }
             result.copy(
-                evidence = ProbeEvidence(
+                evidence = ProbeMeasurementEvidence(
                     method = ProbeMethod.ISOLATED_PROFILE_LATENCY,
                     startedAtEpochMs = startedAt,
                     completedAtEpochMs = System.currentTimeMillis(),
@@ -150,7 +150,7 @@ class HealthChecker @Inject constructor(
                 SpeedResult(config, 0f, success = false)
             }
             result.copy(
-                evidence = ProbeEvidence(
+                evidence = ProbeMeasurementEvidence(
                     method = ProbeMethod.ISOLATED_PROFILE_SPEED,
                     startedAtEpochMs = startedAt,
                     completedAtEpochMs = System.currentTimeMillis(),
