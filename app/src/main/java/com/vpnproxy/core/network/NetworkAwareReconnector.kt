@@ -51,8 +51,8 @@ class NetworkAwareReconnector(
     @Volatile private var hasSelectedNetworkBaseline = false
 
     private sealed class NetEvent {
-        data class Lost(val netId: Int) : NetEvent()
-        data class UnderlyingChanged(val netId: Int, val signature: String) : NetEvent()
+        data class Lost(val network: Network) : NetEvent()
+        data class UnderlyingChanged(val network: Network, val signature: String) : NetEvent()
     }
 
     private fun signature(caps: NetworkCapabilities): String {
@@ -105,16 +105,16 @@ class NetworkAwareReconnector(
         }
         when {
             chosen == null && previous != null -> {
-                trySendEvent(NetEvent.Lost(previous.hashCode()))
+                trySendEvent(NetEvent.Lost(previous))
             }
             chosen != null && previous == null -> {
-                trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+                trySendEvent(NetEvent.UnderlyingChanged(chosen.key, chosen.value))
             }
             chosen != null && previous != null -> {
-                val sameNetworkId = chosen.key.hashCode() == previous.hashCode()
+                val sameNetwork = chosen.key == previous
                 val sameSignature = chosen.value == previousSignature
-                if (!sameNetworkId || !sameSignature) {
-                    trySendEvent(NetEvent.UnderlyingChanged(chosen.key.hashCode(), chosen.value))
+                if (!sameNetwork || !sameSignature) {
+                    trySendEvent(NetEvent.UnderlyingChanged(chosen.key, chosen.value))
                 } else {
                     logCollector.debug(TAG, "Physical network unchanged; suppress reconnect: netId=${chosen.key.hashCode()} signature=${chosen.value}")
                 }
