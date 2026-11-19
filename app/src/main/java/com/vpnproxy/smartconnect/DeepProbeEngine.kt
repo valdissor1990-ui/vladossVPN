@@ -388,7 +388,17 @@ class DeepProbeEngine @Inject constructor(
                         ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                     }
                 }
-                scoreMetrics(results)
+                val networkAtCompletion = networkBucketProvider.snapshot()
+                val freshResults = results.filter { result ->
+                    result.evidence?.isFresh(networkAtCompletion, maxAgeMs = 90_000L) == true
+                }
+                if (freshResults.size != results.size) {
+                    logCollector.warn(
+                        TAG,
+                        "Discarded DeepProbe results from stale or changed physical network: discarded=${results.size - freshResults.size} kept=${freshResults.size}"
+                    )
+                }
+                scoreMetrics(freshResults)
             } finally {
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
