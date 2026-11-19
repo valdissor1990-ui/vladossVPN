@@ -117,7 +117,13 @@ object SensitiveMasker {
                 if (match.value == "127.0.0.1" || match.value == "0.0.0.0") match.value else "***IP***"
             }
             result = IPV6_REGEX.replace(result) { match ->
-                if (match.value == "::1") match.value else "***IPV6***"
+                val value = match.value
+                // Do not mistake clock values such as 12:34:56 for IPv6.
+                if (value == "::1" || (!value.contains("::") && value.count { it == ':' } < 7)) {
+                    value
+                } else {
+                    "***IPV6***"
+                }
             }
 
             // 7. token
