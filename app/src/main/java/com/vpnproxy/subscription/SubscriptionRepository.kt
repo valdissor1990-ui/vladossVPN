@@ -10,7 +10,6 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.logging.LogCollector
-import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -424,9 +423,10 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             )
                             throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
                         }
-                        if (sendDeviceMetadata && (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
-                            response.header("x-hwid-limit").equals("true", ignoreCase = true)
-                        )
+                        if (
+                            sendDeviceMetadata &&
+                            (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                                response.header("x-hwid-limit").equals("true", ignoreCase = true))
                         ) {
                             logCollector.warn(TAG, "Subscription server reports HWID device limit reached")
                             throw IOException("HWID device limit reached; remove an old device in the subscription panel")
