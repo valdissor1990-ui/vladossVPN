@@ -179,49 +179,53 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun classifyJsonRejection(obj: JsonObject): String {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
-        if (!type.isNullOrBlank()) {
-            if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
-            if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
-            val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return "missing_port"
-            if (port !in 1..65535) return "invalid_port"
-            if (obj["uuid"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
-            val reality = obj["tls"]?.jsonObject?.get("reality")?.jsonObject
-            if (reality?.get("enabled")?.jsonPrimitive?.booleanOrNull == true &&
-                reality["public_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_reality_public_key"
-            return "invalid_or_malformed_entry"
-        }
-        val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull ?: return "missing_protocol"
-        if (!protocol.equals("vless", ignoreCase = true) && !protocol.equals("hysteria", ignoreCase = true)) return "unsupported_protocol"
-        if (protocol.equals("hysteria", ignoreCase = true)) {
+        return try {
+            val type = obj["type"]?.jsonPrimitive?.contentOrNull
+            if (!type.isNullOrBlank()) {
+                if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
+                if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+                val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return "missing_port"
+                if (port !in 1..65535) return "invalid_port"
+                if (obj["uuid"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+                val reality = obj["tls"]?.jsonObject?.get("reality")?.jsonObject
+                if (reality?.get("enabled")?.jsonPrimitive?.booleanOrNull == true &&
+                    reality["public_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_reality_public_key"
+                return "invalid_or_malformed_entry"
+            }
+            val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull ?: return "missing_protocol"
+            if (!protocol.equals("vless", ignoreCase = true) && !protocol.equals("hysteria", ignoreCase = true)) return "unsupported_protocol"
+            if (protocol.equals("hysteria", ignoreCase = true)) {
+                val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+                val stream = obj["streamSettings"]?.jsonObject
+                val version = settings["version"]?.jsonPrimitive?.intOrNull
+                    ?: stream?.get("hysteriaSettings")?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull
+                if (version != 2) return "unsupported_protocol_version"
+                if (settings["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    settings["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_server"
+                if (settings["auth"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    settings["password"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    stream?.get("hysteriaSettings")?.jsonObject?.get("auth")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_credentials"
+                return "invalid_or_malformed_entry"
+            }
             val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+            val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_server"
+            if (vnext["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+            val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_credentials"
+            if (user["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+            val port = vnext["port"]?.jsonPrimitive?.intOrNull ?: 443
+            if (port !in 1..65535) return "invalid_port"
             val stream = obj["streamSettings"]?.jsonObject
-            val version = settings["version"]?.jsonPrimitive?.intOrNull
-                ?: stream?.get("hysteriaSettings")?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull
-            if (version != 2) return "unsupported_protocol_version"
-            if (settings["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                settings["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_server"
-            if (settings["auth"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                settings["password"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                stream?.get("hysteriaSettings")?.jsonObject?.get("auth")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_credentials"
-            return "invalid_or_malformed_entry"
+            val reality = stream?.get("realitySettings")?.jsonObject
+            if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
+                reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            ) return "missing_reality_public_key"
+            "invalid_or_malformed_entry"
+        } catch (_: Exception) {
+            "invalid_or_malformed_entry"
         }
-        val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
-        val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_server"
-        if (vnext["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
-        val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_credentials"
-        if (user["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
-        val port = vnext["port"]?.jsonPrimitive?.intOrNull ?: 443
-        if (port !in 1..65535) return "invalid_port"
-        val stream = obj["streamSettings"]?.jsonObject
-        val reality = stream?.get("realitySettings")?.jsonObject
-        if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
-            reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-        ) return "missing_reality_public_key"
-        return "invalid_or_malformed_entry"
     }
 
     private fun countPayloadCandidates(content: String, format: String): Int? = runCatching {
@@ -231,10 +235,12 @@ class SubscriptionParser @Inject constructor(
                 candidate.contains("://") && !candidate.startsWith("#")
             }
             "json" -> when (val element = Json.parseToJsonElement(content)) {
-                is JsonArray -> element.count { it is JsonObject }
+                is JsonArray -> element.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
                 is JsonObject -> {
                     val outbounds = element["outbounds"]
-                    if (outbounds is JsonArray) outbounds.count { it is JsonObject } else 1
+                    if (outbounds is JsonArray) {
+                        outbounds.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
+                    } else countJsonCandidates(element)
                 }
                 else -> 0
             }
@@ -570,25 +576,40 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
-                        candidateCount++
-                        val parsed = extractFromJsonObject(item, providerTag)
-                        if (parsed != null) configs.add(parsed)
-                        else rejectionCounts?.increment(classifyJsonRejection(item))
+                        val expected = countJsonCandidates(item)
+                        val parsed = extractAllFromJsonObject(item, providerTag)
+                        candidateCount += expected
+                        configs.addAll(parsed)
+                        val rejected = (expected - parsed.size).coerceAtLeast(0)
+                        if (rejected > 0) {
+                            val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                            repeat(rejected) { rejectionCounts?.increment(reason) }
+                        }
                     }
                 }
                 is JsonObject -> {
                     element["outbounds"]?.jsonArray?.forEach { item ->
                         if (item is JsonObject) {
-                            candidateCount++
-                            val parsed = extractFromJsonObject(item, providerTag)
-                            if (parsed != null) configs.add(parsed)
-                            else rejectionCounts?.increment(classifyJsonRejection(item))
+                            val expected = countJsonCandidates(item)
+                            val parsed = extractAllFromJsonObject(item, providerTag)
+                            candidateCount += expected
+                            configs.addAll(parsed)
+                            val rejected = (expected - parsed.size).coerceAtLeast(0)
+                            if (rejected > 0) {
+                                val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                                repeat(rejected) { rejectionCounts?.increment(reason) }
+                            }
                         }
                     } ?: run {
-                        candidateCount = 1
-                        val parsed = extractFromJsonObject(element, providerTag)
-                        if (parsed != null) configs.add(parsed)
-                        else rejectionCounts?.increment(classifyJsonRejection(element))
+                        val expected = countJsonCandidates(element)
+                        val parsed = extractAllFromJsonObject(element, providerTag)
+                        candidateCount = expected
+                        configs.addAll(parsed)
+                        val rejected = (expected - parsed.size).coerceAtLeast(0)
+                        if (rejected > 0) {
+                            val reason = if (parsed.isEmpty()) classifyJsonRejection(element) else "invalid_or_malformed_entry"
+                            repeat(rejected) { rejectionCounts?.increment(reason) }
+                        }
                     }
                 }
                 else -> {}
@@ -608,6 +629,46 @@ class SubscriptionParser @Inject constructor(
             logCollector.warn(TAG, "JSON parse failed: ${e.javaClass.simpleName}")
             emptyList()
         }
+    }
+
+    /**
+     * Legacy Xray VLESS outbounds may contain multiple vnext servers and multiple users
+     * per server. Each server/account pair is an independent importable profile; parsing
+     * only firstOrNull() silently discarded every remaining candidate.
+     */
+    private fun extractAllFromJsonObject(obj: JsonObject, providerTag: String): List<ParsedConfig> {
+        val protocol = (obj["protocol"] as? JsonPrimitive)?.contentOrNull
+        if (!protocol.equals("vless", ignoreCase = true)) {
+            return listOfNotNull(extractFromJsonObject(obj, providerTag))
+        }
+
+        val settings = obj["settings"] as? JsonObject ?: return emptyList()
+        val vnext = settings["vnext"] as? JsonArray ?: return emptyList()
+        return vnext.flatMap { rawNode ->
+            val node = rawNode as? JsonObject ?: return@flatMap emptyList()
+            val users = node["users"] as? JsonArray ?: return@flatMap emptyList()
+            users.mapNotNull { user ->
+                val singleNode = JsonObject(node.toMutableMap().apply {
+                    put("users", JsonArray(listOf(user)))
+                })
+                val singleSettings = JsonObject(settings.toMutableMap().apply {
+                    put("vnext", JsonArray(listOf(singleNode)))
+                })
+                val singleOutbound = JsonObject(obj.toMutableMap().apply {
+                    put("settings", singleSettings)
+                })
+                extractFromJsonObject(singleOutbound, providerTag)
+            }
+        }
+    }
+
+    private fun countJsonCandidates(obj: JsonObject): Int {
+        if (!(obj["protocol"] as? JsonPrimitive)?.contentOrNull.equals("vless", ignoreCase = true)) return 1
+        val vnext = (obj["settings"] as? JsonObject)?.get("vnext") as? JsonArray ?: return 1
+        val count = vnext.sumOf { rawNode ->
+            ((rawNode as? JsonObject)?.get("users") as? JsonArray)?.size ?: 0
+        }
+        return count.coerceAtLeast(1)
     }
 
     private fun extractFromJsonObject(obj: JsonObject, providerTag: String): ParsedConfig? {
