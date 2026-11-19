@@ -350,7 +350,7 @@ object SingboxConfigBuilder {
                                 "xPaddingHeader" -> "x_padding_header"
                                 "xPaddingPlacement" -> "x_padding_placement"
                                 "xPaddingMethod" -> "x_padding_method"
-                                else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
+                                else -> key.replace('-', '_').replace(Regex("([a-z0-9])([A-Z])")) { match ->
                                     "${match.groupValues[1]}_${match.groupValues[2]}"
                                 }.lowercase()
                             }
