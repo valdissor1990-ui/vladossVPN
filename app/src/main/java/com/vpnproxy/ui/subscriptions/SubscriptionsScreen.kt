@@ -29,6 +29,7 @@ fun SubscriptionsScreen(
     val refreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
+    val importReport by viewModel.importReport.collectAsStateWithLifecycle()
     val scannedServers by viewModel.scannedServers.collectAsStateWithLifecycle()
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
     // TCP reachability is a hint only; keep unverified profiles in the candidate set.
@@ -124,6 +125,64 @@ fun SubscriptionsScreen(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
+            }
+
+            importReport?.let { report ->
+                item(key = "subscription-import-report") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Отчёт последнего обновления", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Получено записей: ${report.candidateCount?.toString() ?: "не определено"}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Распознано: ${report.acceptedCount}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Отклонено: ${report.rejectedCount?.toString() ?: "не определено"}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Дубликаты источников: ${report.providerDuplicates}; совпадения между источниками: ${report.globalDuplicates}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Уникальных профилей: ${report.globallyUniqueCount}", style = MaterialTheme.typography.bodySmall)
+                            if (report.usedCache) {
+                                Text("Часть профилей восстановлена из кэша", color = WarningYellow, style = MaterialTheme.typography.bodySmall)
+                            }
+                            report.providers.forEach { provider ->
+                                HorizontalDivider()
+                                Text(provider.providerName, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Источник: ${provider.source}; формат: ${provider.format}",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                                Text(
+                                    "Кандидаты: ${provider.candidateCount?.toString() ?: "н/д"}; принято: ${provider.acceptedCount}; отклонено: ${provider.rejectedCount?.toString() ?: "н/д"}; дубликаты: ${provider.duplicateCount}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if (provider.protocolCounts.isNotEmpty()) {
+                                    Text(
+                                        "Протоколы: " + provider.protocolCounts.entries.sortedBy { it.key }
+                                            .joinToString { "${it.key} ${it.value}" },
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                                provider.rejectionReasons.forEach { (reason, count) ->
+                                    Text("Причина: $reason — $count", style = MaterialTheme.typography.labelSmall)
+                                }
+                                provider.failureCode?.let {
+                                    Text("Статус источника: $it", color = WarningYellow, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (subs.isEmpty()) {
                 item {
