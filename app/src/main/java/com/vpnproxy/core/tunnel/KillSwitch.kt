@@ -1,7 +1,7 @@
 package com.vpnproxy.core.tunnel
 
 import android.net.VpnService
-import android.util.Log
+import com.vpnproxy.logging.LogCollectorHolder
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -22,14 +22,14 @@ class KillSwitch @Inject constructor() {
                 builder.addDnsServer("1.1.1.1")
                 builder.setUnderlyingNetworks(null)
                 builder.setBlocking(true)
-                Log.i(TAG, "Kill Switch APPLIED: full IPv4/IPv6 route, DNS via tunnel")
+                LogCollectorHolder.get()?.info(TAG, "Kill Switch APPLIED: full IPv4/IPv6 route, DNS via tunnel")
             } else {
                 builder.addRoute("0.0.0.0", 0)
                 builder.addDnsServer("1.1.1.1")
-                Log.i(TAG, "Kill Switch DISABLED")
+                LogCollectorHolder.get()?.info(TAG, "Kill Switch DISABLED")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to apply Kill Switch", e)
+            LogCollectorHolder.get()?.error(TAG, "Failed to apply Kill Switch", e)
         }
     }
 }
