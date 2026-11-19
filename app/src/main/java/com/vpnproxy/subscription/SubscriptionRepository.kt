@@ -175,16 +175,17 @@ private val _deviceMetadataConsent = MutableStateFlow(
     val lastImportReport: StateFlow<SubscriptionImportReport?> = _lastImportReport.asStateFlow()
 
     private val refreshMutex = Mutex()
+    private var removedBundledProviderTags: Set<String> = emptySet()
 
     init {
         loadFromPrefs()
-        val removedBundledNames = removeBundledSubscriptions()
+        removedBundledProviderTags = removeBundledSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             // CachedConfig stores providerTag (the old subscription name), not its URL/ID.
             // Include names captured from the removed subscription records so orphaned
             // bundled profiles cannot reappear after their source has been deleted.
-            val removedProviderTags = REMOVED_BUNDLED_NAMES + removedBundledNames
+            val removedProviderTags = REMOVED_BUNDLED_NAMES + removedBundledProviderTags
             val retainedCached = cached.filterNot { it.providerTag in removedProviderTags }
             _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
@@ -564,7 +565,8 @@ private val _deviceMetadataConsent = MutableStateFlow(
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
-        loadConfigsFromCache().filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+        loadConfigsFromCache()
+            .filterNot { it.providerTag in (REMOVED_BUNDLED_NAMES + removedBundledProviderTags) }
             .map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
