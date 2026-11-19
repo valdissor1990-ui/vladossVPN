@@ -45,8 +45,9 @@ class NetworkBucketProvider @Inject constructor(
                 val capabilities = manager.getNetworkCapabilities(network)
                 val resolvedBucket = bucket(capabilities)
                 if (
+                    capabilities != null &&
                     resolvedBucket != null &&
-                    capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                 ) network to resolvedBucket else null
