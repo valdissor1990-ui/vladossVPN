@@ -40,11 +40,17 @@ class UpdateManager @Inject constructor(
     private val pendingStore = PendingUpdateStore(context)
 
     init {
-        restoreReadyFromDisk()
+        if (BuildConfig.ENABLE_SELF_UPDATE) {
+            restoreReadyFromDisk()
+        }
     }
 
     /** If a previously downloaded APK is still newer than installed, surface Ready. */
     fun restoreReadyFromDisk() {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return
+        }
         val pending = pendingStore.read() ?: return
         val file = pendingStore.readyFile() ?: return
         val synthetic = GitHubRelease(
@@ -64,6 +70,10 @@ class UpdateManager @Inject constructor(
     }
 
     suspend fun checkForUpdate(force: Boolean = false) {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return
+        }
         if (!force && System.currentTimeMillis() - lastCheckAt < checkCooldownMs) {
             logCollector.debug("UpdateManager", "Skip check (cooldown)")
             return
@@ -136,6 +146,10 @@ class UpdateManager @Inject constructor(
     }
 
     suspend fun downloadUpdate(release: GitHubRelease) = downloadMutex.withLock {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return@withLock
+        }
         val flavor = if (context.packageName.endsWith(".play")) "play" else "direct"
         val asset = release.findApkAsset(flavor)
         if (asset == null) {
@@ -172,6 +186,7 @@ class UpdateManager @Inject constructor(
     }
 
     fun installReady() {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) return
         val ready = _state.value as? State.Ready ?: return
         if (!installer.canInstallPackages()) {
             logCollector.warn("UpdateManager", "Install blocked: unknown-sources permission not granted")
