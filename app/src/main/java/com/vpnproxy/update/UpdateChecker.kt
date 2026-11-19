@@ -104,7 +104,7 @@ class UpdateChecker @Inject constructor(
                         return@withContext Result(hasUpdate = false, error = err)
                     }
                     else -> {
-                        val responseBody = resp.body?.string()
+                        val responseBody = runInterruptible(Dispatchers.IO) { resp.body?.string() }
                             ?: return@withContext Result(hasUpdate = false, error = "Empty response")
                         val etag = resp.header("ETag")
                         if (!etag.isNullOrBlank()) {
@@ -175,7 +175,7 @@ class UpdateChecker @Inject constructor(
                 logCollector.warn(TAG, "Update check retry failed: $err")
                 return@use Result(hasUpdate = false, error = err)
             }
-            val body = resp.body?.string()
+            val body = runInterruptible(Dispatchers.IO) { resp.body?.string() }
                 ?: return@use Result(hasUpdate = false, error = "Empty response")
             val etag = resp.header("ETag")
             val editor = prefs.edit().putString(KEY_BODY, body)
