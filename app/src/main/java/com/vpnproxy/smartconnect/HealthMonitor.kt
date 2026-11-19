@@ -27,9 +27,9 @@ internal class HealthMonitor(
     private val logCollector: LogCollector,
     private val healthChecker: HealthChecker
 ) {
-    /** Runs the selected server's normal latency check without changing probe semantics. */
-    suspend fun checkSelectedServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): HealthChecker.LatencyResult? =
-        healthChecker.testLatency(listOf(config)).firstOrNull()
+    /** Check the already-running selected tunnel through its local mixed proxy inbound. */
+    suspend fun checkSelectedServer(config: com.vpnproxy.subscription.SubscriptionParser.ParsedConfig): HealthChecker.LatencyResult =
+        healthChecker.testActiveTunnelLatency(config)
 
     private val microProbeClient = OkHttpClient.Builder()
         .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
