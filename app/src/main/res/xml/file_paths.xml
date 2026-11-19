@@ -4,6 +4,4 @@
     <external-files-path name="external_logs" path="logs/" />
     <!-- Обновления APK -->
     <cache-path name="updates" path="updates/" />
-    <!-- Логи (кэш) — на всякий случай -->
-    <cache-path name="cache" path="." />
 </paths>
