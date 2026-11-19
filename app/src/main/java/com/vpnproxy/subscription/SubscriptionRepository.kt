@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,7 @@ class SubscriptionRepository @Inject constructor(
         private const val KEY_SUBS = "subscriptions_json"
         private const val KEY_DEVICE_METADATA_CONSENT = "device_metadata_consent_v1"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val KEY_CONFIG_CACHE = "cached_configs_json"
         // IDs, URLs and labels used by older bundled feeds. They are removed once
         // during migration; no bundled source is installed or refreshed afterwards.
         private val REMOVED_BUNDLED_IDS = setOf(
@@ -601,20 +603,60 @@ private val _deviceMetadataConsent = MutableStateFlow(
         try {
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
-            File(context.filesDir, CACHE_FILE).writeText(jsonStr)
+            // Server profiles contain UUIDs, passwords and Reality credentials. Keep the
+            // complete cache inside the same encrypted preferences store as subscriptions.
+            check(encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).commit()) {
+                "Encrypted cache commit failed"
+            }
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache save failed", e)
+            logCollector.warn(TAG, "Encrypted cache save failed: ${e.javaClass.simpleName}")
+        } finally {
+            // Never leave the legacy credential-bearing file behind after a save attempt.
+            deleteLegacyPlaintextCache()
         }
     }
 
     private fun loadConfigsFromCache(): List<CachedConfig> {
         return try {
-            val f = File(context.filesDir, CACHE_FILE)
-            if (!f.exists()) return emptyList()
-            json.decodeFromString(configsSerializer, f.readText())
+            val encrypted = encryptedPrefs.getString(KEY_CONFIG_CACHE, null)
+            if (!encrypted.isNullOrBlank()) {
+                val decoded = json.decodeFromString(configsSerializer, encrypted)
+                deleteLegacyPlaintextCache()
+                return decoded
+            }
+
+            // One-time migration for installations that still have the old plaintext file.
+            val legacyFile = File(context.filesDir, CACHE_FILE)
+            if (!legacyFile.exists()) return emptyList()
+            val legacyJson = legacyFile.readText()
+            val decoded = try {
+                json.decodeFromString(configsSerializer, legacyJson)
+            } catch (e: Exception) {
+                logCollector.warn(TAG, "Legacy cache rejected during encrypted migration: ${e.javaClass.simpleName}")
+                emptyList()
+            }
+
+            if (decoded.isNotEmpty()) {
+                val stored = encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, legacyJson).commit()
+                if (!stored) {
+                    logCollector.warn(TAG, "Legacy cache could not be committed to encrypted preferences")
+                }
+            }
+            // Do not retain credentials in plaintext even if the old cache is malformed
+            // or the encrypted migration cannot preserve it. The subscription can refresh it.
+            deleteLegacyPlaintextCache()
+            decoded
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache load failed", e)
+            deleteLegacyPlaintextCache()
+            logCollector.warn(TAG, "Encrypted cache load failed: ${e.javaClass.simpleName}")
             emptyList()
+        }
+    }
+
+    private fun deleteLegacyPlaintextCache() {
+        val legacyFile = File(context.filesDir, CACHE_FILE)
+        if (legacyFile.exists() && !legacyFile.delete()) {
+            logCollector.warn(TAG, "Could not delete legacy plaintext server cache")
         }
     }
 }
