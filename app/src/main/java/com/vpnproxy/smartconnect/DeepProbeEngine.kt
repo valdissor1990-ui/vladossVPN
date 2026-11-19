@@ -170,8 +170,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                 "Проверка отдельных профилей доступна только при полностью остановленном VPN"
@@ -270,9 +270,9 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
             }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
@@ -280,8 +280,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
@@ -330,9 +330,11 @@ class DeepProbeEngine @Inject constructor(
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
                                 val start = System.nanoTime()
-                                client.newCall(request).execute().use { response ->
-                                    val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                                    if (response.code in 200..399) samples += elapsed else failures++
+                                runInterruptible(Dispatchers.IO) {
+                                    client.newCall(request).execute().use { response ->
+                                        val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                        if (response.code in 200..399) samples += elapsed else failures++
+                                    }
                                 }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
@@ -350,12 +352,14 @@ class DeepProbeEngine @Inject constructor(
                             attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
                             val start = System.nanoTime()
-                            client.newCall(request).execute().use { response ->
-                                if (response.isSuccessful) {
-                                    val bytes = response.body?.bytes()?.size ?: 0
-                                    val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
-                                    speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
-                                    speedOk = bytes > 0
+                            runInterruptible(Dispatchers.IO) {
+                                client.newCall(request).execute().use { response ->
+                                    if (response.isSuccessful) {
+                                        val bytes = response.body?.bytes()?.size ?: 0
+                                        val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
+                                        speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
+                                        speedOk = bytes > 0
+                                    }
                                 }
                             }
                         } catch (cancelled: CancellationException) {
@@ -403,9 +407,9 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
             }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
