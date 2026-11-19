@@ -35,9 +35,9 @@ class NetworkBucketProvider @Inject constructor(
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            val isValidatedPhysicalNetwork = isValidatedPhysicalNetwork(capabilities)
+            val isValidated = isValidatedPhysicalNetwork(capabilities)
             val key = network.toString()
-            if (isValidatedPhysicalNetwork) {
+            if (isValidated) {
                 val nextSignature = signature(capabilities)
                 val previous = observedPhysicalNetworks.put(key, nextSignature)
                 if (!initializingNetworks && previous != nextSignature) {
