@@ -49,6 +49,7 @@ class SubscriptionRepository @Inject constructor(
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val KEY_CONFIG_CACHE = "cached_configs_json"
         // IDs, URLs and labels used by older bundled feeds. They are removed once
         // during migration; no bundled source is installed or refreshed afterwards.
         private val REMOVED_BUNDLED_IDS = setOf(
@@ -478,20 +479,53 @@ class SubscriptionRepository @Inject constructor(
         try {
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
-            File(context.filesDir, CACHE_FILE).writeText(jsonStr)
+            // Server profiles contain UUIDs, passwords and Reality credentials. Keep the
+            // complete cache inside the same encrypted preferences store as subscriptions.
+            encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).apply()
+            deleteLegacyPlaintextCache()
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache save failed", e)
+            logCollector.warn(TAG, "Encrypted cache save failed: ${e.javaClass.simpleName}")
         }
     }
 
     private fun loadConfigsFromCache(): List<CachedConfig> {
         return try {
-            val f = File(context.filesDir, CACHE_FILE)
-            if (!f.exists()) return emptyList()
-            json.decodeFromString(configsSerializer, f.readText())
+            val encrypted = encryptedPrefs.getString(KEY_CONFIG_CACHE, null)
+            if (!encrypted.isNullOrBlank()) {
+                val decoded = json.decodeFromString(configsSerializer, encrypted)
+                deleteLegacyPlaintextCache()
+                return decoded
+            }
+
+            // One-time migration for installations that still have the old plaintext file.
+            val legacyFile = File(context.filesDir, CACHE_FILE)
+            if (!legacyFile.exists()) return emptyList()
+            val legacyJson = legacyFile.readText()
+            val decoded = try {
+                json.decodeFromString(configsSerializer, legacyJson)
+            } catch (e: Exception) {
+                logCollector.warn(TAG, "Legacy cache rejected during encrypted migration: ${e.javaClass.simpleName}")
+                emptyList()
+            }
+
+            if (decoded.isNotEmpty()) {
+                encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, legacyJson).apply()
+            }
+            // Do not retain credentials in plaintext even if the old cache is malformed
+            // or the encrypted migration cannot preserve it. The subscription can refresh it.
+            deleteLegacyPlaintextCache()
+            decoded
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache load failed", e)
+            deleteLegacyPlaintextCache()
+            logCollector.warn(TAG, "Encrypted cache load failed: ${e.javaClass.simpleName}")
             emptyList()
+        }
+    }
+
+    private fun deleteLegacyPlaintextCache() {
+        val legacyFile = File(context.filesDir, CACHE_FILE)
+        if (legacyFile.exists() && !legacyFile.delete()) {
+            logCollector.warn(TAG, "Could not delete legacy plaintext server cache")
         }
     }
 }
