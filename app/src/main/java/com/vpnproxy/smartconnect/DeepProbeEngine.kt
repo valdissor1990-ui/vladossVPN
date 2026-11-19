@@ -6,6 +6,7 @@ import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -41,6 +42,7 @@ import javax.inject.Singleton
 @Singleton
 class DeepProbeEngine @Inject constructor(
     private val healthChecker: HealthChecker,
+    private val networkBucketProvider: NetworkBucketProvider,
     private val logCollector: LogCollector,
     @ApplicationContext private val context: Context
 ) {
@@ -129,7 +131,8 @@ class DeepProbeEngine @Inject constructor(
         val speedScore: Double = 0.0,
         val jitterScore: Double = 0.0,
         val lossScore: Double = 0.0,
-        val normalizedScore: Double = 0.0
+        val normalizedScore: Double = 0.0,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     private val running = AtomicBoolean(false)
@@ -150,7 +153,8 @@ class DeepProbeEngine @Inject constructor(
         val config: ParsedConfig,
         val latencyMs: Long,
         val success: Boolean,
-        val successfulSamples: Int
+        val successfulSamples: Int,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     /**
@@ -202,10 +206,14 @@ class DeepProbeEngine @Inject constructor(
                                         .retryOnConnectionFailure(false)
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
+                                    val startedAtEpochMs = System.currentTimeMillis()
+                                    val startNetwork = networkBucketProvider.snapshot()
+                                    var attemptedSamples = 0
                                     val samples = mutableListOf<Long>()
                                     for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
                                         if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
                                         checkProbeActive(probeGeneration)
+                                        attemptedSamples++
                                         try {
                                             val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
                                             val request = Request.Builder().url(probeUrl).get().build()
@@ -224,11 +232,21 @@ class DeepProbeEngine @Inject constructor(
                                                 TAG,
                                                 "Profile probe failed: profile=${configs[index].name} attempt=${attempt + 1} " +
                                                     "endpoint=${PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]} " +
-                                                    "reason=${failure.javaClass.simpleName}: ${failure.message}"
+                                                    "reason=${failure.javaClass.simpleName}: ${SensitiveMasker.mask(failure.message.orEmpty())}"
                                             )
                                         }
                                     }
-                                    val result = summarizeProfileLatency(configs[index], samples)
+                                    val result = summarizeProfileLatency(configs[index], samples).copy(
+                                        evidence = ProbeMeasurementEvidence(
+                                            method = ProbeMethod.DEEP_PROFILE_LATENCY,
+                                            startedAtEpochMs = startedAtEpochMs,
+                                            completedAtEpochMs = System.currentTimeMillis(),
+                                            startNetwork = startNetwork,
+                                            endNetwork = networkBucketProvider.snapshot(),
+                                            attemptedSamples = attemptedSamples,
+                                            successfulSamples = samples.size
+                                        )
+                                    )
                                     logCollector.info(
                                         TAG,
                                         "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${result.success} successfulSamples=${result.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${result.latencyMs}"
@@ -302,10 +320,14 @@ class DeepProbeEngine @Inject constructor(
                             .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                             .build()
 
+                        val startedAtEpochMs = System.currentTimeMillis()
+                        val startNetwork = networkBucketProvider.snapshot()
+                        var attemptedSamples = 0
                         val samples = mutableListOf<Long>()
                         var failures = 0
                         repeat(LATENCY_SAMPLES) {
                             checkProbeActive(probeGeneration)
+                            attemptedSamples++
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
                                 val start = System.nanoTime()
@@ -326,6 +348,7 @@ class DeepProbeEngine @Inject constructor(
                         var speed = 0.0
                         var speedOk = false
                         try {
+                            attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
                             val start = System.nanoTime()
                             client.newCall(request).execute().use { response ->
@@ -348,7 +371,16 @@ class DeepProbeEngine @Inject constructor(
                             speedMbps = speed,
                             jitterMs = jitter,
                             lossRate = failures.toDouble() / LATENCY_SAMPLES,
-                            healthOk = samples.size >= 2 && speedOk
+                            healthOk = samples.size >= 2 && speedOk,
+                            evidence = ProbeMeasurementEvidence(
+                                method = ProbeMethod.DEEP_DIAGNOSTIC,
+                                startedAtEpochMs = startedAtEpochMs,
+                                completedAtEpochMs = System.currentTimeMillis(),
+                                startNetwork = startNetwork,
+                                endNetwork = networkBucketProvider.snapshot(),
+                                attemptedSamples = attemptedSamples,
+                                successfulSamples = samples.size + if (speedOk) 1 else 0
+                            )
                         )
                     } catch (cancelled: CancellationException) {
                         throw cancelled
@@ -357,7 +389,17 @@ class DeepProbeEngine @Inject constructor(
                         ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                     }
                 }
-                scoreMetrics(results)
+                val networkAtCompletion = networkBucketProvider.snapshot()
+                val freshResults = results.filter { result ->
+                    result.evidence?.isFresh(networkAtCompletion, maxAgeMs = 90_000L) == true
+                }
+                if (freshResults.size != results.size) {
+                    logCollector.warn(
+                        TAG,
+                        "Discarded DeepProbe results from stale or changed physical network: discarded=${results.size - freshResults.size} kept=${freshResults.size}"
+                    )
+                }
+                scoreMetrics(freshResults)
             } finally {
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
