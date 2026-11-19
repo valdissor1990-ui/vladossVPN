@@ -122,6 +122,9 @@ android {
             signingConfig = releaseSigningConfig
         }
         debug {
+            // Keep CI/test builds installable alongside the signed production app.
+            // This prevents accidental uninstall/data loss when the debug signing key differs.
+            applicationIdSuffix = ".debug"
             isMinifyEnabled = false
             buildConfigField("boolean", "LOG_DEBUG", "true")
         }
