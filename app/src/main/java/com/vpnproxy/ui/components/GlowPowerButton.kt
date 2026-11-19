@@ -76,33 +76,38 @@ fun GlowPowerButton(
     val connected = state.hasTunnel()
     val busy = state == ConnectionUiState.CONNECTING || state == ConnectionUiState.VERIFYING
 
-    val infinite = rememberInfiniteTransition(label = "power")
-    val pulse by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = if (connected) 1f else 0.35f,
-        animationSpec = if (connected) {
-            infiniteRepeatable(
+    // Create infinite transitions only while their visual effect is needed.
+    // This avoids both idle frame callbacks and incompatible animation-spec branches.
+    val pulse = if (connected) {
+        val pulseTransition = rememberInfiniteTransition(label = "power-pulse")
+        val pulseValue by pulseTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
                 animation = tween(1100),
                 repeatMode = RepeatMode.Reverse
-            )
-        } else {
-            tween(0)
-        },
-        label = "pulse"
-    )
-    val spin by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = if (busy) 360f else 0f,
-        animationSpec = if (busy) {
-            infiniteRepeatable(
+            ),
+            label = "pulse"
+        )
+        pulseValue
+    } else {
+        0.35f
+    }
+    val spin = if (busy) {
+        val spinTransition = rememberInfiniteTransition(label = "power-spin")
+        val spinValue by spinTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
                 animation = tween(1400, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
-            )
-        } else {
-            tween(0)
-        },
-        label = "spin"
-    )
+            ),
+            label = "spin"
+        )
+        spinValue
+    } else {
+        0f
+    }
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(sessionStartedAt, connected) {
