@@ -37,6 +37,8 @@ class SubscriptionsViewModel @Inject constructor(
         }
     }
 
+    val importReport = repository.lastImportReport
+    val jsonImportReport = jsonConfigRepository.lastImportReport
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
     val jsonConfigs = jsonConfigRepository.configs
