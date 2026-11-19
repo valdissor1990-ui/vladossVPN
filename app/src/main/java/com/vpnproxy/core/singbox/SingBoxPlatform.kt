@@ -74,30 +74,24 @@ class SingBoxPlatform(
 
     override fun autoDetectInterfaceControl(fd: Int) {
         val service = vpnService
-        val collector = com.vpnproxy.logging.LogCollectorHolder.get()
-
         // libbox's PlatformInterface callback exposes the socket fd only; the outbound tag is
         // not part of this contract, so do not invent one in diagnostics.
         if (service == null) {
             val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=not-applicable (no VpnService)"
-            collector?.warn(TAG, line)
             logWarn( line)
             return // Proxy-only probes have no TUN to bypass.
         }
 
         val ok = runCatching { service.protect(fd) }
             .onFailure { error ->
-                collector?.error(TAG, "protect(fd=$fd) threw for outbound=<unknown> result=false: ${error.message}")
                 logError( "protect(fd=$fd) threw for outbound=<unknown> result=false", error)
             }
             .getOrDefault(false)
 
         val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=$ok"
         if (ok) {
-            collector?.info(TAG, line)
             logInfo( line)
         } else {
-            collector?.error(TAG, "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
             logError( "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
             error("VpnService.protect($fd) failed; refusing an unprotected outbound socket")
         }
