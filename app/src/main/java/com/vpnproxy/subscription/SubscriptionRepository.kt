@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -221,7 +222,7 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.message}")
+                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.javaClass.simpleName}")
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
@@ -336,7 +337,7 @@ class SubscriptionRepository @Inject constructor(
                             if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
-                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304): ${SensitiveMasker.mask(sourceUrl)}")
                             return@withContext cachedBody to sourceUrl
                         }
                         if (!response.isSuccessful) {
@@ -357,7 +358,7 @@ class SubscriptionRepository @Inject constructor(
                         if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
                         else editor.remove(etagKey)
                         editor.apply()
-                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
+                        logCollector.info(TAG, "Subscription source OK: ${SensitiveMasker.mask(sourceUrl)}")
                         return@withContext body to sourceUrl
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
@@ -365,7 +366,7 @@ class SubscriptionRepository @Inject constructor(
                 } catch (e: Exception) {
                     lastFailure = e
                     if (isTransportFailure(e)) sawTransportFailure = true
-                    logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
+                    logCollector.warn(TAG, "Source failed: ${SensitiveMasker.mask(sourceUrl)} — ${e.javaClass.simpleName}")
                 }
             }
             val vpnState = connectionCoordinator.state.value
@@ -395,7 +396,7 @@ class SubscriptionRepository @Inject constructor(
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
         val (body, sourceUrl) = fetchWithFallback(sub)
         val parsed = parser.parse(body, providerTag = sub.name)
-        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
+        logCollector.info(TAG, "Fetch succeeded from ${SensitiveMasker.mask(sourceUrl)}, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
         return parsed
     }
 
