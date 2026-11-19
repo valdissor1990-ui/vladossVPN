@@ -2,6 +2,7 @@ package com.vpnproxy.core.singbox
 
 import android.content.Context
 import com.vpnproxy.logging.LogCollectorHolder
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -52,6 +53,29 @@ object SingboxProxyClient {
             activeCore = core
             LogCollectorHolder.get()?.info(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
             true
+        } catch (interrupted: InterruptedException) {
+            LogCollectorHolder.get()?.warn(TAG, "Temporary Sing-box startup interrupted")
+            // InterruptedException clears the thread flag. Keep it cleared while stop()
+            // performs cleanup, then restore the flag before propagating cancellation.
+            try {
+                runCatching { core.stop() }
+            } finally {
+                Thread.currentThread().interrupt()
+            }
+            throw CancellationException("Temporary Sing-box startup interrupted").also {
+                it.initCause(interrupted)
+            }
+        } catch (cancelled: CancellationException) {
+            LogCollectorHolder.get()?.warn(TAG, "Temporary Sing-box startup cancelled")
+            // runInterruptible may have interrupted this worker before cancellation surfaced.
+            // Temporarily clear that flag so native stop() can release resources, then restore it.
+            val wasInterrupted = Thread.interrupted()
+            try {
+                runCatching { core.stop() }
+            } finally {
+                if (wasInterrupted) Thread.currentThread().interrupt()
+            }
+            throw cancelled
         } catch (t: Throwable) {
             LogCollectorHolder.get()?.error(TAG, "Temporary Sing-box startup failed", t)
             runCatching { core.stop() }
