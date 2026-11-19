@@ -748,7 +748,12 @@ class HomeViewModel @Inject constructor(
     fun switchServer() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val current = autoSwitcher.currentServer.value
                 val next = autoSwitcher.switchToNext() ?: return@launch
+                if (current?.config?.connectionKey() == next.config.connectionKey()) {
+                    logCollector.info(TAG, "switchServer skipped: no different reachable server is available")
+                    return@launch
+                }
                 withContext(Dispatchers.Main.immediate) {
                     // Route the explicit switch through the same teardown + fresh preflight
                     // path as tapping a server row.
