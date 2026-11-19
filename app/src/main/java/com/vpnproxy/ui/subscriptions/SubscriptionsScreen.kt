@@ -30,6 +30,7 @@ fun SubscriptionsScreen(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
     val importReport by viewModel.importReport.collectAsStateWithLifecycle()
+    val jsonImportReport by viewModel.jsonImportReport.collectAsStateWithLifecycle()
     val scannedServers by viewModel.scannedServers.collectAsStateWithLifecycle()
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
     // TCP reachability is a hint only; keep unverified profiles in the candidate set.
@@ -205,6 +206,33 @@ fun SubscriptionsScreen(
                                     }
                                     Text(failureLabel, color = WarningYellow, style = MaterialTheme.typography.labelSmall)
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            jsonImportReport?.let { report ->
+                item(key = "json-import-report") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Отчёт последнего JSON-импорта", style = MaterialTheme.typography.titleMedium)
+                            Text("Формат: ${report.detectedFormat}; Base64: ${if (report.decodedBase64) "да" else "нет"}", style = MaterialTheme.typography.bodySmall)
+                            Text("Кандидаты: ${report.candidateCount?.toString() ?: "н/д"}; принято: ${report.acceptedCount}; отклонено: ${report.rejectedCount?.toString() ?: "н/д"}", style = MaterialTheme.typography.bodySmall)
+                            if (report.protocolCounts.isNotEmpty()) {
+                                Text(
+                                    "Протоколы: " + report.protocolCounts.entries.sortedBy { it.key }
+                                        .joinToString { "${it.key} ${it.value}" },
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            report.rejectionReasons.forEach { (reason, count) ->
+                                Text("Причина: ${reason.replace('_', ' ')} — $count", style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
