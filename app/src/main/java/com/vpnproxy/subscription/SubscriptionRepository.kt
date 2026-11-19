@@ -48,6 +48,7 @@ class SubscriptionRepository @Inject constructor(
         private const val TAG = "SubRepo"
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
+        private const val KEY_DEVICE_METADATA_CONSENT = "device_metadata_consent_v1"
         private const val CACHE_FILE = "cached_configs.json"
         // IDs, URLs and labels used by older bundled feeds. They are removed once
         // during migration; no bundled source is installed or refreshed afterwards.
@@ -108,6 +109,26 @@ class SubscriptionRepository @Inject constructor(
         .callTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
+
+    private val _deviceMetadataConsent = MutableStateFlow(
+        encryptedPrefs.getBoolean(KEY_DEVICE_METADATA_CONSENT, false)
+    )
+    val deviceMetadataConsent: StateFlow<Boolean> = _deviceMetadataConsent.asStateFlow()
+
+    /**
+     * Explicit opt-in for sending the subscription provider a hashed device identifier,
+     * device model and Android version. Disabled by default and stored encrypted.
+     */
+    fun setDeviceMetadataConsent(enabled: Boolean) {
+        val saved = encryptedPrefs.edit()
+            .putBoolean(KEY_DEVICE_METADATA_CONSENT, enabled)
+            .commit()
+        if (saved) {
+            _deviceMetadataConsent.value = enabled
+        } else {
+            logCollector.warn(TAG, "Could not persist device metadata consent")
+        }
+    }
 
     private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
     val subscriptions: StateFlow<List<ProviderSubscription>> = _subscriptions.asStateFlow()
@@ -290,7 +311,7 @@ class SubscriptionRepository @Inject constructor(
             var sawTransportFailure = false
             for (sourceUrl in sources) {
                 try {
-                    val hwid = deviceIdManager.getHwid()
+                    val sendDeviceMetadata = _deviceMetadataConsent.value
                     val cacheKey = sourceUrl.hashCode().toUInt().toString(16)
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
@@ -298,18 +319,21 @@ class SubscriptionRepository @Inject constructor(
                     val cachedEtag = encryptedPrefs.getString(etagKey, null)
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
-                        .header("User-Agent", "v2rayNG/1.8.5")
-                        .header("x-hwid", hwid)
-                        .header("x-device-os", "Android")
-                        .header("x-ver-os", Build.VERSION.RELEASE ?: "")
-                        .header(
-                            "x-device-model",
-                            listOf(Build.MANUFACTURER, Build.MODEL)
-                                .filter { !it.isNullOrBlank() }
-                                .distinct()
-                                .joinToString(" ")
-                                .ifBlank { "Android device" }
-                        )
+                        .header("User-Agent", "vladossvpn")
+                    if (sendDeviceMetadata) {
+                        requestBuilder
+                            .header("x-hwid", deviceIdManager.getHwid())
+                            .header("x-device-os", "Android")
+                            .header("x-ver-os", Build.VERSION.RELEASE ?: "")
+                            .header(
+                                "x-device-model",
+                                listOf(Build.MANUFACTURER, Build.MODEL)
+                                    .filter { !it.isNullOrBlank() }
+                                    .distinct()
+                                    .joinToString(" ")
+                                    .ifBlank { "Android device" }
+                            )
+                    }
                     if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
                         requestBuilder.header("If-None-Match", cachedEtag)
                     }
