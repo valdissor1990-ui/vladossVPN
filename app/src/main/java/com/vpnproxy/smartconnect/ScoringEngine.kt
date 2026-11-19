@@ -24,7 +24,7 @@ class ScoringEngine @Inject constructor(
         val speedMbps: Float,
         val successRate: Float,
         val score: Float,
-        val evidence: ProbeEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null
     ) : Comparable<ScoredServer> {
         override fun compareTo(other: ScoredServer): Int = other.score.compareTo(this.score)
     }
