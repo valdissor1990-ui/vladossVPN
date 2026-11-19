@@ -167,8 +167,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                 "Проверка отдельных профилей доступна только при полностью остановленном VPN"
@@ -253,9 +253,9 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
             }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
@@ -263,8 +263,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
@@ -362,9 +362,9 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
             }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
