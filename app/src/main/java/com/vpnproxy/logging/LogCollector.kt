@@ -47,7 +47,7 @@ class LogCollector @Inject constructor() {
         val safeEntry = entry.copy(
             tag = SensitiveMasker.mask(entry.tag),
             message = SensitiveMasker.mask(entry.message),
-            server = entry.server?.let(SensitiveMasker::mask),
+            server = entry.server?.let { SensitiveMasker.mask("server=$it").substringAfter("server=") },
             stackTrace = entry.stackTrace?.let(SensitiveMasker::mask)
         )
         synchronized(persistenceLock) {
