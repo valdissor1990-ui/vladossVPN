@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.SystemClock
 import com.vpnproxy.logging.LogCollector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -236,7 +237,8 @@ class NetworkAwareReconnector(
                         onReconnectStateChanged(false)
                         return@collect
                     }
-                    val now = System.currentTimeMillis()
+                    // Cooldown is a duration, so use monotonic elapsed time rather than wall clock.
+                    val now = SystemClock.elapsedRealtime()
                     if (now - lastReconnectAt < COOLDOWN_MS) {
                         logCollector.debug(TAG, "Cooldown active, skip NetworkChanged")
                         onReconnectStateChanged(false)
