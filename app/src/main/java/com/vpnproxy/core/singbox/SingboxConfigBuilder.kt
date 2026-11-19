@@ -208,7 +208,10 @@ object SingboxConfigBuilder {
                 isSocks -> false
                 isVless -> config.security.equals("tls", ignoreCase = true) ||
                     config.security.equals("reality", ignoreCase = true)
-                else -> true // VMess/SS use protocol-level encryption; Trojan/Hy2/TUIC require TLS.
+                isShadowsocks -> config.security.isBlank() ||
+                    (!config.security.equals("none", ignoreCase = true) &&
+                        !config.security.equals("plain", ignoreCase = true))
+                else -> true // VMess uses protocol encryption; Trojan/Hy2/TUIC require TLS.
             }
             require(encryptedTransport) {
                 "This profile does not provide an encrypted transport and is disabled in the Play Store build."
