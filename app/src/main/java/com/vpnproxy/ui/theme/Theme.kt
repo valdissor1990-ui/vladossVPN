@@ -2,45 +2,42 @@ package com.vpnproxy.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Тёмная тема — космическая, без Material You.
- * Светлая — минимальная, на случай системного переключения.
+ * Светлая тема главного клиента. Тёмная космическая схема убрана с экрана,
+ * чтобы интерфейс совпадал с референсом.
  */
-private val CosmosDarkScheme = darkColorScheme(
-    primary = GlowBlue,
+private val ClientLightScheme = lightColorScheme(
+    primary = HappSelected,
     onPrimary = Color.White,
-    primaryContainer = CosmosSurfaceVariant,
-    onPrimaryContainer = OnDark,
-    secondary = GlowBlueBright,
+    primaryContainer = Color(0xFFE8ECFF),
+    onPrimaryContainer = HappInk,
+    secondary = HappMuted,
     onSecondary = Color.White,
     tertiary = ConnectedGreen,
     onTertiary = Color.White,
-    background = DeepSpaceBlue,
-    onBackground = OnDark,
-    surface = CosmosSurface,
-    onSurface = OnDark,
-    surfaceVariant = CosmosSurfaceVariant,
-    onSurfaceVariant = OnDarkSecondary,
+    background = HappBg,
+    onBackground = HappInk,
+    surface = Color.White,
+    onSurface = HappInk,
+    surfaceVariant = HappRemarks,
+    onSurfaceVariant = HappMuted,
+    outline = HappLine,
     error = DisconnectRed,
     onError = Color.White
 )
 
-private val FallbackLightScheme = lightColorScheme()
-
 @Composable
 fun VPNProxyTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // dynamicColor сохранён в сигнатуре ради совместимости вызовов; намеренно не используется
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = isSystemInDarkTheme(),
     @Suppress("UNUSED_PARAMETER") dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = if (darkTheme) CosmosDarkScheme else FallbackLightScheme,
+        colorScheme = ClientLightScheme,
         typography = Typography,
         content = content
     )

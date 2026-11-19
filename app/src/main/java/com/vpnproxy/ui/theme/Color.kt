@@ -13,10 +13,19 @@ val GlowBlue = Color(0xFF4DA3FF)
 val GlowBlueBright = Color(0xFF8DC6FF)
 
 // Состояния
-val ConnectedGreen = Color(0xFF3DDC84)
-val DisconnectRed = Color(0xFFFF5A5F)
-val WarningYellow = Color(0xFFFFC107)
+val ConnectedGreen = Color(0xFF1FA971)
+val DisconnectRed = Color(0xFFE23B3B)
+val WarningYellow = Color(0xFFE0A100)
 val ConnectingBlue = Color(0xFF64B5F6)
+val QualityBlack = Color(0xFF161616)
+
+// Светлый главный экран (как в референсе клиента)
+val HappBg = Color(0xFFF3F4F6)
+val HappInk = Color(0xFF2C3344)
+val HappMuted = Color(0xFF8E96A8)
+val HappLine = Color(0xFFE6E8EE)
+val HappRemarks = Color(0xFFF4F6FB)
+val HappSelected = Color(0xFF4C6FFF)
 
 // Текст
 val OnDark = Color(0xFFE6EEFA)

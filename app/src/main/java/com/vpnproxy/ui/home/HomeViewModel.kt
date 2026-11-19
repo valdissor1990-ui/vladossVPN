@@ -84,7 +84,12 @@ class HomeViewModel @Inject constructor(
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
         val lastErrorMessage: String? = null,
         val dualPathEnabled: Boolean = false,
-        val dualPathAppCount: Int = 0
+        val dualPathAppCount: Int = 0,
+        val recentDrops: Int = 0,
+        val flapping: Boolean = false,
+        val notice: String? = null,
+        val selectedServerKey: String = "",
+        val currentSuccessRate: Float = 1f
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
@@ -100,6 +105,9 @@ class HomeViewModel @Inject constructor(
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
     val traffic: StateFlow<TrafficStatsCollector.TrafficSnapshot> = trafficCollector.traffic
 
+    private val _profileServers = MutableStateFlow<List<ScoringEngine.ScoredServer>>(emptyList())
+    val profileServers: StateFlow<List<ScoringEngine.ScoredServer>> = _profileServers.asStateFlow()
+
     private val _googleRtt = MutableStateFlow<Long?>(null)
     val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
     private val _latencyBreakdown = MutableStateFlow<LatencyBreakdown?>(null)
@@ -114,6 +122,8 @@ class HomeViewModel @Inject constructor(
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
     @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
     @Volatile private var permissionFlowInProgress: Boolean = false
+    @Volatile private var userStopRequested: Boolean = false
+    private var stableClearJob: Job? = null
 
     init {
         connectionCoordinator.registerSelectionCancel { cancelSelectionJob("actor RequestDisconnect") }
@@ -124,11 +134,19 @@ class HomeViewModel @Inject constructor(
                     is ConnectionState.Disconnected, is ConnectionState.Disconnecting -> {
                         cancelConnectingWatchdog()
                         cancelSelectionJob("state=$state")
+                        stableClearJob?.cancel()
                         permissionFlowInProgress = false
+                        val prev = _uiState.value.connectionState
+                        val unexpected = !userStopRequested &&
+                            (prev == ConnectionUiState.CONNECTED || prev == ConnectionUiState.UNSTABLE)
+                        userStopRequested = false
+                        val drops = if (unexpected) _uiState.value.recentDrops + 1 else _uiState.value.recentDrops
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.DISCONNECTED,
                             isBusy = false,
-                            sessionStartedAt = null
+                            sessionStartedAt = null,
+                            recentDrops = drops,
+                            flapping = if (unexpected) drops >= 3 else _uiState.value.flapping
                         )
                     }
                     is ConnectionState.Connecting, is ConnectionState.Reconnecting -> {
@@ -169,17 +187,26 @@ class HomeViewModel @Inject constructor(
                             currentServerName = state.serverName.ifBlank { _uiState.value.currentServerName },
                             sessionStartedAt = sessionStart
                         )
+                        armStableClear()
                     }
                     is ConnectionState.Error -> {
                         cancelConnectingWatchdog()
                         cancelSelectionJob("Error")
+                        stableClearJob?.cancel()
                         permissionFlowInProgress = false
                         pendingRankingConfigs = emptyList()
+                        val prev = _uiState.value.connectionState
+                        val unexpected = !userStopRequested &&
+                            (prev == ConnectionUiState.CONNECTED || prev == ConnectionUiState.UNSTABLE)
+                        userStopRequested = false
+                        val drops = if (unexpected) _uiState.value.recentDrops + 1 else _uiState.value.recentDrops
                         _uiState.value = _uiState.value.copy(
                             connectionState = ConnectionUiState.ERROR,
                             isBusy = false,
                             sessionStartedAt = null,
-                            lastErrorMessage = state.message.takeIf { it.isNotBlank() }
+                            lastErrorMessage = state.message.takeIf { it.isNotBlank() },
+                            recentDrops = drops,
+                            flapping = if (unexpected) drops >= 3 else _uiState.value.flapping
                         )
                         logCollector.warn(TAG, tmsg("Actor Error: ${state.message}"))
                     }
@@ -189,7 +216,13 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             autoSwitcher.currentServer.collect { server ->
                 if (server != null) {
-                    _uiState.value = _uiState.value.copy(currentServerName = server.config.name, currentRtt = server.latencyMs)
+                    val rtt = server.latencyMs.takeUnless { it == Long.MAX_VALUE } ?: _uiState.value.currentRtt
+                    _uiState.value = _uiState.value.copy(
+                        currentServerName = server.config.name,
+                        currentRtt = rtt,
+                        currentSuccessRate = server.successRate,
+                        selectedServerKey = server.config.connectionKey()
+                    )
                 }
             }
         }
@@ -235,6 +268,27 @@ class HomeViewModel @Inject constructor(
                 )
             }
         }
+        viewModelScope.launch {
+            combine(
+                subscriptionRepository.allConfigs,
+                jsonConfigRepository.configs,
+                serverScanner.scannedServers
+            ) { subscriptionConfigs, _, scanned ->
+                val merged = jsonConfigRepository.allConfigsIncluding(subscriptionConfigs)
+                val byKey = scanned.associateBy { it.config.connectionKey() }
+                serverScanner.sortForCurrentNetwork(
+                    merged.distinctBy { it.connectionKey() }.map { config ->
+                        byKey[config.connectionKey()] ?: ScoringEngine.ScoredServer(
+                            config = config,
+                            latencyMs = Long.MAX_VALUE,
+                            speedMbps = 0f,
+                            successRate = -1f,
+                            score = 0f
+                        )
+                    }
+                )
+            }.collect { _profileServers.value = it }
+        }
     }
 
     private fun tmsg(message: String): String =
@@ -279,6 +333,16 @@ class HomeViewModel @Inject constructor(
     private fun cancelConnectingWatchdog() {
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
+    }
+
+    private fun armStableClear() {
+        stableClearJob?.cancel()
+        stableClearJob = viewModelScope.launch {
+            delay(60_000)
+            if (_uiState.value.connectionState == ConnectionUiState.CONNECTED) {
+                _uiState.value = _uiState.value.copy(recentDrops = 0, flapping = false)
+            }
+        }
     }
 
     private fun startPinging() {
@@ -559,6 +623,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        userStopRequested = true
         cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
@@ -566,10 +631,18 @@ class HomeViewModel @Inject constructor(
         endConnectFlow()
         connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
         ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
+            sessionStartedAt = null,
+            isScanningServers = false,
+            recentDrops = 0,
+            flapping = false
+        )
     }
 
     fun forceDisconnect() {
+        userStopRequested = true
         cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
@@ -577,7 +650,14 @@ class HomeViewModel @Inject constructor(
         endConnectFlow()
         connectionCoordinator.send(ConnectionEvent.ForceDisconnected("forceDisconnect"))
         ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
-        _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.DISCONNECTED, isBusy = false, sessionStartedAt = null, isScanningServers = false)
+        _uiState.value = _uiState.value.copy(
+            connectionState = ConnectionUiState.DISCONNECTED,
+            isBusy = false,
+            sessionStartedAt = null,
+            isScanningServers = false,
+            recentDrops = 0,
+            flapping = false
+        )
     }
 
     fun switchServer() {
@@ -624,6 +704,12 @@ class HomeViewModel @Inject constructor(
             return
         }
         manuallySelectedServer = server
+        _uiState.value = _uiState.value.copy(
+            currentServerName = server.config.name,
+            currentRtt = server.latencyMs.takeUnless { it == Long.MAX_VALUE } ?: _uiState.value.currentRtt,
+            currentSuccessRate = server.successRate,
+            selectedServerKey = server.config.connectionKey()
+        )
         // On a disconnected app, route manual selection through the same mandatory
         // fresh preflight as the main Connect button. A stale list entry is not proof
         // that the profile is reachable on the current network.
@@ -654,5 +740,93 @@ class HomeViewModel @Inject constructor(
                 logCollector.error(TAG, "onServerSelected failed", e)
             }
         }
+    }
+
+    fun clearNotice() {
+        if (_uiState.value.notice != null) {
+            _uiState.value = _uiState.value.copy(notice = null)
+        }
+    }
+
+    fun checkCurrentConnection() {
+        viewModelScope.launch {
+            val state = _uiState.value.connectionState
+            if (!state.hasTunnel()) {
+                _uiState.value = _uiState.value.copy(notice = "Нет активного подключения")
+                return@launch
+            }
+            _uiState.value = _uiState.value.copy(notice = "Проверяем текущее подключение…")
+            try {
+                val breakdown = withContext(Dispatchers.IO) {
+                    val region = PingTargets.detectRegion(context)
+                    val multi = pingService.pingAll(targets = PingTargets.forRegion(region), region = region)
+                    LatencyCalculator.compute(multi.results)
+                }
+                _latencyBreakdown.value = breakdown
+                val rtt = if (breakdown.isValid) breakdown.compositeScore.toLong() else 0L
+                _googleRtt.value = rtt.takeIf { it > 0L }
+                _uiState.value = _uiState.value.copy(
+                    currentRtt = if (rtt > 0L) rtt else _uiState.value.currentRtt,
+                    notice = if (breakdown.isValid) "Связь есть · ${rtt} мс" else "Проверка не подтвердила связь"
+                )
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(notice = e.message ?: "Не удалось проверить подключение")
+            }
+        }
+    }
+
+    fun pingAllServers() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
+            if (configs.isEmpty()) {
+                _uiState.value = _uiState.value.copy(notice = "Нет серверов для проверки задержки")
+                return@launch
+            }
+            _uiState.value = _uiState.value.copy(notice = "Измеряем задержку серверов…")
+            try {
+                serverScanner.scanAll(configs, force = true)
+                _uiState.value = _uiState.value.copy(notice = "Задержка серверов обновлена")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(notice = e.message ?: "Не удалось измерить задержку")
+            }
+        }
+    }
+
+    fun addSubscription(url: String, name: String) {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            _uiState.value = _uiState.value.copy(notice = "URL должен начинаться с http:// или https://")
+            return
+        }
+        viewModelScope.launch {
+            val host = trimmed.removePrefix("https://").removePrefix("http://").substringBefore("/").ifBlank { "Подписка" }
+            val title = name.trim().ifBlank { host }
+            val ok = subscriptionRepository.addSubscription(trimmed, title, title)
+            if (!ok) {
+                _uiState.value = _uiState.value.copy(notice = "Не удалось сохранить подписку")
+                return@launch
+            }
+            val added = subscriptionRepository.subscriptions.value.lastOrNull()
+            if (added != null) setAutomaticSubscription(added.id)
+            val refreshed = runCatching { subscriptionRepository.refreshAll() }.getOrDefault(0)
+            _uiState.value = _uiState.value.copy(
+                notice = if (refreshed > 0) "Подписка добавлена · профилей: $refreshed" else "Подписка сохранена. Обновите её, если список пуст"
+            )
+        }
+    }
+
+    fun removeSelectedSubscription() {
+        val id = _uiState.value.selectedSubscriptionId
+        if (id == ALL_SUBSCRIPTIONS_ID) {
+            _uiState.value = _uiState.value.copy(notice = "Сначала выберите одну подписку")
+            return
+        }
+        subscriptionRepository.removeSubscription(id)
+        setAutomaticSubscription(ALL_SUBSCRIPTIONS_ID)
+        _uiState.value = _uiState.value.copy(notice = "Подписка удалена")
     }
 }

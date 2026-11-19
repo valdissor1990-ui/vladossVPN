@@ -1,179 +1,160 @@
 package com.vpnproxy.ui.home
 
-import android.util.Log
-import androidx.compose.foundation.Canvas
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vpnproxy.R
-import com.vpnproxy.ui.components.ConnectionStatsCard
+import com.vpnproxy.smartconnect.ScoringEngine
+import com.vpnproxy.subscription.SubscriptionParser
+import com.vpnproxy.subscription.SubscriptionRepository
 import com.vpnproxy.ui.components.GlowPowerButton
-import com.vpnproxy.ui.servers.ServerListContent
-import com.vpnproxy.ui.theme.*
+import com.vpnproxy.ui.theme.HappBg
+import com.vpnproxy.ui.theme.HappInk
+import com.vpnproxy.ui.theme.HappLine
+import com.vpnproxy.ui.theme.HappMuted
+import com.vpnproxy.ui.theme.HappRemarks
+import com.vpnproxy.ui.theme.HappSelected
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
-import kotlin.random.Random
-import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
-    showDebug: Boolean = true,
+    @Suppress("UNUSED_PARAMETER") showDebug: Boolean = true,
     onNavigateToSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val traffic by viewModel.traffic.collectAsStateWithLifecycle()
-    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
-    var subscriptionMenuExpanded by remember { mutableStateOf(false) }
+    val servers by viewModel.profileServers.collectAsStateWithLifecycle()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
-    var showServers by remember { mutableStateOf(false) }
-    var pendingSelection by remember { mutableStateOf<com.vpnproxy.smartconnect.ScoringEngine.ScoredServer?>(null) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var hidden by remember { mutableStateOf(false) }
+    var subscriptionMenu by remember { mutableStateOf(false) }
+    var moreMenu by remember { mutableStateOf(false) }
+    var showAdd by remember { mutableStateOf(false) }
+    var pinnedId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
-
-    val bgBrush = remember {
-        Brush.radialGradient(
-            colors = listOf(DeepSpaceBlue, DeepSpaceVoid),
-            radius = 1600f
-        )
+    LaunchedEffect(uiState.notice) {
+        val text = uiState.notice ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(text)
+        viewModel.clearNotice()
     }
-    val stars = remember {
-        val rnd = Random(42)
-        List(50) {
-            Offset(rnd.nextFloat(), rnd.nextFloat()) to rnd.nextFloat() * 0.4f + 0.15f
+
+    val selected = subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }
+        ?: subscriptions.firstOrNull()
+    val visibleServers = remember(servers, selected, uiState.selectedSubscriptionId) {
+        if (uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID || selected == null) {
+            servers
+        } else {
+            servers.filter { it.config.providerTag == selected.name }
         }
     }
+    val quality = linkQuality(
+        state = uiState.connectionState,
+        rttMs = uiState.currentRtt,
+        flapping = uiState.flapping,
+        successRate = uiState.currentSuccessRate
+    )
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("vladossVPN") },
-                actions = {
-                    IconButton(onClick = { showServers = true }) {
-                        Icon(Icons.Default.List, "Servers")
-                    }
-                    IconButton(onClick = onNavigateToSubscriptions) {
-                        Icon(Icons.Default.Cloud, "Subscriptions")
-                    }
-                    if (showDebug) {
-                        IconButton(onClick = onNavigateToDebug) {
-                            Icon(Icons.Default.BugReport, "Журнал логов")
-                        }
-                    }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, "Settings")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent
-                )
-            )
-        },
-        containerColor = Color.Transparent
-    ) { padding ->
-        Box(
+    Box(modifier = Modifier.fillMaxSize().background(HappBg)) {
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(bgBrush)
+                .statusBarsPadding()
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                stars.forEach { (offset, alpha) ->
-                    drawCircle(
-                        color = Color.White.copy(alpha = alpha),
-                        radius = 1.5f,
-                        center = Offset(offset.x * size.width, offset.y * size.height)
-                    )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onNavigateToSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Настройки", tint = HappInk, modifier = Modifier.size(26.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onNavigateToDebug) {
+                    Icon(Icons.Filled.List, contentDescription = null, tint = HappInk, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Логи", color = HappInk, fontWeight = FontWeight.Medium)
+                }
+                IconButton(onClick = { showAdd = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = "Добавить подписку", tint = HappInk, modifier = Modifier.size(28.dp))
                 }
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 24.dp)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Spacer(Modifier.height(16.dp))
-
-                if (uiState.connectionState == ConnectionUiState.ERROR) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF5C1010).copy(alpha = 0.92f)
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFF8A80)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = uiState.lastErrorMessage?.takeIf { it.isNotBlank() }
-                                        ?: "Не удалось подключиться. Проверьте сеть или смените сервер.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFFFCDD2),
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = {
-                                    Log.i("HomeScreen", "HomeScreen: User pressed Retry button")
-                                    viewModel.retryConnect()
-                                },
-                                enabled = !uiState.isBusy,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFE53935),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("Повторить")
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 GlowPowerButton(
                     state = uiState.connectionState,
-                    // The main button must always remain available to stop an active
-                    // or stuck connection, even while a server scan is in progress.
-                    enabled = true,
+                    quality = quality,
+                    sessionStartedAt = uiState.sessionStartedAt,
                     isScanning = uiState.isScanningServers,
                     onClick = {
                         when (uiState.connectionState) {
@@ -183,237 +164,152 @@ fun HomeScreen(
                             ConnectionUiState.VERIFYING -> viewModel.toggleConnection()
                             ConnectionUiState.DISCONNECTED,
                             ConnectionUiState.ERROR -> {
-                                if (uiState.isScanningServers) {
-                                    Log.i("HomeScreen", "HomeScreen: stop scan from main button")
-                                    viewModel.cancelServerScan()
-                                } else {
-                                    viewModel.toggleConnection()
-                                }
+                                if (uiState.isScanningServers) viewModel.cancelServerScan()
+                                else viewModel.toggleConnection()
                             }
                         }
                     }
                 )
+            }
 
-                val canSwitchServer = uiState.connectionState == ConnectionUiState.CONNECTED ||
-                    uiState.connectionState == ConnectionUiState.UNSTABLE
-                if (canSwitchServer) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.switchServer() },
-                        enabled = !uiState.isBusy,
-                        modifier = Modifier.fillMaxWidth(0.72f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SwapHoriz,
-                            contentDescription = null,
-                            tint = OnDark
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.switch_server),
-                            color = OnDark
-                        )
-                    }
-                }
+            if (!uiState.lastErrorMessage.isNullOrBlank() && uiState.connectionState == ConnectionUiState.ERROR) {
+                Text(
+                    text = uiState.lastErrorMessage.orEmpty(),
+                    color = Color(0xFFE23B3B),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 28.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
-                Spacer(Modifier.height(12.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        Text("Подписка для автоподбора серверов", style = MaterialTheme.typography.labelMedium, color = OnDarkSecondary)
-                        Box {
-                            TextButton(
-                                onClick = { subscriptionMenuExpanded = true },
-                                enabled = !uiState.isBusy,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                val selectedName = when {
-                                    !uiState.isAutomaticMode -> "Ручной выбор"
-                                    uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID -> "Все подписки"
-                                    else -> subscriptions.firstOrNull { it.id == uiState.selectedSubscriptionId }?.name
-                                        ?.let { "Только: $it" }
-                                        ?: "Подписка недоступна"
-                                }
-                                Text(selectedName, color = OnDark, modifier = Modifier.weight(1f))
-                                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = OnDark)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Проверить текущее\nподключение",
+                    color = HappMuted,
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.checkCurrentConnection() }
+                        .padding(vertical = 6.dp)
+                )
+                Text(
+                    text = if (hidden) "Показать все" else "Скрыть все",
+                    color = HappMuted,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .clickable { hidden = !hidden }
+                        .padding(vertical = 6.dp)
+                )
+            }
+
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .navigationBarsPadding(),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                color = Color.White,
+                shadowElevation = 16.dp
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    SubscriptionHeader(
+                        subscription = selected,
+                        allMode = uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID && subscriptions.size != 1,
+                        subscriptions = subscriptions,
+                        menuExpanded = subscriptionMenu,
+                        onMenuExpanded = { subscriptionMenu = it },
+                        onSelectSubscription = { viewModel.setAutomaticSubscription(it) },
+                        pinned = selected != null && pinnedId == selected.id,
+                        onTogglePin = {
+                            pinnedId = if (selected != null && pinnedId == selected.id) null else selected?.id
+                        },
+                        refreshing = uiState.isRefreshingSubscription,
+                        scanning = uiState.isScanningServers,
+                        onRefresh = { viewModel.refreshSubscription() },
+                        onPing = { viewModel.pingAllServers() },
+                        moreExpanded = moreMenu,
+                        onMoreExpanded = { moreMenu = it },
+                        onOpenLogs = onNavigateToDebug,
+                        onOpenSettings = onNavigateToSettings,
+                        onOpenSubscriptions = onNavigateToSubscriptions,
+                        onDelete = { viewModel.removeSelectedSubscription() },
+                        onOpenLink = {
+                            val url = selected?.url ?: return@SubscriptionHeader
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
-                            DropdownMenu(
-                                expanded = subscriptionMenuExpanded,
-                                onDismissRequest = { subscriptionMenuExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Все подписки") },
-                                    onClick = {
-                                        viewModel.setAutomaticSubscription(HomeViewModel.ALL_SUBSCRIPTIONS_ID)
-                                        subscriptionMenuExpanded = false
+                        }
+                    )
+                    if (!hidden) {
+                        SubscriptionMeta(subscription = selected, onOpenLink = {
+                            val url = selected?.url ?: return@SubscriptionMeta
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        })
+                        AutoConnectRow(
+                            enabled = uiState.isAutomaticMode,
+                            busy = uiState.isBusy,
+                            onChange = viewModel::setAutomaticMode
+                        )
+                        HorizontalDivider(color = HappLine)
+                        if (visibleServers.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        if (subscriptions.isEmpty()) "Нет подписок" else "В подписке пока нет серверов",
+                                        color = HappMuted
+                                    )
+                                    TextButton(onClick = { if (subscriptions.isEmpty()) showAdd = true else viewModel.refreshSubscription() }) {
+                                        Text(if (subscriptions.isEmpty()) "Добавить" else "Обновить")
                                     }
-                                )
-                                subscriptions.forEach { subscription ->
-                                    DropdownMenuItem(
-                                        text = { Text(subscription.name) },
-                                        onClick = {
-                                            viewModel.setAutomaticSubscription(subscription.id)
-                                            subscriptionMenuExpanded = false
-                                        }
+                                }
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(bottom = 18.dp)
+                            ) {
+                                items(visibleServers, key = { it.config.connectionKey() }) { server ->
+                                    val active = server.config.connectionKey() == uiState.selectedServerKey ||
+                                        (uiState.selectedServerKey.isBlank() &&
+                                            uiState.connectionState.hasTunnel() &&
+                                            server.config.name == uiState.currentServerName)
+                                    ServerRow(
+                                        server = server,
+                                        selected = active,
+                                        onClick = { viewModel.onServerSelected(server) }
                                     )
                                 }
                             }
                         }
-                    }
-                }
-
-                if (uiState.isScanningServers) {
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Text(
-                            text = "Поиск доступных серверов...",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-
-                if (uiState.dualPathEnabled && uiState.dualPathAppCount > 0) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = "Зарубежный обход: ${uiState.dualPathAppCount} прилож.",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = OnDarkSecondary
-                    )
-                }
-
-                Spacer(Modifier.height(18.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CosmosSurface.copy(alpha = 0.9f))
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (uiState.isAutomaticMode) "Автоматический режим" else "Ручной выбор сервера",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = OnDark
-                            )
-                            Text(
-                                text = if (uiState.isAutomaticMode) "Приложение выберет сервер само" else "Выберите сервер в списке ниже",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = OnDarkSecondary
-                            )
-                        }
-                        Switch(
-                            checked = uiState.isAutomaticMode,
-                            onCheckedChange = viewModel::setAutomaticMode,
-                            enabled = !uiState.isBusy
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                ConnectionStatsCard(
-                    state = uiState.connectionState,
-                    sessionStartedAt = uiState.sessionStartedAt,
-                    serverName = uiState.currentServerName,
-                    serverRtt = uiState.currentRtt,
-                    traffic = traffic
-                )
-
-                Spacer(Modifier.height(24.dp))
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showServers = true },
-                    colors = CardDefaults.cardColors(
-                        containerColor = CosmosSurface.copy(alpha = 0.9f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("🌐", fontSize = 40.sp)
-                        Spacer(Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = uiState.currentServerName.ifBlank { "Не выбран" },
-                                style = MaterialTheme.typography.titleMedium,
-                                color = OnDark
-                            )
-                            Text(
-                                text = "Нажмите, чтобы сменить",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = OnDarkSecondary
-                            )
+                    } else {
+                        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.TopCenter) {
+                            Text("Список серверов скрыт", color = HappMuted, fontSize = 14.sp)
                         }
                     }
                 }
-
-                Spacer(Modifier.height(24.dp))
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp)
+        )
     }
 
-    LaunchedEffect(pendingSelection) {
-        pendingSelection?.let { server ->
-            delay(250)
-            viewModel.onServerSelected(server)
-            pendingSelection = null
-        }
-    }
-
-    if (showServers) {
-        ModalBottomSheet(
-            onDismissRequest = { showServers = false },
-            sheetState = sheetState,
-            containerColor = CosmosSurface,
-            contentColor = OnDark
-        ) {
-            ServerListContent(
-                onServerSelected = { server ->
-                    pendingSelection = server
-                    showServers = false
-                }
-            )
-        }
-    }
-
-    if (uiState.isScanningServers && uiState.connectionState == ConnectionUiState.CONNECTING) {
-        AlertDialog(
-            onDismissRequest = {},
-            containerColor = Color.White,
-            titleContentColor = Color(0xFF172033),
-            textContentColor = Color(0xFF334155),
-            title = { Text("Поиск доступных серверов", color = Color(0xFF172033)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(color = Color(0xFF2563EB), strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
-                        Text("Сканируем серверы и измеряем задержку", color = Color(0xFF334155))
-                    }
-                    Text(
-                        text = "Найдено доступных: ${uiState.scannedAvailableServers} из ${uiState.scanTotalServers}. Для подключения ищем минимум 4 надёжных сервера.",
-                        color = Color(0xFF334155)
-                    )
-                    Text("Серверы без подтверждённого отклика не будут выбраны автоматически.", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = {}
+    if (showAdd) {
+        AddSubscriptionDialog(
+            onDismiss = { showAdd = false },
+            onConfirm = { url, name ->
+                viewModel.addSubscription(url, name)
+                showAdd = false
+            }
         )
     }
 
@@ -423,4 +319,302 @@ fun HomeScreen(
         onInstall = { updateViewModel.install() },
         onDismiss = { updateViewModel.dismiss() }
     )
+}
+
+@Composable
+private fun SubscriptionHeader(
+    subscription: SubscriptionRepository.ProviderSubscription?,
+    allMode: Boolean,
+    subscriptions: List<SubscriptionRepository.ProviderSubscription>,
+    menuExpanded: Boolean,
+    onMenuExpanded: (Boolean) -> Unit,
+    onSelectSubscription: (String) -> Unit,
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
+    refreshing: Boolean,
+    scanning: Boolean,
+    onRefresh: () -> Unit,
+    onPing: () -> Unit,
+    moreExpanded: Boolean,
+    onMoreExpanded: (Boolean) -> Unit,
+    onOpenLogs: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenSubscriptions: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenLink: () -> Unit
+) {
+    val title = when {
+        subscription == null -> "Нет подписки"
+        allMode -> "Все подписки"
+        else -> hostOf(subscription.url).ifBlank { subscription.name }
+    }
+    val updated = subscription?.lastUpdated?.takeIf { it > 0L }?.let { formatDateTime(it) } ?: "не обновлялась"
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box {
+                IconButton(onClick = { onMenuExpanded(true) }) {
+                    Icon(Icons.Filled.ExpandMore, contentDescription = "Список подписок", tint = HappInk)
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { onMenuExpanded(false) }) {
+                    DropdownMenuItem(
+                        text = { Text("Все подписки") },
+                        onClick = {
+                            onSelectSubscription(HomeViewModel.ALL_SUBSCRIPTIONS_ID)
+                            onMenuExpanded(false)
+                        }
+                    )
+                    subscriptions.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.name.ifBlank { hostOf(item.url) }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            onClick = {
+                                onSelectSubscription(item.id)
+                                onMenuExpanded(false)
+                            }
+                        )
+                    }
+                }
+            }
+            Column(Modifier.weight(1f).clickable { onMenuExpanded(true) }) {
+                Text(title, color = HappInk, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("$updated | Автообновление", color = HappMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = onTogglePin, enabled = subscription != null) {
+                Icon(
+                    if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = "Закрепить",
+                    tint = if (pinned) Color(0xFF7C6BF2) else HappMuted
+                )
+            }
+            IconButton(onClick = onRefresh, enabled = !refreshing) {
+                if (refreshing) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = HappSelected)
+                } else {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Обновить подписку", tint = HappMuted)
+                }
+            }
+            IconButton(onClick = onPing, enabled = !scanning) {
+                if (scanning) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = HappSelected)
+                } else {
+                    Icon(Icons.Filled.Speed, contentDescription = "Проверить задержку", tint = HappMuted)
+                }
+            }
+            Box {
+                IconButton(onClick = { onMoreExpanded(true) }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Ещё", tint = HappMuted)
+                }
+                DropdownMenu(expanded = moreExpanded, onDismissRequest = { onMoreExpanded(false) }) {
+                    DropdownMenuItem(text = { Text("Журнал логов") }, onClick = { onMoreExpanded(false); onOpenLogs() })
+                    DropdownMenuItem(text = { Text("Настройки") }, onClick = { onMoreExpanded(false); onOpenSettings() })
+                    DropdownMenuItem(text = { Text("Все подписки") }, onClick = { onMoreExpanded(false); onOpenSubscriptions() })
+                    DropdownMenuItem(text = { Text("Открыть ссылку") }, onClick = { onMoreExpanded(false); onOpenLink() })
+                    DropdownMenuItem(text = { Text("Удалить подписку") }, onClick = { onMoreExpanded(false); onDelete() })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscriptionMeta(
+    subscription: SubscriptionRepository.ProviderSubscription?,
+    onOpenLink: () -> Unit
+) {
+    val used = subscription?.trafficUsed ?: 0L
+    val total = subscription?.trafficTotal ?: 0L
+    val expires = subscription?.expiresAt ?: 0L
+    val days = if (expires > System.currentTimeMillis()) {
+        TimeUnit.MILLISECONDS.toDays(expires - System.currentTimeMillis())
+    } else null
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(HappRemarks)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Info, contentDescription = null, tint = HappSelected, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = formatTraffic(used, total),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                color = HappInk,
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = if (expires > 0L) "Истекает: ${formatDate(expires)}" else "Истекает: —",
+                color = HappInk,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            IconButton(onClick = onOpenLink, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.Send, contentDescription = "Открыть подписку", tint = HappSelected)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        val note = subscription?.tag?.takeIf { it.isNotBlank() && it != subscription.name }
+        Text(
+            text = buildString {
+                if (!note.isNullOrBlank()) append(note).append('\n')
+                if (days != null) append("Осталось $days дн.") else append("Срок подписки не указан")
+            },
+            color = HappInk.copy(alpha = 0.8f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+    }
+}
+
+@Composable
+private fun AutoConnectRow(
+    enabled: Boolean,
+    busy: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Автоподключение", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text(
+                if (enabled) "Само выбирает самый стабильный сервер" else "Подключение только к выбранному серверу",
+                color = HappMuted,
+                fontSize = 12.sp
+            )
+        }
+        Switch(checked = enabled, onCheckedChange = onChange, enabled = !busy)
+    }
+}
+
+@Composable
+private fun ServerRow(
+    server: ScoringEngine.ScoredServer,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (selected) Color(0xFFF7F8FF) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(start = 0.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .width(4.dp)
+                .height(42.dp)
+                .background(if (selected) HappSelected else Color.Transparent)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(flagFor(server.config), fontSize = 22.sp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                server.config.name.ifBlank { server.config.address },
+                color = HappInk,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(protocolLine(server.config), color = HappMuted, fontSize = 12.sp, maxLines = 1)
+        }
+        Text(formatLatency(server.latencyMs), color = HappMuted, fontSize = 14.sp)
+    }
+    HorizontalDivider(color = HappLine, modifier = Modifier.padding(start = 16.dp))
+}
+
+@Composable
+private fun AddSubscriptionDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (url: String, name: String) -> Unit
+) {
+    var url by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Добавить подписку") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("URL подписки") },
+                    singleLine = false,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(url.trim(), name.trim()) }, enabled = url.isNotBlank()) { Text("Добавить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
+private fun hostOf(url: String): String =
+    url.removePrefix("https://").removePrefix("http://").substringBefore("/").substringBefore("?")
+
+private fun formatDate(epochMs: Long): String =
+    SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(epochMs))
+
+private fun formatDateTime(epochMs: Long): String =
+    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(epochMs))
+
+private fun formatTraffic(used: Long, total: Long): String {
+    fun gb(bytes: Long): String {
+        val value = bytes / 1_000_000_000.0
+        return String.format(Locale("ru"), "%.1f", value).replace('.', ',')
+    }
+    val totalLabel = if (total <= 0L) "∞" else "${gb(total)}GB"
+    return "${gb(used)}GB/$totalLabel"
+}
+
+private fun formatLatency(ms: Long): String =
+    if (ms <= 0L || ms == Long.MAX_VALUE) "—" else "${ms}мс"
+
+private fun protocolLine(config: SubscriptionParser.ParsedConfig): String {
+    val head = when (config.transport.lowercase(Locale.ROOT)) {
+        "hysteria2", "hy2" -> "HY2"
+        "tuic" -> "TUIC"
+        "shadowsocks", "ss" -> "SS"
+        "trojan" -> "TROJAN"
+        "vmess" -> "VMESS"
+        "socks" -> "SOCKS"
+        else -> "VLESS"
+    }
+    val transport = config.transport.uppercase(Locale.ROOT).ifBlank { "TCP" }
+    val security = config.security.uppercase(Locale.ROOT).ifBlank { "NONE" }
+    return "$head / $transport / $security"
+}
+
+private fun flagFor(config: SubscriptionParser.ParsedConfig): String {
+    val blob = "${config.name} ${config.address} ${config.sni.orEmpty()}".lowercase(Locale.ROOT)
+    return when {
+        listOf("росси", "moscow", "моск", "игров", "банк", ".ru", "spb", "петер").any { blob.contains(it) } -> "🇷🇺"
+        listOf("нидер", "amsterdam", "амстер", "антиглуш", "netherlands").any { blob.contains(it) } -> "🇳🇱"
+        listOf("герман", "frankfurt", "berlin", "germany").any { blob.contains(it) } -> "🇩🇪"
+        listOf("финлянд", "helsinki", "finland").any { blob.contains(it) } -> "🇫🇮"
+        listOf("сша", "united states", "new york", "los angeles", "ashburn").any { blob.contains(it) } -> "🇺🇸"
+        listOf("евро", "europe", "авто", "wi-fi", "wifi").any { blob.contains(it) } -> "🇪🇺"
+        else -> "🌐"
+    }
 }
