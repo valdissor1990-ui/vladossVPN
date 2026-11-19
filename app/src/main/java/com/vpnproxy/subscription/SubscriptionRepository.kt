@@ -217,6 +217,24 @@ private val _deviceMetadataConsent = MutableStateFlow(
         }
     }
 
+    /** Remove the encrypted response body and ETag associated with a retired provider URL. */
+    private fun removeSubscriptionBodyCache(sourceUrl: String) {
+        runCatching {
+            val cacheKey = MessageDigest.getInstance("SHA-256")
+                .digest(sourceUrl.toByteArray(Charsets.UTF_8))
+                .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+            val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
+            encryptedPrefs.edit()
+                .remove("subscription_body_$cacheKey")
+                .remove("subscription_etag_$cacheKey")
+                .remove("subscription_body_$legacyCacheKey")
+                .remove("subscription_etag_$legacyCacheKey")
+                .apply()
+        }.onFailure {
+            logCollector.warn(TAG, "Could not purge retired subscription response cache: ${it.javaClass.simpleName}")
+        }
+    }
+
     /** Remove all bundled feeds from existing installations while preserving user-added sources. */
     private fun removeBundledSubscriptions(): Set<String> {
         val current = _subscriptions.value
@@ -227,6 +245,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
                 sub.url in REMOVED_BUNDLED_URLS
         }
         val retained = current - removed.toSet()
+        // Remove both current SHA-256 and legacy URL-hash response caches. Also
+        // purge known retired URLs even if their subscription record was deleted
+        // by an earlier app version.
+        removed.forEach { removeSubscriptionBodyCache(it.url) }
+        REMOVED_BUNDLED_URLS.forEach(::removeSubscriptionBodyCache)
         if (retained != current) {
             _subscriptions.value = retained
             saveToPrefs()
