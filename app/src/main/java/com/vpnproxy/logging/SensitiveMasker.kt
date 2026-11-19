@@ -1,7 +1,7 @@
 package com.vpnproxy.logging
 
 /**
- * Маскировка чувствительных данных: UUID, Reality-ключи, URL подписок, токены.
+ * Маскировка чувствительных данных: UUID, Reality-ключи, URI/URL, endpoint-домены, IP-адреса и токены.
  *
  * ⚠️ Java/Kotlin Regex НЕ поддерживает variable-length lookbehind.
  * Поэтому вместо `(?<=prefix)value` используем capture-group + replace с лямбдой:
@@ -15,8 +15,8 @@ object SensitiveMasker {
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     )
 
-    /** https?://... — обрезаем до host, маскируем query/path. */
-    private val URL_REGEX = Regex("https?://[^\\s\"']+")
+    /** URI/URL любой схемы — скрываем host, path, query и credentials. */
+    private val URL_REGEX = Regex("""[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+""")
 
     /** Reality public key in URI/query or JSON-like log output. */
     private val REALITY_KEY_REGEX = Regex(
