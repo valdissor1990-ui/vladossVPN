@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.List
@@ -99,6 +101,19 @@ fun HomeScreen(
     var subscriptionMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
+    val uiPreferences = remember(context) {
+        context.getSharedPreferences("vladoss_ui_preferences", android.content.Context.MODE_PRIVATE)
+    }
+    var pinnedId by remember(uiPreferences) {
+        mutableStateOf(uiPreferences.getString("pinned_subscription_id", null))
+    }
+
+    LaunchedEffect(subscriptions, pinnedId) {
+        if (pinnedId != null && subscriptions.none { it.id == pinnedId }) {
+            pinnedId = null
+            uiPreferences.edit().remove("pinned_subscription_id").apply()
+        }
+    }
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
     LaunchedEffect(uiState.notice) {
@@ -217,10 +232,19 @@ fun HomeScreen(
                     SubscriptionHeader(
                         subscription = selected,
                         allMode = uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID && subscriptions.size != 1,
-                        subscriptions = subscriptions,
+                        subscriptions = subscriptions.sortedByDescending { it.id == pinnedId },
                         menuExpanded = subscriptionMenu,
                         onMenuExpanded = { subscriptionMenu = it },
                         onSelectSubscription = { viewModel.setAutomaticSubscription(it) },
+                        pinned = selected != null && pinnedId == selected.id,
+                        onTogglePin = {
+                            val next = if (selected != null && pinnedId == selected.id) null else selected?.id
+                            pinnedId = next
+                            uiPreferences.edit().apply {
+                                if (next == null) remove("pinned_subscription_id")
+                                else putString("pinned_subscription_id", next)
+                            }.apply()
+                        },
                         refreshing = uiState.isRefreshingSubscription,
                         scanning = uiState.isScanningServers,
                         onRefresh = { viewModel.refreshSubscription() },
@@ -322,6 +346,8 @@ private fun SubscriptionHeader(
     menuExpanded: Boolean,
     onMenuExpanded: (Boolean) -> Unit,
     onSelectSubscription: (String) -> Unit,
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
     refreshing: Boolean,
     scanning: Boolean,
     onRefresh: () -> Unit,
@@ -368,6 +394,13 @@ private fun SubscriptionHeader(
             Column(Modifier.weight(1f).clickable { onMenuExpanded(true) }) {
                 Text(title, color = HappInk, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("$updated | Автообновление", color = HappMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = onTogglePin, enabled = subscription != null) {
+                Icon(
+                    if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = if (pinned) "Открепить подписку" else "Закрепить подписку",
+                    tint = if (pinned) Color(0xFF7C6BF2) else HappMuted
+                )
             }
             IconButton(onClick = onRefresh, enabled = !refreshing) {
                 if (refreshing) {
