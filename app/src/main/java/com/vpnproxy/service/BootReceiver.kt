@@ -134,9 +134,16 @@ class BootReceiver : BroadcastReceiver() {
                 config.address.equals(saved.address, ignoreCase = true) && config.port == saved.port
             }
             if (saved.uuid.isNotBlank()) {
-                endpointMatches.firstOrNull { it.uuid == saved.uuid }
+                endpointMatches.singleOrNull { it.uuid == saved.uuid }
             } else {
-                endpointMatches.firstOrNull { it.name == saved.name } ?: endpointMatches.singleOrNull()
+                // A legacy record without UUID must not select arbitrarily among profiles
+                // that share both endpoint and display name.
+                val nameMatches = endpointMatches.filter { it.name == saved.name }
+                when {
+                    nameMatches.size == 1 -> nameMatches.single()
+                    nameMatches.isEmpty() -> endpointMatches.singleOrNull()
+                    else -> null
+                }
             }
         }
 
