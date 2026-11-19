@@ -43,7 +43,7 @@ internal object ExtraUriParsers {
     /** Parse an authority without splitting on ':' so bracketed IPv6 remains intact. */
     private fun parseHostPort(authority: String): Pair<String, Int>? = runCatching {
         val parsed = URI("ss://$authority")
-        val host = parsed.host?.takeIf { it.isNotBlank() } ?: return null
+        val host = parsed.host?.removePrefix("[")?.removeSuffix("]")?.takeIf { it.isNotBlank() } ?: return null
         val port = parsed.port
         if (port !in 1..65535) return null
         host to port
