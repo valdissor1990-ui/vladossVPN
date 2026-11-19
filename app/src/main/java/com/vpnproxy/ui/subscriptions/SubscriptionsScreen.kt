@@ -158,8 +158,22 @@ fun SubscriptionsScreen(
                             report.providers.forEach { provider ->
                                 HorizontalDivider()
                                 Text(provider.providerName, style = MaterialTheme.typography.titleSmall)
+                                val sourceLabel = when (provider.source) {
+                                    "network" -> "загружено из сети"
+                                    "encrypted_body" -> "восстановлено из защищённого кэша"
+                                    "aggregate_cache" -> "восстановлено из локального кэша"
+                                    else -> "не обновлено"
+                                }
+                                val formatLabel = when (provider.format) {
+                                    "uri" -> "URI-ссылки"
+                                    "json" -> "JSON"
+                                    "clash_yaml" -> "Clash YAML"
+                                    "aggregate_cache" -> "локальный кэш"
+                                    "empty" -> "пустой ответ"
+                                    else -> "не определён"
+                                }
                                 Text(
-                                    "Источник: ${provider.source}; формат: ${provider.format}",
+                                    "Источник: $sourceLabel; формат: $formatLabel",
                                     style = MaterialTheme.typography.labelSmall
                                 )
                                 Text(
@@ -174,10 +188,22 @@ fun SubscriptionsScreen(
                                     )
                                 }
                                 provider.rejectionReasons.forEach { (reason, count) ->
-                                    Text("Причина: $reason — $count", style = MaterialTheme.typography.labelSmall)
+                                    val reasonLabel = when (reason) {
+                                        "invalid_or_unsupported_uri" -> "Некорректные или неподдерживаемые URI"
+                                        "invalid_or_unsupported_json_entry" -> "Некорректные или неподдерживаемые JSON-записи"
+                                        "invalid_or_unsupported_clash_proxy" -> "Некорректные или неподдерживаемые Clash-профили"
+                                        else -> "Формат не распознан или повреждён"
+                                    }
+                                    Text("$reasonLabel: $count", style = MaterialTheme.typography.labelSmall)
                                 }
-                                provider.failureCode?.let {
-                                    Text("Статус источника: $it", color = WarningYellow, style = MaterialTheme.typography.labelSmall)
+                                provider.failureCode?.let { code ->
+                                    val failureLabel = when (code) {
+                                        "SocketTimeoutException" -> "Истёк срок ожидания ответа"
+                                        "ConnectException" -> "Не удалось подключиться к источнику"
+                                        "IOException" -> "Ошибка загрузки источника"
+                                        else -> "Не удалось обновить источник"
+                                    }
+                                    Text(failureLabel, color = WarningYellow, style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
