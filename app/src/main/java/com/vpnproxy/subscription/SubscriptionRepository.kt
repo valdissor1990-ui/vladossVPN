@@ -358,7 +358,7 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
+    private suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
         withContext(Dispatchers.IO) {
             val sources = listOf(sub.url)
             var lastFailure: Exception? = null
