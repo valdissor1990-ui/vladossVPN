@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.SystemClock
 import com.vpnproxy.logging.LogCollector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -254,8 +255,10 @@ class NetworkAwareReconnector(
                     logCollector.info(TAG, "Preferred physical network changed after ${DEBOUNCE_MS}ms: $event")
                     try {
                         onReconnectRequested()
-                    } catch (t: Throwable) {
-                        logCollector.error(TAG, "Reconnect request failed", t)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        logCollector.error(TAG, "Reconnect request failed", error)
                     } finally {
                         onReconnectStateChanged(false)
                     }
