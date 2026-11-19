@@ -178,10 +178,14 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
     init {
         loadFromPrefs()
-        removeBundledSubscriptions()
+        val removedBundledNames = removeBundledSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
-            val retainedCached = cached.filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+            // CachedConfig stores providerTag (the old subscription name), not its URL/ID.
+            // Include names captured from the removed subscription records so orphaned
+            // bundled profiles cannot reappear after their source has been deleted.
+            val removedProviderTags = REMOVED_BUNDLED_NAMES + removedBundledNames
+            val retainedCached = cached.filterNot { it.providerTag in removedProviderTags }
             _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -213,18 +217,20 @@ private val _deviceMetadataConsent = MutableStateFlow(
     }
 
     /** Remove all bundled feeds from existing installations while preserving user-added sources. */
-    private fun removeBundledSubscriptions() {
+    private fun removeBundledSubscriptions(): Set<String> {
         val current = _subscriptions.value
-        val retained = current.filterNot { sub ->
+        val removed = current.filter { sub ->
             sub.id in REMOVED_BUNDLED_IDS ||
                 sub.url in REMOVED_BUNDLED_URLS ||
                 sub.name in REMOVED_BUNDLED_NAMES
         }
+        val retained = current - removed.toSet()
         if (retained != current) {
             _subscriptions.value = retained
             saveToPrefs()
-            logCollector.info(TAG, "Removed bundled subscriptions: removed=${current.size - retained.size}; userSources=${retained.size}")
+            logCollector.info(TAG, "Removed bundled subscriptions: removed=${removed.size}; userSources=${retained.size}")
         }
+        return removed.map { it.name }.toSet()
     }
 
     suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
