@@ -52,6 +52,7 @@ data class ProbeMeasurementEvidence(
             completedAtEpochMs >= startedAtEpochMs &&
             maxAgeMs >= 0L &&
             networkStable &&
+            startNetwork.sameNetwork(endNetwork) &&
             endNetwork.sameNetwork(currentNetwork) &&
             ageMs in 0..maxAgeMs &&
             attemptedSamples > 0 &&
