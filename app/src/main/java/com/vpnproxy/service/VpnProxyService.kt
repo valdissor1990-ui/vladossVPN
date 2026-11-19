@@ -497,9 +497,14 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
                 logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
                 // Dual-path: selected apps -> foreign (non-RU) outbound when available
-      val dualPackages = runCatching {
+      val dualPackages = try {
           dualPathStore.installedPackagesForRules()
-      }.getOrDefault(emptyList())
+      } catch (cancelled: kotlinx.coroutines.CancellationException) {
+          throw cancelled
+      } catch (failure: Exception) {
+          logCollector.warn(TAG, "Could not load dual-path app rules; continuing without foreign routing: ${failure.message}")
+          emptyList()
+      }
       val foreignParsed = if (dualPackages.isNotEmpty()) {
           val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
           val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
