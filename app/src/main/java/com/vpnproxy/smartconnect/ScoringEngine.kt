@@ -180,7 +180,7 @@ class ScoringEngine @Inject constructor(
         healthChecker: HealthChecker
     ): List<ScoredServer> {
         val latencyResults = healthChecker.testLatency(configs)
-        val currentNetwork = networkBucketProvider?.snapshot()
+        val currentNetwork = healthChecker.currentNetworkSnapshot()
         val top5 = latencyResults
             .filter { result ->
                 result.success && (
