@@ -230,6 +230,7 @@ class SubscriptionRepository @Inject constructor(
     suspend fun refreshAll(): Int = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
+            _lastImportReport.value = null
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
