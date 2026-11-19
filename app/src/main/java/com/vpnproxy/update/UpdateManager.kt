@@ -85,12 +85,13 @@ class UpdateManager @Inject constructor(
                 return@withLock
             }
             // Keep Ready if we already have a download at least as new as remote later.
-            val previousReady = _state.value as? State.Ready
+            val previousState = _state.value
+            val previousReady = previousState as? State.Ready
             _state.value = State.Checking
             val result = try {
                 checker.check()
             } catch (cancelled: CancellationException) {
-                _state.value = previousReady ?: State.Idle
+                _state.value = previousState
                 if (previousReady == null) restoreReadyFromDisk()
                 throw cancelled
             }
