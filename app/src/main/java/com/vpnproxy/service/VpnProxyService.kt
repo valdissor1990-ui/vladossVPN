@@ -665,7 +665,13 @@ class VpnProxyService : VpnService() {
             var outboundSuccessLogged = false
             logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
             while (isActive && connectionCoordinator.state.value is ConnectionState.Connected) {
-                val probe = runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
+                val probe = try {
+                    Result.success(DiagnosticProbe.runOnce(serverName, logCollector))
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
+                    Result.failure(failure)
+                }
                 probe.onSuccess { result ->
                     if (result.success && !outboundSuccessLogged) {
                         val config = autoSwitcher.currentServer.value?.config
