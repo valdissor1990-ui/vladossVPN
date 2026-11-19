@@ -568,24 +568,24 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
-                        candidateCount++
-                        val parsed = extractFromJsonObject(item, providerTag)
-                        if (parsed != null) configs.add(parsed)
+                        val parsed = extractAllFromJsonObject(item, providerTag)
+                        candidateCount += parsed.size.coerceAtLeast(1)
+                        if (parsed.isNotEmpty()) configs.addAll(parsed)
                         else rejectionCounts?.increment(classifyJsonRejection(item))
                     }
                 }
                 is JsonObject -> {
                     element["outbounds"]?.jsonArray?.forEach { item ->
                         if (item is JsonObject) {
-                            candidateCount++
-                            val parsed = extractFromJsonObject(item, providerTag)
-                            if (parsed != null) configs.add(parsed)
+                            val parsed = extractAllFromJsonObject(item, providerTag)
+                            candidateCount += parsed.size.coerceAtLeast(1)
+                            if (parsed.isNotEmpty()) configs.addAll(parsed)
                             else rejectionCounts?.increment(classifyJsonRejection(item))
                         }
                     } ?: run {
-                        candidateCount = 1
-                        val parsed = extractFromJsonObject(element, providerTag)
-                        if (parsed != null) configs.add(parsed)
+                        val parsed = extractAllFromJsonObject(element, providerTag)
+                        candidateCount = parsed.size.coerceAtLeast(1)
+                        if (parsed.isNotEmpty()) configs.addAll(parsed)
                         else rejectionCounts?.increment(classifyJsonRejection(element))
                     }
                 }
@@ -606,6 +606,37 @@ class SubscriptionParser @Inject constructor(
             logCollector.warn(TAG, "JSON parse failed: ${e.javaClass.simpleName}")
             emptyList()
         }
+    }
+
+    /**
+     * Legacy Xray VLESS outbounds may contain multiple vnext servers and multiple users
+     * per server. Each server/account pair is an independent importable profile; parsing
+     * only firstOrNull() silently discarded every remaining candidate.
+     */
+    private fun extractAllFromJsonObject(obj: JsonObject, providerTag: String): List<ParsedConfig> {
+        val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull
+        if (!protocol.equals("vless", ignoreCase = true)) {
+            return listOfNotNull(extractFromJsonObject(obj, providerTag))
+        }
+
+        val settings = obj["settings"] as? JsonObject ?: return emptyList()
+        val vnext = settings["vnext"] as? JsonArray ?: return emptyList()
+        return vnext.flatMap { rawNode ->
+            val node = rawNode as? JsonObject ?: return@flatMap emptyList()
+            val users = node["users"] as? JsonArray ?: return@flatMap emptyList()
+            users.mapNotNull { user ->
+                val singleNode = JsonObject(node.toMutableMap().apply {
+                    put("users", JsonArray(listOf(user)))
+                })
+                val singleSettings = JsonObject(settings.toMutableMap().apply {
+                    put("vnext", JsonArray(listOf(singleNode)))
+                })
+                val singleOutbound = JsonObject(obj.toMutableMap().apply {
+                    put("settings", singleSettings)
+                })
+                extractFromJsonObject(singleOutbound, providerTag)
+            }
+        }.distinctBy { it.connectionKey() }
     }
 
     private fun extractFromJsonObject(obj: JsonObject, providerTag: String): ParsedConfig? {
