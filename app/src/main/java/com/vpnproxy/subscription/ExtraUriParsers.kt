@@ -40,6 +40,15 @@ internal object ExtraUriParsers {
             URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8.name())
         }.getOrDefault(value)
 
+    /** Parse an authority without splitting on ':' so bracketed IPv6 remains intact. */
+    private fun parseHostPort(authority: String): Pair<String, Int>? = runCatching {
+        val parsed = URI("ss://$authority")
+        val host = parsed.host?.takeIf { it.isNotBlank() } ?: return null
+        val port = parsed.port
+        if (port !in 1..65535) return null
+        host to port
+    }.getOrNull()
+
     fun parseShadowsocks(
         uri: String,
         providerTag: String,
@@ -76,10 +85,9 @@ internal object ExtraUriParsers {
                 method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = body.substring(atIdx + 1)
-                val hp = hostPort.split(':')
-                if (hp.size < 2) return null
-                host = hp[0]
-                port = hp[1].toIntOrNull() ?: return null
+                val endpoint = parseHostPort(hostPort) ?: return null
+                host = endpoint.first
+                port = endpoint.second
             } else {
                 val decoded = String(
                     Base64.decode(body, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP)
@@ -92,10 +100,9 @@ internal object ExtraUriParsers {
                 method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = decoded.substring(at + 1)
-                val hp = hostPort.split(':')
-                if (hp.size < 2) return null
-                host = hp[0]
-                port = hp[1].toIntOrNull() ?: return null
+                val endpoint = parseHostPort(hostPort) ?: return null
+                host = endpoint.first
+                port = endpoint.second
             }
             if (method !in supportedShadowsocksMethods) {
                 logCollector.warn(
