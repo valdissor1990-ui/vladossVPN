@@ -3,7 +3,9 @@ package com.vpnproxy.subscription
 import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
+import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 import java.net.URI
 import java.net.URLDecoder
 import javax.inject.Inject
@@ -237,7 +239,7 @@ class SubscriptionParser @Inject constructor(
                 else -> 0
             }
             "clash_yaml" -> {
-                val root = Yaml().load<Map<String, Any>>(content)
+                val root = Yaml(SafeConstructor(LoaderOptions())).load<Map<String, Any>>(content)
                 (root?.get("proxies") as? List<*>)?.size
             }
             else -> null
@@ -743,7 +745,7 @@ class SubscriptionParser @Inject constructor(
         rejectionCounts: MutableMap<String, Int>? = null
     ): List<ParsedConfig> {
         return try {
-            val yaml = Yaml()
+            val yaml = Yaml(SafeConstructor(LoaderOptions()))
             val root = yaml.load<Map<String, Any>>(yamlText) ?: return emptyList()
             val proxies = root["proxies"] as? List<Map<String, Any>> ?: return emptyList()
             buildList {
