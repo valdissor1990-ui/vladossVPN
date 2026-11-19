@@ -519,7 +519,11 @@ class HomeViewModel @Inject constructor(
         connect()
     }
 
-    private fun connect() {
+    private fun connect(fromManualReconnect: Boolean = false) {
+        if (!fromManualReconnect) {
+            manualReconnectJob?.cancel()
+            manualReconnectJob = null
+        }
         runCatching { BatteryPolicy.requestIgnoreBatteryOptimizations(context) }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastConnectClickMs < 900L) {
@@ -844,7 +848,7 @@ class HomeViewModel @Inject constructor(
                     // connect() will request VPN permission if needed and run the same
                     // fresh subscription/preflight pipeline as the main Connect button.
                     lastConnectClickMs = 0L
-                    connect()
+                    connect(fromManualReconnect = true)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
