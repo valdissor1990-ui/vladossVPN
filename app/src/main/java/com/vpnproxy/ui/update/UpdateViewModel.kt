@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -72,6 +73,8 @@ class UpdateViewModel @Inject constructor(
                 // UpdateAvailable / Downloading / Ready → UpdateDialog
                 else -> Unit
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             _feedback.emit(
                 Feedback.Error("Не удалось проверить обновления. Проверьте интернет.")
