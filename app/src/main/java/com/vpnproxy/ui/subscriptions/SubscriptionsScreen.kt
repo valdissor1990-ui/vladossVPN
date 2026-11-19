@@ -191,6 +191,19 @@ fun SubscriptionsScreen(
                                 }
                                 provider.rejectionReasons.forEach { (reason, count) ->
                                     val reasonLabel = when (reason) {
+                                        "unsupported_scheme" -> "Неподдерживаемая схема ссылки"
+                                        "unsupported_protocol" -> "Неподдерживаемый протокол"
+                                        "unsupported_protocol_version" -> "Неподдерживаемая версия протокола"
+                                        "malformed_uri" -> "Некорректная структура ссылки"
+                                        "missing_server" -> "Не указан адрес сервера"
+                                        "missing_port" -> "Не указан порт сервера"
+                                        "invalid_port" -> "Некорректный порт сервера"
+                                        "missing_credentials" -> "Не указаны обязательные данные доступа"
+                                        "missing_reality_public_key" -> "Не указан публичный ключ Reality"
+                                        "missing_protocol" -> "Не указан протокол"
+                                        "missing_required_settings" -> "Отсутствуют обязательные настройки"
+                                        "invalid_or_malformed_entry" -> "Некорректные параметры профиля"
+                                        "malformed_or_unclassified_entry" -> "Не удалось определить причину отклонения"
                                         "invalid_or_unsupported_uri" -> "Некорректные или неподдерживаемые URI"
                                         "invalid_or_unsupported_json_entry" -> "Некорректные или неподдерживаемые JSON-записи"
                                         "invalid_or_unsupported_clash_proxy" -> "Некорректные или неподдерживаемые Clash-профили"
