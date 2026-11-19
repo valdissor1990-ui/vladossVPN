@@ -69,6 +69,9 @@ class JsonConfigRepository @Inject constructor(
     private val _configs = MutableStateFlow<List<ParsedConfig>>(emptyList())
     val configs: StateFlow<List<ParsedConfig>> = _configs.asStateFlow()
 
+    private val _lastImportReport = MutableStateFlow<SubscriptionParser.ParseReport?>(null)
+    val lastImportReport: StateFlow<SubscriptionParser.ParseReport?> = _lastImportReport.asStateFlow()
+
     init {
         // Best-effort load; safe when encrypted prefs are unavailable (direct boot).
         load()
@@ -160,8 +163,10 @@ class JsonConfigRepository @Inject constructor(
                     }
                 }
                 val displayName = name.ifBlank { "JSON" }
-                val parsed = parser.parse(rawJson, providerTag = displayName)
+                val outcome = parser.parseWithReport(rawJson, providerTag = displayName)
+                val parsed = outcome.configs
                 if (parsed.isEmpty()) {
+                    _lastImportReport.value = outcome.report
                     logCollector.warn(TAG, "No valid servers in JSON")
                     return@withContext null
                 }
@@ -179,6 +184,7 @@ class JsonConfigRepository @Inject constructor(
                     }
                     _entries.value = updatedEntries
                     reparseAll()
+                    _lastImportReport.value = outcome.report
                     logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
                     parsed.size
                 }
