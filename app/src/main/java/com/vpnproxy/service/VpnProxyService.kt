@@ -164,7 +164,19 @@ class VpnProxyService : VpnService() {
             context = this,
             logCollector = logCollector,
             isVpnActive = { _isRunning.value },
-            isBusy = { _serviceState.value == ServiceState.Starting || _serviceState.value == ServiceState.Stopping || autoSwitcher.isSwitching() },
+            isBusy = {
+                // A physical-network change during traffic verification or an actor-driven
+                // reconnect must remain pending. ConnectionCoordinator intentionally ignores
+                // NetworkChanged while Connecting/Reconnecting/Verifying, so let the current
+                // attempt settle before delivering the latest handover event.
+                val connectionState = connectionCoordinator.state.value
+                _serviceState.value == ServiceState.Starting ||
+                    _serviceState.value == ServiceState.Stopping ||
+                    autoSwitcher.isSwitching() ||
+                    connectionState is ConnectionState.Connecting ||
+                    connectionState is ConnectionState.Reconnecting ||
+                    connectionState is ConnectionState.Verifying
+            },
             onReconnectRequested = {
                 Log.d(TAG, "Network reconnect → ConnectionEvent.NetworkChanged")
                 connectionCoordinator.send(ConnectionEvent.NetworkChanged)
@@ -820,13 +832,48 @@ class VpnProxyService : VpnService() {
         vpnJob = null
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
-        try {
-            lifecycleController?.stopCore()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy stopCore failed", t)
+
+        // Block new probes/preflight immediately. Cleanup can stop a temporary
+        // Sing-box instance, so it must run on IO rather than Android's main thread.
+        val controllerForTeardown = lifecycleController
+        _isCoreTransitioning.value = true
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                // These components own independent jobs/scopes. In particular,
+                // ServerScanner.cancelBackgroundWork() invalidates DeepProbeEngine and may
+                // synchronously stop its temporary native core; keep that work off main.
+                stopPassiveProbe()
+                autoSwitcher.clearDiagnosticFreeze()
+                autoSwitcher.cancelBackgroundWork("VPN service destroyed")
+                serverScanner.cancelBackgroundWork("VPN service destroyed")
+                trafficCollector.stop()
+            } catch (t: Throwable) {
+                Log.e(TAG, "onDestroy background-work cleanup failed", t)
+            }
+
+            // Match the normal stop lock order: lifecycle lock first, then shared port lease.
+            // The lease waits for an in-flight temporary probe to release the proxy ports.
+            var stopSucceeded = controllerForTeardown == null
+            try {
+                controllerForTeardown?.withLifecycleLock {
+                    CorePortLease.mutex.withLock {
+                        controllerForTeardown.stopCore()
+                    }
+                }
+                stopSucceeded = true
+            } catch (t: Throwable) {
+                // Fail closed. If native shutdown failed, do not advertise the shared
+                // core/port as idle: a later probe or service start could collide with it.
+                Log.e(TAG, "onDestroy serialized stopCore failed; keeping core state blocked", t)
+            } finally {
+                if (stopSucceeded) {
+                    _isRunning.value = false
+                    _isCoreTransitioning.value = false
+                } else {
+                    _isCoreTransitioning.value = true
+                }
+            }
         }
-        _isRunning.value = false
-        _isCoreTransitioning.value = false
         scope.cancel()
         lifecycleController = null
         super.onDestroy()
