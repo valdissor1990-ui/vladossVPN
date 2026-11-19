@@ -59,8 +59,16 @@ android {
 
     flavorDimensions += "distribution"
     productFlavors {
-        create("direct") { dimension = "distribution"; applicationIdSuffix = ".direct" }
-        create("play")   { dimension = "distribution"; applicationIdSuffix = ".play" }
+        create("direct") {
+            dimension = "distribution"
+            applicationIdSuffix = ".direct"
+            buildConfigField("boolean", "ENABLE_SELF_UPDATE", "true")
+        }
+        create("play") {
+            dimension = "distribution"
+            applicationIdSuffix = ".play"
+            buildConfigField("boolean", "ENABLE_SELF_UPDATE", "false")
+        }
     }
 
     signingConfigs {
