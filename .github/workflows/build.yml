@@ -3,7 +3,7 @@ name: Pull Request Build Validation
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, integration/full-vpn-client-final]
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
