@@ -110,7 +110,37 @@ class SubscriptionRepository @Inject constructor(
         .retryOnConnectionFailure(false)
         .build()
 
-    private val _deviceMetadataConsent = MutableStateFlow(
+    data class ProviderImportSummary(
+        val providerName: String,
+        val source: String,
+        val format: String,
+        val candidateCount: Int?,
+        val acceptedCount: Int,
+        val rejectedCount: Int?,
+        val duplicateCount: Int,
+        val protocolCounts: Map<String, Int>,
+        val rejectionReasons: Map<String, Int>,
+        val failureCode: String? = null
+    )
+
+    data class SubscriptionImportReport(
+        val providers: List<ProviderImportSummary>,
+        val candidateCount: Int?,
+        val acceptedCount: Int,
+        val rejectedCount: Int?,
+        val providerDuplicates: Int,
+        val globalDuplicates: Int,
+        val globallyUniqueCount: Int,
+        val usedCache: Boolean,
+        val completedAt: Long
+    )
+
+    private data class SubscriptionFetchResult(
+        val body: String,
+        val fromEtagCache: Boolean
+    )
+
+private val _deviceMetadataConsent = MutableStateFlow(
         encryptedPrefs.getBoolean(KEY_DEVICE_METADATA_CONSENT, false)
     )
     val deviceMetadataConsent: StateFlow<Boolean> = _deviceMetadataConsent.asStateFlow()
@@ -130,7 +160,7 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
+        private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
     val subscriptions: StateFlow<List<ProviderSubscription>> = _subscriptions.asStateFlow()
 
     private val _allConfigs = MutableStateFlow<List<ParsedConfig>>(emptyList())
@@ -138,6 +168,9 @@ class SubscriptionRepository @Inject constructor(
 
     private val _lastRefreshUsedCache = MutableStateFlow(false)
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
+
+    private val _lastImportReport = MutableStateFlow<SubscriptionImportReport?>(null)
+    val lastImportReport: StateFlow<SubscriptionImportReport?> = _lastImportReport.asStateFlow()
 
     private val refreshMutex = Mutex()
 
@@ -200,7 +233,7 @@ class SubscriptionRepository @Inject constructor(
             )
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
-            logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
+            logCollector.info(TAG, "Subscription added")
             true
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
@@ -223,17 +256,21 @@ class SubscriptionRepository @Inject constructor(
     suspend fun refreshAll(): Int = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
+            _lastImportReport.value = null
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
+            val providerReports = mutableListOf<ProviderImportSummary>()
             var anyNetworkSuccess = false
 
             for (sub in subs) {
                 try {
-                    val configs = fetchAndParse(sub)
+                    val (outcome, source) = fetchAndParseWithReport(sub)
+                    val configs = outcome.configs
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
+                    providerReports += outcome.report.toProviderSummary(sub.name, source = source)
                     val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                     _subscriptions.value = _subscriptions.value.map {
                         if (it.id == sub.id) updated else it
@@ -242,17 +279,17 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.message}")
+                    logCollector.warn(TAG, "Subscription refresh failed: ${e.javaClass.simpleName}")
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
                     val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
-                    val bodyCached = runCatching {
+                    val cachedOutcome = runCatching {
                         encryptedPrefs.getString(bodyKey, null)
                             ?.takeIf { it.isNotBlank() }
-                            ?.let { parser.parse(it, providerTag = sub.name) }
-                            .orEmpty()
-                    }.getOrDefault(emptyList())
+                            ?.let { parser.parseWithReport(it, providerTag = sub.name) }
+                    }.getOrNull()
+                    val bodyCached = cachedOutcome?.configs.orEmpty()
                     val aggregateCached = if (bodyCached.isEmpty()) {
                         loadConfigsFromCache().filter { it.providerTag == sub.name }.map { it.toParsedConfig() }
                     } else emptyList()
@@ -262,8 +299,33 @@ class SubscriptionRepository @Inject constructor(
                         logCollector.info(TAG, "Using per-subscription cache for ${sub.name}: count=${cached.size}; source=${if (bodyCached.isNotEmpty()) "encrypted_body" else "aggregate_cache"}")
                         allConfigsList.addAll(cached)
                         totalConfigs += cached.size
+                        val summary = cachedOutcome?.report?.toProviderSummary(sub.name, source = "encrypted_body")
+                            ?: ProviderImportSummary(
+                                providerName = sub.name,
+                                source = "aggregate_cache",
+                                format = "aggregate_cache",
+                                candidateCount = cached.size,
+                                acceptedCount = cached.size,
+                                rejectedCount = 0,
+                                duplicateCount = (cached.size - cached.distinctBy { it.connectionKey() }.size).coerceAtLeast(0),
+                                protocolCounts = cached.groupingBy { it.transport.lowercase(java.util.Locale.ROOT) }.eachCount(),
+                                rejectionReasons = emptyMap()
+                            )
+                        providerReports += summary.copy(failureCode = e.javaClass.simpleName)
                     } else {
-                        logCollector.warn(TAG, "No recoverable cache for subscription ${sub.name} (id=${sub.id})")
+                        providerReports += ProviderImportSummary(
+                            providerName = sub.name,
+                            source = "failed",
+                            format = "unknown",
+                            candidateCount = null,
+                            acceptedCount = 0,
+                            rejectedCount = null,
+                            duplicateCount = 0,
+                            protocolCounts = emptyMap(),
+                            rejectionReasons = emptyMap(),
+                            failureCode = e.javaClass.simpleName
+                        )
+                        logCollector.warn(TAG, "No recoverable subscription cache available")
                     }
                 }
             }
@@ -296,6 +358,19 @@ class SubscriptionRepository @Inject constructor(
 
             _allConfigs.value = providerUniqueConfigs
             saveToPrefs()
+            val allCandidateCountsKnown = providerReports.all { it.candidateCount != null }
+            val allRejectionCountsKnown = providerReports.all { it.rejectedCount != null }
+            _lastImportReport.value = SubscriptionImportReport(
+                providers = providerReports.toList(),
+                candidateCount = if (allCandidateCountsKnown) providerReports.sumOf { it.candidateCount ?: 0 } else null,
+                acceptedCount = totalConfigs,
+                rejectedCount = if (allRejectionCountsKnown) providerReports.sumOf { it.rejectedCount ?: 0 } else null,
+                providerDuplicates = providerDuplicates,
+                globalDuplicates = globalDuplicates,
+                globallyUniqueCount = globallyUniqueCount,
+                usedCache = providerReports.any { it.source == "encrypted_body" || it.source == "aggregate_cache" || it.source == "etag_cache" },
+                completedAt = System.currentTimeMillis()
+            )
             logCollector.info(
                 TAG,
                 "Refresh complete: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
@@ -304,7 +379,7 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
+    private suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
         withContext(Dispatchers.IO) {
             val sources = listOf(sub.url)
             var lastFailure: Exception? = null
@@ -347,8 +422,7 @@ class SubscriptionRepository @Inject constructor(
                             )
                             throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
                         }
-                        if (sendDeviceMetadata && (
-                            response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                        if (sendDeviceMetadata && (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
                             response.header("x-hwid-limit").equals("true", ignoreCase = true)
                         )
                         ) {
@@ -362,8 +436,8 @@ class SubscriptionRepository @Inject constructor(
                             if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
-                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
-                            return@withContext cachedBody to sourceUrl
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304)")
+                            return@withContext SubscriptionFetchResult(cachedBody, fromEtagCache = true)
                         }
                         if (!response.isSuccessful) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
@@ -383,15 +457,15 @@ class SubscriptionRepository @Inject constructor(
                         if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
                         else editor.remove(etagKey)
                         editor.apply()
-                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
-                        return@withContext body to sourceUrl
+                        logCollector.info(TAG, "Subscription source OK")
+                        return@withContext SubscriptionFetchResult(body, fromEtagCache = false)
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
                     lastFailure = e
                     if (isTransportFailure(e)) sawTransportFailure = true
-                    logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
+                    logCollector.warn(TAG, "Subscription source failed: ${e.javaClass.simpleName}")
                 }
             }
             val vpnState = connectionCoordinator.state.value
@@ -418,12 +492,35 @@ class SubscriptionRepository @Inject constructor(
         return false
     }
 
-    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
-        val (body, sourceUrl) = fetchWithFallback(sub)
-        val parsed = parser.parse(body, providerTag = sub.name)
-        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
-        return parsed
+    private suspend fun fetchAndParseWithReport(
+        sub: ProviderSubscription
+    ): Pair<SubscriptionParser.ParseOutcome, String> {
+        val fetched = fetchWithFallback(sub)
+        val outcome = parser.parseWithReport(fetched.body, providerTag = sub.name)
+        logCollector.info(
+            TAG,
+            "Fetch succeeded: provider=${sub.name}, bytes=${fetched.body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${outcome.configs.size}, contentType=subscription-response"
+        )
+        return outcome to if (fetched.fromEtagCache) "etag_cache" else "network"
     }
+
+    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
+        fetchAndParseWithReport(sub).first.configs
+
+    private fun SubscriptionParser.ParseReport.toProviderSummary(
+        providerName: String,
+        source: String
+    ) = ProviderImportSummary(
+        providerName = providerName,
+        source = source,
+        format = detectedFormat,
+        candidateCount = candidateCount,
+        acceptedCount = acceptedCount,
+        rejectedCount = rejectedCount,
+        duplicateCount = duplicateCount,
+        protocolCounts = protocolCounts,
+        rejectionReasons = rejectionReasons
+    )
 
     private fun parseUserInfo(info: String, subId: String) {
         try {
