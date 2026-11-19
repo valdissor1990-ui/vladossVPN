@@ -67,7 +67,14 @@ object SingboxProxyClient {
             }
         } catch (cancelled: CancellationException) {
             LogCollectorHolder.get()?.warn(TAG, "Temporary Sing-box startup cancelled")
-            runCatching { core.stop() }
+            // runInterruptible may have interrupted this worker before cancellation surfaced.
+            // Temporarily clear that flag so native stop() can release resources, then restore it.
+            val wasInterrupted = Thread.interrupted()
+            try {
+                runCatching { core.stop() }
+            } finally {
+                if (wasInterrupted) Thread.currentThread().interrupt()
+            }
             throw cancelled
         } catch (t: Throwable) {
             LogCollectorHolder.get()?.error(TAG, "Temporary Sing-box startup failed", t)
