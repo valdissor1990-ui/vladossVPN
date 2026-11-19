@@ -152,13 +152,27 @@ class SingBoxCore(
         }
     }
 
+    /**
+     * Convert native lifecycle failures to Result without swallowing coroutine cancellation.
+     * runCatching catches CancellationException too, which can make cancelled start/stop
+     * requests look like ordinary lifecycle failures to their callers.
+     */
+    private suspend fun <T> captureLifecycleResult(block: suspend () -> T): Result<T> =
+        try {
+            Result.success(block())
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Result.failure(failure)
+        }
+
     /** Queues a complete stop/wait/start transition on the single lifecycle executor. */
     fun startAsync(configJson: String): Deferred<Result<Unit>> {
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
         return lifecycleScope.async {
             lifecycleMutex.withLock {
-                runCatching { startSuspended(configJson, generation) }
+                captureLifecycleResult { startSuspended(configJson, generation) }
             }
         }
     }
@@ -169,7 +183,7 @@ class SingBoxCore(
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
         return lifecycleScope.async {
             lifecycleMutex.withLock {
-                runCatching { stopSuspended() }
+                captureLifecycleResult { stopSuspended() }
             }
         }
     }
@@ -179,7 +193,7 @@ class SingBoxCore(
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: start generation=$generation inFlight=true")
         return runBlocking {
-            lifecycleMutex.withLock { runCatching { startSuspended(configJson, generation) } }
+            lifecycleMutex.withLock { captureLifecycleResult { startSuspended(configJson, generation) } }
         }
     }
 
@@ -188,7 +202,7 @@ class SingBoxCore(
         val generation = lifecycleGeneration.next()
         logCollector?.info(TAG, "Lifecycle request: stop generation=$generation inFlight=true")
         return runBlocking {
-            lifecycleMutex.withLock { runCatching { stopSuspended() } }
+            lifecycleMutex.withLock { captureLifecycleResult { stopSuspended() } }
         }
     }
 
