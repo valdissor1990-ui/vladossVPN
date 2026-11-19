@@ -92,9 +92,21 @@ class NetworkBucketProvider @Inject constructor(
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                ) network to resolvedBucket else null
+                ) {
+                    val priority = when (resolvedBucket) {
+                        "wifi" -> 3
+                        "other" -> 2
+                        "cellular" -> 1
+                        else -> 0
+                    }
+                    Triple(network, resolvedBucket, priority)
+                } else {
+                    null
+                }
             }
-            .firstOrNull { it.second == "wifi" || it.second == "cellular" }
+            // Match AutoSwitcher's deterministic underlay policy: Wi-Fi, Ethernet, cellular.
+            .maxByOrNull { it.third }
+            ?.let { it.first to it.second }
 
         if (underlying != null) {
             return snapshotFor(underlying.second, underlying.first)
