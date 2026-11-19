@@ -307,3 +307,24 @@ P2.2 завершён как проектирование контракта. К
 - при сопоставлении учитываются физическая сеть и ожидаемый метод speed probe.
 
 HEAD PR #190: `0a393774ccc93056b0ca8699a465d264192d9d5d`. CI для #188 и #190 пока не подтверждён; PR остаются Draft. Ручные тесты, APK и Android device validation не выполнялись.
+### 2026-11-19 — полный интеграционный кандидат для пользовательского тестирования
+
+Создан Draft PR #197: `integration/full-vpn-client-final` → `main`.
+
+Ветка объединяет рабочие изменения из P0–P5, включая:
+- P0: actor ownership для provider scope/manual mode (#176), отложенную обработку handover (#180), асинхронный teardown с CorePortLease (#169);
+- P1: нормализацию URI query/scheme (#175), ImportReport и per-entry rejection reasons (#184/#191);
+- P2: active tunnel health check (#185), network-scoped history (#186), запрет фиктивного 1 ms latency (#187), typed measurement evidence и сопоставимый scoring (#188/#190);
+- P3: privacy-safe logging и маскирование на входе (#170), encrypted profile cache (#179), FileProvider narrowing (#181), opt-in для device metadata (#192);
+- P4: redesigned home screen, persistent subscription pinning и recommendation-first mode (#189/#193);
+- P5: Play flavor restrictions и отдельный Direct/Play build validation (#182/#195), release/architecture/threat-model/product docs (#168/#177/#183).
+
+PR #174 намеренно не включён: его persistent scan-cache reuse не сохраняет typed evidence и конфликтует с P2.4 freshness contract. Исторические данные не должны снова выдаваться за свежий RTT.
+
+В `.github/workflows/build.yml` добавлены Direct Debug и Play Debug сборки, проверка merged Play manifest на отсутствие `REQUEST_INSTALL_PACKAGES`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` и `FOREGROUND_SERVICE_DATA_SYNC`, загрузка обоих APK и dependency-license report.
+
+HEAD PR #197 на момент фиксации: `c045050cf106b8d4a89d44c82a29add679af4257`. GitHub Actions запущены: все 7 проверок выполняются. Ни одна не считается успешной до фактического завершения на этом exact HEAD.
+
+Ручные тесты и проверки на Android не выполнялись. После успешного CI Direct Debug APK будет предложен пользователю для единого цикла проверки; Play Debug APK служит проверке flavor/manifest. Play Store release дополнительно требует privacy policy, Data Safety, VPN disclosure и подписывающий keystore.
+
+В `main` ничего не слито; APK не опубликован.
