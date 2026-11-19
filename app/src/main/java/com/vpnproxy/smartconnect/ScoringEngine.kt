@@ -18,13 +18,13 @@ import javax.inject.Singleton
 class ScoringEngine @Inject constructor(
     @ApplicationContext private val context: Context?
 ) {
-
     data class ScoredServer(
         val config: ParsedConfig,
         val latencyMs: Long,
         val speedMbps: Float,
         val successRate: Float,
-        val score: Float
+        val score: Float,
+        val evidence: ProbeEvidence? = null
     ) : Comparable<ScoredServer> {
         override fun compareTo(other: ScoredServer): Int = other.score.compareTo(this.score)
     }
@@ -36,6 +36,7 @@ class ScoringEngine @Inject constructor(
     companion object {
         /** Bound history so an old bad period cannot penalize a recovered endpoint forever. */
         private const val MAX_HISTORY_ATTEMPTS = 20L
+        private const val PROBE_EVIDENCE_MAX_AGE_MS = 90_000L
     }
 
     private val historyPreferences by lazy {
@@ -73,10 +74,9 @@ class ScoringEngine @Inject constructor(
             if (success) next.successes++
             next.successes to next.attempts
         }
-        val storageKey = historyKey(config, networkBucket)
         historyPreferences?.edit()
-            ?.putLong("${storageKey}_successes", snapshot.first)
-            ?.putLong("${storageKey}_attempts", snapshot.second)
+            ?.putLong("${key}_successes", snapshot.first)
+            ?.putLong("${key}_attempts", snapshot.second)
             ?.apply()
     }
 
@@ -86,10 +86,7 @@ class ScoringEngine @Inject constructor(
         return synchronized(item) { item.rate() }
     }
 
-    /**
-     * Record a hard connect/traffic failure (not a soft latency miss).
-     * Counts as failed attempts so chronic free-pool nodes lose rank quickly.
-     */
+    /** Current coarse physical transport bucket, retained for existing call sites. */
     fun currentNetworkBucket(): String = networkBucketProvider?.currentBucket() ?: "other"
 
     fun recordHardFailure(
@@ -105,27 +102,57 @@ class ScoringEngine @Inject constructor(
         latencyResults: List<LatencyResult>,
         speedResults: List<SpeedResult> = emptyList()
     ): List<ScoredServer> {
-        val networkBucket = currentNetworkBucket()
-        latencyResults.forEach { recordProbe(it.config, it.success, networkBucket) }
+        val currentNetwork = networkBucketProvider?.snapshot()
+        val usableLatencyResults = latencyResults.filter { result ->
+            val evidence = result.evidence
+            evidence == null || currentNetwork == null ||
+                evidence.isFresh(currentNetwork, maxAgeMs = PROBE_EVIDENCE_MAX_AGE_MS)
+        }
+        if (usableLatencyResults.isEmpty()) return emptyList()
+
+        // Attribute evidence to the network on which it was actually measured, not the
+        // network that happens to be active when asynchronous scoring finally runs.
+        val networkBucket = usableLatencyResults.firstNotNullOfOrNull {
+            it.evidence?.startNetwork?.bucket
+        } ?: currentNetwork?.bucket ?: currentNetworkBucket()
+
+        usableLatencyResults.forEach { result ->
+            recordProbe(result.config, result.success, result.evidence?.startNetwork?.bucket ?: networkBucket)
+        }
+
         val speedMap = speedResults
-            .filter { it.success && it.speedMbps.isFinite() && it.speedMbps > 0f }
+            .filter { result ->
+                result.success &&
+                    result.speedMbps.isFinite() &&
+                    result.speedMbps > 0f &&
+                    (result.evidence == null || currentNetwork == null ||
+                        result.evidence.isFresh(currentNetwork, maxAgeMs = PROBE_EVIDENCE_MAX_AGE_MS))
+            }
             .associateBy { it.config.connectionKey() }
+
         val maxSpeed = speedMap.values.maxOfOrNull { it.speedMbps }?.coerceAtLeast(0.001f) ?: 0.001f
 
-        return latencyResults
+        return usableLatencyResults
             .filter { it.success && it.latencyMs != Long.MAX_VALUE }
-            .map { lr ->
-                val speed = speedMap[lr.config.connectionKey()]?.speedMbps ?: 0f
-                val normalizedLatency = 1.0f / (lr.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
+            .map { latencyResult ->
+                val speedResult = speedMap[latencyResult.config.connectionKey()]?.takeIf { speed ->
+                    val latencyEvidence = latencyResult.evidence
+                    val speedEvidence = speed.evidence
+                    latencyEvidence == null || speedEvidence == null ||
+                        latencyEvidence.startNetwork.sameNetwork(speedEvidence.startNetwork)
+                }
+                val speed = speedResult?.speedMbps ?: 0f
+                val normalizedLatency = 1.0f / (latencyResult.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
                 val normalizedSpeed = speed / maxSpeed
-                val observedSuccessRate = successRate(lr.config, networkBucket)
+                val evidenceBucket = latencyResult.evidence?.startNetwork?.bucket ?: networkBucket
+                val observedSuccessRate = successRate(latencyResult.config, evidenceBucket)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
                 var score = 0.40f * normalizedLatency +
                     0.25f * normalizedSpeed +
                     0.35f * observedSuccessRate
-                val historyKey = historyKey(lr.config, networkBucket)
-                val hist = history.computeIfAbsent(historyKey) { loadHistory(lr.config, networkBucket) }
+                val key = historyKey(latencyResult.config, evidenceBucket)
+                val hist = history.computeIfAbsent(key) { loadHistory(latencyResult.config, evidenceBucket) }
                 val attempts = synchronized(hist) { hist.attempts }
                 if (attempts >= 5L && observedSuccessRate < 0.4f) {
                     score *= 0.5f
@@ -135,11 +162,12 @@ class ScoringEngine @Inject constructor(
                 }
 
                 ScoredServer(
-                    config = lr.config,
-                    latencyMs = lr.latencyMs,
+                    config = latencyResult.config,
+                    latencyMs = latencyResult.latencyMs,
                     speedMbps = speed,
                     successRate = observedSuccessRate,
-                    score = score
+                    score = score,
+                    evidence = latencyResult.evidence
                 )
             }
             .sorted()
@@ -151,8 +179,14 @@ class ScoringEngine @Inject constructor(
         healthChecker: HealthChecker
     ): List<ScoredServer> {
         val latencyResults = healthChecker.testLatency(configs)
+        val currentNetwork = networkBucketProvider?.snapshot()
         val top5 = latencyResults
-            .filter { it.success }
+            .filter { result ->
+                result.success && (
+                    result.evidence == null || currentNetwork == null ||
+                        result.evidence.isFresh(currentNetwork, maxAgeMs = PROBE_EVIDENCE_MAX_AGE_MS)
+                )
+            }
             .sortedBy { it.latencyMs }
             .take(5)
 
