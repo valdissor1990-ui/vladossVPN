@@ -287,7 +287,13 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                 )
-            }.collect { _profileServers.value = it }
+            }.collect {
+                // The visible server list is a latency list; Smart Connect keeps its
+                // separate reliability/history ordering for automatic selection.
+                _profileServers.value = it.sortedWith(
+                    compareBy<ScoringEngine.ScoredServer>({ it.latencyMs == Long.MAX_VALUE }, { it.latencyMs })
+                )
+            }
         }
     }
 
