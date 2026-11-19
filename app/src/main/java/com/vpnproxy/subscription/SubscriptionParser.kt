@@ -177,6 +177,7 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun classifyJsonRejection(obj: JsonObject): String {
+        return try {
         val type = obj["type"]?.jsonPrimitive?.contentOrNull
         if (!type.isNullOrBlank()) {
             if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
@@ -219,7 +220,10 @@ class SubscriptionParser @Inject constructor(
         if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
             reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
         ) return "missing_reality_public_key"
-        return "invalid_or_malformed_entry"
+        "invalid_or_malformed_entry"
+        } catch (_: Exception) {
+            "invalid_or_malformed_entry"
+        }
     }
 
     private fun countPayloadCandidates(content: String, format: String): Int? = runCatching {
