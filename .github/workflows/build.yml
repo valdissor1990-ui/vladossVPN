@@ -77,20 +77,25 @@ jobs:
       - name: Build Play Debug APK
         run: ./gradlew :app:assemblePlayDebug --stacktrace
 
+      - name: Process Play Release manifest
+        run: ./gradlew :app:processPlayReleaseManifest --stacktrace
+
       - name: Verify Play merged manifest permissions
         shell: bash
         run: |
-          manifest="$(find app/build/intermediates -type f -path '*playDebug*' -name AndroidManifest.xml | head -n 1)"
-          if [ -z "$manifest" ]; then
-            echo "Play merged manifest was not produced"
-            exit 1
-          fi
-          if grep -Eq 'android.permission.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"; then
-            echo "Play merged manifest contains a prohibited or unused permission"
-            grep -E 'android.permission.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"
-            exit 1
-          fi
-          echo "Play merged manifest permission check passed: $manifest"
+          for variant in playDebug playRelease; do
+            manifest="$(find app/build/intermediates -type f -path "*${variant}*" -name AndroidManifest.xml | head -n 1)"
+            if [ -z "$manifest" ]; then
+              echo "$variant merged manifest was not produced"
+              exit 1
+            fi
+            if grep -Eq 'android\.permission\.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"; then
+              echo "$variant merged manifest contains a prohibited or unused permission"
+              grep -E 'android\.permission\.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"
+              exit 1
+            fi
+            echo "$variant merged manifest permission check passed: $manifest"
+          done
 
       - name: Upload Play Debug APK artifacts
         uses: actions/upload-artifact@v7
