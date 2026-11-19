@@ -1,7 +1,7 @@
 package com.vpnproxy.core.singbox
 
 import android.content.Context
-import android.util.Log
+import com.vpnproxy.logging.LogCollectorHolder
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -50,10 +50,10 @@ object SingboxProxyClient {
                 "Sing-box did not bind all local inbounds; ready=" + (ports.size - pending.size) + "/" + ports.size + ", pending=" + pending
             }
             activeCore = core
-            Log.i(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
+            LogCollectorHolder.get()?.info(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
             true
         } catch (t: Throwable) {
-            Log.e(TAG, "Temporary Sing-box startup failed", t)
+            LogCollectorHolder.get()?.error(TAG, "Temporary Sing-box startup failed", t)
             runCatching { core.stop() }
             false
         }
@@ -63,6 +63,6 @@ object SingboxProxyClient {
     fun stop(context: Context? = null) {
         val core = activeCore
         activeCore = null
-        runCatching { core?.stop() }.onFailure { Log.w(TAG, "Failed to stop temporary Sing-box", it) }
+        runCatching { core?.stop() }.onFailure { LogCollectorHolder.get()?.error(TAG, "Failed to stop temporary Sing-box", it) }
     }
 }
