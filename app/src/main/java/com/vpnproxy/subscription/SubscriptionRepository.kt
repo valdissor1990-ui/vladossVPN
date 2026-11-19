@@ -340,15 +340,17 @@ class SubscriptionRepository @Inject constructor(
                     runInterruptible(Dispatchers.IO) {
                         httpClient.newCall(requestBuilder.build()).execute()
                     }.use { response ->
-                        if (response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
+                        if (sendDeviceMetadata && response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
                             logCollector.error(
                                 TAG,
                                 "Subscription server rejected or ignored x-hwid; check panel HWID contract"
                             )
                             throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
                         }
-                        if (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                        if (sendDeviceMetadata && (
+                            response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
                             response.header("x-hwid-limit").equals("true", ignoreCase = true)
+                        )
                         ) {
                             logCollector.warn(TAG, "Subscription server reports HWID device limit reached")
                             throw IOException("HWID device limit reached; remove an old device in the subscription panel")
