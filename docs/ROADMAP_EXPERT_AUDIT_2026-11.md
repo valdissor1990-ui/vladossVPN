@@ -191,7 +191,7 @@
 - изолированный `testLatency()` для альтернативных профилей оставлен без изменений;
 - `HealthMonitor.checkSelectedServer()` переключён на проверку уже работающего туннеля.
 
-CI для актуального HEAD PR #185 запущен автоматически: Gradle Dependency Graph — success, остальные 6 checks выполняются; более ранние runs на SHA `7160f6a6ea6b4f0a27507c4765d7745b14bba157` отменены после нового commit. Ручные тесты и runtime-проверки не проводились. PR остаётся Draft и не слит.
+CI для актуального HEAD PR #185 запущен автоматически: Unit Tests и Gradle Dependency Graph — success, CodeQL, Dependency Audit, Security Branch Validation, Build Validation и SCA/SBOM выполняются; более ранние runs на SHA `7160f6a6ea6b4f0a27507c4765d7745b14bba157` отменены после нового commit. Ручные тесты и runtime-проверки не проводились. PR остаётся Draft и не слит.
 
 ### 2026-11-19 — P2.1: статический аудит реального scoring pipeline
 
