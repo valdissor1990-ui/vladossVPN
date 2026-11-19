@@ -86,7 +86,8 @@
 - Если background ranking допустим к запуску, он передаёт в `ScoringEngine.computeScore()` только latency results; вес throughput 25% тогда получает нулевой вклад.
 - `ScoringEngine.rankAll()` тестирует throughput только у top-5 latency-кандидатов, но затем сравнивает composite score всех кандидатов. Непроверенные по throughput профили получают speed=0, поэтому этот метод нельзя использовать для честного полного ранжирования без изменения контракта.
 - `ServerScanner` строит собственную latency-only оценку и сортировку, а `DeepProbeEngine.run()` использует отдельную формулу 40/30/20/10. Эти scores не взаимозаменяемы.
-- `ScoringEngine` сохраняет историю по ключу профиля без network bucket, хотя blacklist и scan cache уже учитывают тип сети.
+- `ScoringEngine` сохранял историю по ключу профиля без network bucket, хотя blacklist и scan cache уже учитывают тип сети. Исправление начато в Draft PR #186; оно ещё не прошло CI.
+- `ServerScanner.restoreCachedResults()` при отсутствии свежего scan cache создаёт `ScoredServer(latencyMs=1, successRate=0.75)` на основании факта успешного подключения в течение последних 7 дней. Значение 1 ms не является измерением RTT. Такой объект должен отображаться как «ранее работал / текущая проверка отсутствует», а не как сервер с ping 1 ms; его нельзя использовать как свежий preflight-кандидат.
 - Параметры URLTest объявлены, но фактическая urltest group в генераторе VPN-конфигурации отсутствует.
 
 ## 10. Порядок реализации
