@@ -161,6 +161,7 @@ class AutoSwitcher @Inject constructor(
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     fun currentNetworkBucket(): String = networkBucketProvider.currentBucket()
+    fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
 
     private fun blacklistKey(config: ParsedConfig): String =
         "${currentNetworkBucket()}|${serverKey(config)}"
