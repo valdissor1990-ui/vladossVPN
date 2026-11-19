@@ -100,9 +100,10 @@ class ScoringEngine @Inject constructor(
 
     fun computeScore(
         latencyResults: List<LatencyResult>,
-        speedResults: List<SpeedResult> = emptyList()
+        speedResults: List<SpeedResult> = emptyList(),
+        currentNetworkSnapshot: PhysicalNetworkSnapshot? = null
     ): List<ScoredServer> {
-        val currentNetwork = networkBucketProvider?.snapshot()
+        val currentNetwork = currentNetworkSnapshot ?: networkBucketProvider?.snapshot()
         val usableLatencyResults = latencyResults.filter { result ->
             val evidence = result.evidence
             evidence == null || currentNetwork == null ||
@@ -194,6 +195,7 @@ class ScoringEngine @Inject constructor(
             healthChecker.testSpeed(top5.map { it.config })
         } else emptyList()
 
-        return computeScore(latencyResults, speedResults)
+        val networkAfterMeasurements = healthChecker.currentNetworkSnapshot()
+        return computeScore(latencyResults, speedResults, networkAfterMeasurements)
     }
 }
