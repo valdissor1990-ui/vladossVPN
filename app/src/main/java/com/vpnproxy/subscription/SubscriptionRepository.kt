@@ -207,7 +207,7 @@ class SubscriptionRepository @Inject constructor(
             )
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
-            logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
+            logCollector.info(TAG, "Subscription added")
             true
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
@@ -253,7 +253,7 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.javaClass.simpleName}")
+                    logCollector.warn(TAG, "Subscription refresh failed: ${e.javaClass.simpleName}")
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
@@ -299,7 +299,7 @@ class SubscriptionRepository @Inject constructor(
                             rejectionReasons = emptyMap(),
                             failureCode = e.javaClass.simpleName
                         )
-                        logCollector.warn(TAG, "No recoverable cache for subscription ${sub.name} (id=${sub.id})")
+                        logCollector.warn(TAG, "No recoverable subscription cache available")
                     }
                 }
             }
@@ -406,7 +406,7 @@ class SubscriptionRepository @Inject constructor(
                             if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
-                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304)")
                             return@withContext cachedBody to sourceUrl
                         }
                         if (!response.isSuccessful) {
@@ -427,7 +427,7 @@ class SubscriptionRepository @Inject constructor(
                         if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
                         else editor.remove(etagKey)
                         editor.apply()
-                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
+                        logCollector.info(TAG, "Subscription source OK")
                         return@withContext body to sourceUrl
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
@@ -435,7 +435,7 @@ class SubscriptionRepository @Inject constructor(
                 } catch (e: Exception) {
                     lastFailure = e
                     if (isTransportFailure(e)) sawTransportFailure = true
-                    logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
+                    logCollector.warn(TAG, "Subscription source failed: ${e.javaClass.simpleName}")
                 }
             }
             val vpnState = connectionCoordinator.state.value
