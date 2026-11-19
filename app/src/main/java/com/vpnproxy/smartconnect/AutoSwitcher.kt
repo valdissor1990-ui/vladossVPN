@@ -572,7 +572,11 @@ class AutoSwitcher @Inject constructor(
                     logCollector.info(TAG, "Discarding background ranking: VPN disconnected before results were published")
                     return@launch
                 }
-                val ranked = scoringEngine.computeScore(ruResults + foreignResults)
+                val networkAfterProbes = healthChecker.currentNetworkSnapshot()
+                val ranked = scoringEngine.computeScore(
+                    ruResults + foreignResults,
+                    currentNetworkSnapshot = networkAfterProbes
+                )
                 if (scopeGeneration != providerScopeGeneration) {
                     logCollector.info(TAG, "Discarding stale background ranking: provider scope changed")
                     return@launch
@@ -692,8 +696,12 @@ class AutoSwitcher @Inject constructor(
         val foreign = allowed.filterNot(::isRussian)
         val ordered = russian + foreign
         val results = healthChecker.testLatency(ordered)
+        val networkAfterProbes = healthChecker.currentNetworkSnapshot()
         // Use the same measured-quality ordering as background ranking; region is not a score.
-        val ranked = scoringEngine.computeScore(results)
+        val ranked = scoringEngine.computeScore(
+            results,
+            currentNetworkSnapshot = networkAfterProbes
+        )
         _rankedServers.value = ranked
         val best = ranked.firstOrNull() ?: return null
         _currentServer.value = best
