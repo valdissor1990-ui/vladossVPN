@@ -13,6 +13,9 @@ import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -50,10 +53,15 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val deviceMetadataConsent: StateFlow<Boolean> = subscriptionRepository.deviceMetadataConsent
+    private val deviceMetadataConsentMutex = Mutex()
 
     fun setDeviceMetadataConsent(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            subscriptionRepository.setDeviceMetadataConsent(enabled)
+        viewModelScope.launch {
+            deviceMetadataConsentMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    subscriptionRepository.setDeviceMetadataConsent(enabled)
+                }
+            }
         }
     }
 
