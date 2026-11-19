@@ -239,7 +239,7 @@ class NetworkAwareReconnector(
                     }
                     // Cooldown is a duration, so use monotonic elapsed time rather than wall clock.
                     val now = SystemClock.elapsedRealtime()
-                    if (now - lastReconnectAt < COOLDOWN_MS) {
+                    if (lastReconnectAt > 0L && now - lastReconnectAt < COOLDOWN_MS) {
                         logCollector.debug(TAG, "Cooldown active, skip NetworkChanged")
                         onReconnectStateChanged(false)
                         return@collect
