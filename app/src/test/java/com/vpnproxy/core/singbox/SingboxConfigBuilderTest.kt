@@ -1,5 +1,6 @@
 package com.vpnproxy.core.singbox
 
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
@@ -370,6 +371,15 @@ class SingboxConfigBuilderTest {
             fingerprint = null, publicKey = null, shortId = null, flow = null,
             name = "socks", password = "pass"
         )
+        if (BuildConfig.IS_PLAY_STORE) {
+            try {
+                SingboxConfigBuilder.build(cfg)
+                throw AssertionError("Unencrypted SOCKS must be rejected in the Play Store build")
+            } catch (expected: IllegalArgumentException) {
+                assertTrue(expected.message?.contains("encrypted transport") == true)
+            }
+            return
+        }
         val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
             SingboxConfigBuilder.build(cfg)
         ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject
