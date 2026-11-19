@@ -156,7 +156,7 @@ class SubscriptionParser @Inject constructor(
         content.isBlank() -> "empty"
         content.startsWith("[") || content.startsWith("{") -> "json"
         content.contains("proxies:") || content.contains("proxy-groups:") -> "clash_yaml"
-        containsSupportedUri(content) -> "uri"
+        content.lineSequence().any { it.trim().contains("://") && !it.trim().startsWith("#") } -> "uri"
         else -> "unknown"
     }
 
@@ -164,8 +164,7 @@ class SubscriptionParser @Inject constructor(
         when (format) {
             "uri" -> content.lineSequence().count { line ->
                 val candidate = line.trim()
-                listOf("vless://", "hysteria2://", "hy2://", "tuic://", "ss://", "vmess://", "trojan://", "socks://", "socks5://")
-                    .any { candidate.startsWith(it, ignoreCase = true) }
+                candidate.contains("://") && !candidate.startsWith("#")
             }
             "json" -> when (val element = Json.parseToJsonElement(content)) {
                 is JsonArray -> element.count { it is JsonObject }
