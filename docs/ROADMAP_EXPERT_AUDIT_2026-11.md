@@ -252,7 +252,7 @@
 - `ServerScanner` переносит evidence в `ScoredServer`, не переиспользует кэш без typed evidence как текущий ping и отбрасывает preflight-результаты, если сеть сменилась во время проверки.
 - Отдельно сохранён правильный интервал speed measurement: время запуска временного Sing-box core не входит в throughput.
 
-Текущий HEAD PR #188: `4df121d38e05900adbf7f32d69b351765492c458`. PR остаётся Draft. Для stacked PR пока не опубликованы GitHub Actions runs/status checks; CI не подтверждён. Ручные тесты и APK/device validation не выполнялись.
+Текущий HEAD PR #188: `bfab2601dee02349e9d5c2669864f7f20964c74a`. PR остаётся Draft. Для stacked PR пока не опубликованы GitHub Actions runs/status checks; CI не подтверждён. Ручные тесты и APK/device validation не выполнялись.
 
 Ограничение: generation теперь увеличивается по событиям ConnectivityManager для валидированных non-VPN сетей, поэтому A→B→A handover должен обнаруживаться и без промежуточного snapshot. События вторичной сети могут консервативно инвалидировать probe, даже если выбранный underlay не сменился; если регистрация callback недоступна, остаётся fallback на identity snapshots. Требуется device/OEM runtime-валидация.
 
