@@ -185,7 +185,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
             // CachedConfig stores providerTag (the old subscription name), not its URL/ID.
             // Include names captured from the removed subscription records so orphaned
             // bundled profiles cannot reappear after their source has been deleted.
-            val removedProviderTags = REMOVED_BUNDLED_NAMES + removedBundledProviderTags
+            val removedProviderTags = removedBundledProviderTags
             val retainedCached = cached.filterNot { it.providerTag in removedProviderTags }
             _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
@@ -571,7 +571,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
     fun getCachedConfigs(): List<ParsedConfig> =
         loadConfigsFromCache()
-            .filterNot { it.providerTag in (REMOVED_BUNDLED_NAMES + removedBundledProviderTags) }
+            .filterNot { it.providerTag in removedBundledProviderTags }
             .map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
