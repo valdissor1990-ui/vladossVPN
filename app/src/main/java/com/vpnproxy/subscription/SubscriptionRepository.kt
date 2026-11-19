@@ -319,7 +319,7 @@ class SubscriptionRepository @Inject constructor(
                     val cachedEtag = encryptedPrefs.getString(etagKey, null)
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
-                        .header("User-Agent", "vladossvpn")
+                        .header("User-Agent", "v2rayNG/1.8.5")
                     if (sendDeviceMetadata) {
                         requestBuilder
                             .header("x-hwid", deviceIdManager.getHwid())
