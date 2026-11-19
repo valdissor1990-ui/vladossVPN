@@ -193,7 +193,7 @@ class HomeViewModel @Inject constructor(
                         cancelConnectingWatchdog()
                         permissionFlowInProgress = false
                         autoSwitcher.currentServer.value?.config?.let { server ->
-                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid, connectionKey = server.connectionKey())
+                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
                             serverScanner.recordSuccessfulConnection(server)
                         }
                         pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
