@@ -12,9 +12,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
@@ -197,8 +197,18 @@ class NetworkAwareReconnector(
             networkStatusFlow
                 .debounce(DEBOUNCE_MS)
                 .distinctUntilChanged()
-                .filter { isVpnActive() && !isBusy() }
+                // If a handover arrives during start/switch, retain only the latest route
+                // change and process it after the current lifecycle transition settles.
+                .conflate()
                 .collect { event ->
+                    while (isBusy()) {
+                        kotlinx.coroutines.delay(250L)
+                    }
+                    if (!isVpnActive()) {
+                        logCollector.debug(TAG, "Skip queued network change — VPN is no longer active")
+                        onReconnectStateChanged(false)
+                        return@collect
+                    }
                     val now = System.currentTimeMillis()
                     if (now - lastReconnectAt < COOLDOWN_MS) {
                         logCollector.debug(TAG, "Cooldown active, skip NetworkChanged")
