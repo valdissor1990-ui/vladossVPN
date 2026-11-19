@@ -41,7 +41,7 @@
 
 ### P2 — Интегрированный Smart Autopilot
 
-- [ ] P2.1 Проследить реальные call sites ScoringEngine, DeepProbeEngine, ServerScanner и AutoSwitcher; документировать, какие метрики реально участвуют в каждом решении.
+- [x] P2.1 Проследить реальные call sites ScoringEngine, DeepProbeEngine, ServerScanner и AutoSwitcher; документировать, какие метрики реально участвуют в каждом решении.
 - [ ] P2.2 Устранить расхождение между заявленным composite score и фактически передаваемыми метриками (в частности, отсутствующими speed/history/deep-probe данными).
 - [ ] P2.3 Определить единый ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
 - [ ] P2.4 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущего типа сети; Wi-Fi и cellular не смешивать.
@@ -176,6 +176,24 @@
 - необходима повторная проверка diff и сборки CI после включения PR в основную цепочку;
 - ручные тесты и APK/device validation не выполнялись.
 
+### 2026-11-19 — P2.1: статический аудит реального scoring pipeline
+
+Проверены `ScoringEngine.kt`, `AutoSwitcher.kt`, `DeepProbeEngine.kt`, `ServerScanner.kt`, `HealthChecker.kt` и production call sites через поиск по репозиторию.
+
+Подтверждённые факты:
+- `AutoSwitcher.rankInBackground()` вызывает `HealthChecker.testLatency()` для RU/foreign групп и затем `ScoringEngine.computeScore(ruResults + foreignResults)` без speedResults. Поэтому компонент `0.25 * normalizedSpeed` в этом основном background ranking pipeline всегда получает нулевую скорость.
+- `ScoringEngine.rankAll()` действительно умеет измерить скорость для top-5 latency-кандидатов, но production-вызовов `rankAll()` в доступном коде не найдено. Метод фактически не участвует в основном AutoSwitcher ranking.
+- `ServerScanner.scoredServer()` преобразует результат `DeepProbeEngine.pingProfiles()` в `ScoredServer` с `speedMbps=0`, `successRate=1/0` и отдельной формулой `1 / (1 + latency/1000)`. Сортировка списка при этом использует успешность, историю успешных подключений в текущем network bucket и latency, а не общий composite score.
+- `DeepProbeEngine.pingProfiles()` делает до четырёх HTTP GET попыток по двум endpoint-ам, считает профиль успешным при двух успешных samples и возвращает median RTT. Этот режим используется scanner/preflight, но не измеряет speed/jitter.
+- `DeepProbeEngine.run()` собирает latency, jitter, loss и скорость загрузки 1 MB, затем вызывает `scoreMetrics()` с весами 0.4/0.3/0.2/0.1. Найденный production call site — ручной запуск из `ServersListScreen`; связь этого composite score с AutoSwitcher не обнаружена.
+
+Вывод:
+- В проекте существуют как минимум три разных модели оценки: ScoringEngine composite (latency/speed/history), ServerScanner simple latency score и DeepProbe manual composite (latency/speed/jitter/loss).
+- Это архитектурная несогласованность, а не доказательство сетевого дефекта. Нельзя просто заменить все формулы одной без анализа пользовательских сценариев и порогов.
+- Следующий шаг P2.2: описать единый контракт качества и определить, какие измерения допустимы для preflight, фонового мониторинга и ручной диагностики; отдельно сохранить быстрый preflight и запретить автоматическое переключение по несопоставимым/устаревшим метрикам.
+
+Ручные тесты не запускались; runtime поведение не проверялось.
+
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup). Для PR #184 CI не подтверждён из-за stacked base на PR #175. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 — статический аудит scoring pipeline завершён; выявлены три несогласованные модели оценки. Никакие PR не слиты автоматически.
