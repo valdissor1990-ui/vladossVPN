@@ -43,9 +43,10 @@
 
 - [x] P2.1 Проследить реальные call sites ScoringEngine, DeepProbeEngine, ServerScanner и AutoSwitcher; документировать, какие метрики реально участвуют в каждом решении.
 - [x] P2.2 Зафиксировать единый контракт измерений и скоринга; определить безопасное применение preflight, active health-check и deep diagnostic. Документ: `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`.
-- [ ] P2.3 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
-- [ ] P2.4 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущего типа сети; Wi-Fi и cellular не смешивать.
-- [ ] P2.5 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
+- [ ] P2.3 Разделить scoring history по physical network bucket и корректно привязать hard failures к network epoch (Draft PR #186; CI выполняется).
+- [ ] P2.4 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
+- [ ] P2.5 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущей сети; Wi-Fi и cellular не смешивать.
+- [ ] P2.6 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
 - Критерий: каждый score имеет объяснимые исходные измерения; отсутствие метрики не подменяется фиктивным успехом.
 
 ### P3 — Безопасность и приватность
@@ -215,6 +216,19 @@
 
 Ручные тесты не запускались; runtime поведение не проверялось.
 
+### 2026-11-19 — P2.3: изоляция истории качества по физической сети
+
+Создан Draft PR #186, ветка `fix/scoring-history-network-scope`:
+- выделен общий `NetworkBucketProvider` на основе прежней логики `AutoSwitcher.currentNetworkBucket()`;
+- история успехов/ошибок `ScoringEngine` теперь адресуется полным ключом профиля + physical network bucket;
+- новая история хранится в `server_scoring_history_v2`; старое хранилище v1 не удаляется и не переносится в неизвестную сеть;
+- `ConnectionCoordinator` фиксирует network bucket при выборе сервера и при начале TrafficValidator probe, чтобы поздний результат не записывал hard failure в другой bucket после handover;
+- существующий конструктор `ScoringEngine(context)` сохранён для совместимости текущих call sites и тестов.
+
+Текущий HEAD: `9c3ec475fa8c44dfd2d357d76252feeaa8d9deda`. CI для этого SHA запущен, все семь checks пока pending/queued. Предыдущий SHA не считается подтверждением. Ручные тесты не добавлялись и не запускались; runtime проверка на Wi-Fi/cellular не выполнялась.
+
+Остаточный риск: network bucket — это coarse class (Wi-Fi/cellular/other), а не уникальный Network handle/epoch. Полноценный типизированный результат с network generation и freshness остаётся P2.4/P2.5.
+
 ### 2026-11-19 — P2.2: контракт измерений Smart Autopilot
 
 Создан документ `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md` в ветке roadmap:
@@ -234,4 +248,4 @@ P2.2 завершён как проектирование контракта. К
 
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, его CI 7/7 успешно. P2.3/P2.4 — реализация единого контракта и network-scoped scoring ещё впереди. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, CI 7/7 успешно. P2.3 начат в Draft PR #186 (network-scoped scoring history), CI для актуального SHA выполняется. P2.4/P2.5 — typed measurement contract и freshness/network epoch ещё впереди. Никакие PR не слиты автоматически.
