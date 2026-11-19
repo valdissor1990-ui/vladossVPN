@@ -54,7 +54,40 @@ class HealthChecker @Inject constructor(
 
     fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
 
+    suspend fun testActiveTunnelLatency(config: ParsedConfig): LatencyResult =
+        withContext(Dispatchers.IO) {
+            if (!VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                return@withContext LatencyResult(config, Long.MAX_VALUE, success = false)
+            }
+            try {
+                val startedAt = System.nanoTime()
+                val result = runInterruptible(Dispatchers.IO) {
+                    activeTunnelClient.newCall(Request.Builder().url(LATENCY_TEST_URL).head().build())
+                        .execute().use { response ->
+                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                            LatencyResult(config, elapsed, success = response.code in 200..399)
+                        }
+                }
+                if (!VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                    LatencyResult(config, Long.MAX_VALUE, success = false)
+                } else result
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                LatencyResult(config, Long.MAX_VALUE, success = false)
+            }
+        }
+
+
     private val singboxProbeMutex = Mutex()
+
+    private val activeTunnelClient = OkHttpClient.Builder()
+        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
+        .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .readTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .callTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
