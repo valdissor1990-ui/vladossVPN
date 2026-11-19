@@ -269,10 +269,10 @@ fun HomeScreen(
                                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
                         })
-                        AutoConnectRow(
-                            enabled = uiState.isAutomaticMode,
+                        SelectionModeRow(
+                            mode = uiState.selectionMode,
                             busy = uiState.isBusy,
-                            onChange = viewModel::setAutomaticMode
+                            onSelect = viewModel::setSelectionMode
                         )
                         HorizontalDivider(color = HappLine)
                         if (visibleServers.isEmpty()) {
@@ -317,6 +317,45 @@ fun HomeScreen(
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp)
+        )
+    }
+
+    uiState.pendingRecommendation?.let { recommended ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissRecommendation,
+            title = { Text("Нашли подходящий сервер", color = HappInk) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        recommended.config.name.ifBlank { recommended.config.address },
+                        color = HappInk,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (recommended.latencyMs != Long.MAX_VALUE) "Задержка: ${recommended.latencyMs} мс"
+                        else "Доступность подтверждена",
+                        color = HappMuted
+                    )
+                    if (recommended.speedMbps > 0f) {
+                        Text("Измеренная скорость: ${recommended.speedMbps.toInt()} Мбит/с", color = HappMuted)
+                    }
+                    Text(
+                        "Сервер проверен в текущей сети. Фактическая скорость может меняться во время подключения.",
+                        color = HappMuted
+                    )
+                    Text("Подключение начнётся только после вашего подтверждения.", color = HappMuted)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmRecommendation) {
+                    Text("Подключиться")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissRecommendation) {
+                    Text("Не сейчас")
+                }
+            }
         )
     }
 
@@ -491,24 +530,50 @@ private fun SubscriptionMeta(
 }
 
 @Composable
-private fun AutoConnectRow(
-    enabled: Boolean,
+private fun SelectionModeRow(
+    mode: String,
     busy: Boolean,
-    onChange: (Boolean) -> Unit
+    onSelect: (String) -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
+    val title = when (mode) {
+        "automatic" -> "Автоматический выбор"
+        "manual" -> "Ручной выбор"
+        else -> "Рекомендация сервера"
+    }
+    val description = when (mode) {
+        "automatic" -> "Приложение выбирает сервер самостоятельно"
+        "manual" -> "Вы подключаетесь к выбранному серверу"
+        else -> "Сначала проверка, затем ваше подтверждение"
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Автоподключение", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-            Text(
-                if (enabled) "Само выбирает самый стабильный сервер" else "Подключение только к выбранному серверу",
-                color = HappMuted,
-                fontSize = 12.sp
-            )
+            Text("Режим выбора сервера", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text("$title · $description", color = HappMuted, fontSize = 12.sp)
         }
-        Switch(checked = enabled, onCheckedChange = onChange, enabled = !busy)
+        Box {
+            TextButton(onClick = { expanded = true }, enabled = !busy) {
+                Text("Изменить", color = HappSelected)
+                Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = HappSelected)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Рекомендовать сервер") },
+                    onClick = { onSelect("recommend"); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Автоматический выбор") },
+                    onClick = { onSelect("automatic"); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Ручной выбор") },
+                    onClick = { onSelect("manual"); expanded = false }
+                )
+            }
+        }
     }
 }
 
