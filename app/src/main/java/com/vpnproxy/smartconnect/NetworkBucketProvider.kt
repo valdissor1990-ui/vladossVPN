@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,6 +26,41 @@ class NetworkBucketProvider @Inject constructor(
 ) {
     private var lastIdentity: String? = null
     private var generation: Long = 0L
+    private var lastObservedEventGeneration: Long = 0L
+    private val networkEventGeneration = AtomicLong(0L)
+    private val observedPhysicalNetworks = ConcurrentHashMap<String, Boolean>()
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            val isValidatedPhysicalNetwork =
+                bucket(capabilities) != null &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val key = network.toString()
+            val previous = observedPhysicalNetworks.put(key, isValidatedPhysicalNetwork)
+            if (previous != isValidatedPhysicalNetwork) networkEventGeneration.incrementAndGet()
+        }
+
+        override fun onLost(network: Network) {
+            if (observedPhysicalNetworks.remove(network.toString()) == true) {
+                networkEventGeneration.incrementAndGet()
+            }
+        }
+    }
+
+    init {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (manager != null) {
+            runCatching {
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build()
+                manager.registerNetworkCallback(request, networkCallback)
+            }
+        }
+    }
 
     @Synchronized
     fun snapshot(): PhysicalNetworkSnapshot {
@@ -83,8 +121,10 @@ class NetworkBucketProvider @Inject constructor(
             .take(12)
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-        if (lastIdentity != networkId) {
+        val observedEventGeneration = networkEventGeneration.get()
+        if (lastIdentity != networkId || lastObservedEventGeneration != observedEventGeneration) {
             lastIdentity = networkId
+            lastObservedEventGeneration = observedEventGeneration
             generation++
         }
 
