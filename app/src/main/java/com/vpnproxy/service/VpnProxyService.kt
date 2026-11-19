@@ -821,28 +821,26 @@ class VpnProxyService : VpnService() {
         stopBatteryPeriodicLogging()
         isReconnecting.set(false)
 
-        // Mirror the normal stop path during Android-driven service teardown. These
-        // components own independent jobs/scopes, so cancelling only this service's
-        // scope would leave probes, rankings or traffic polling alive after onDestroy.
-        try {
-            stopPassiveProbe()
-            autoSwitcher.clearDiagnosticFreeze()
-            autoSwitcher.cancelBackgroundWork("VPN service destroyed")
-            serverScanner.cancelBackgroundWork("VPN service destroyed")
-            trafficCollector.stop()
-        } catch (t: Throwable) {
-            Log.e(TAG, "onDestroy background-work cleanup failed", t)
-        }
-
-        // ServerScanner.cancelBackgroundWork() above also invalidates DeepProbeEngine.
-        // Serialize the final core stop with the same lock order as the normal stop path:
-        // lifecycle lock first, then the shared proxy-port lease. Use an independent IO
-        // scope because the service scope is cancelled below and onDestroy must not block
-        // Android's main thread while waiting for a native core transition.
+        // Block new probes/preflight immediately. Cleanup can stop a temporary
+        // Sing-box instance, so it must run on IO rather than Android's main thread.
         val controllerForTeardown = lifecycleController
-        // Block any new preflight immediately; the native stop completes asynchronously.
         _isCoreTransitioning.value = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                // These components own independent jobs/scopes. In particular,
+                // ServerScanner.cancelBackgroundWork() invalidates DeepProbeEngine and may
+                // synchronously stop its temporary native core; keep that work off main.
+                stopPassiveProbe()
+                autoSwitcher.clearDiagnosticFreeze()
+                autoSwitcher.cancelBackgroundWork("VPN service destroyed")
+                serverScanner.cancelBackgroundWork("VPN service destroyed")
+                trafficCollector.stop()
+            } catch (t: Throwable) {
+                Log.e(TAG, "onDestroy background-work cleanup failed", t)
+            }
+
+            // Match the normal stop lock order: lifecycle lock first, then shared port lease.
+            // The lease waits for an in-flight temporary probe to release the proxy ports.
             var stopSucceeded = controllerForTeardown == null
             try {
                 controllerForTeardown?.withLifecycleLock {
