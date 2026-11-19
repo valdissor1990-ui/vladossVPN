@@ -16,7 +16,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class ScoringEngine @Inject constructor(
-    @ApplicationContext private val context: Context?
+    @ApplicationContext private val context: Context?,
+    private val networkBucketProvider: NetworkBucketProvider? = null
 ) {
 
     data class ScoredServer(
@@ -39,17 +40,17 @@ class ScoringEngine @Inject constructor(
     }
 
     private val historyPreferences by lazy {
-        context?.getSharedPreferences("server_scoring_history_v1", Context.MODE_PRIVATE)
+        context?.getSharedPreferences("server_scoring_history_v2", Context.MODE_PRIVATE)
     }
     private val history = ConcurrentHashMap<String, ProbeHistory>()
 
-    private fun historyKey(config: ParsedConfig): String =
+    private fun historyKey(config: ParsedConfig, networkBucket: String): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(config.connectionKey().toByteArray(Charsets.UTF_8))
+            .digest("${networkBucket}|${config.connectionKey()}".toByteArray(Charsets.UTF_8))
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun loadHistory(config: ParsedConfig): ProbeHistory {
-        val key = historyKey(config)
+    private fun loadHistory(config: ParsedConfig, networkBucket: String): ProbeHistory {
+        val key = historyKey(config, networkBucket)
         val prefs = historyPreferences ?: return ProbeHistory()
         return ProbeHistory(
             successes = prefs.getLong("${key}_successes", 0L),
@@ -57,9 +58,9 @@ class ScoringEngine @Inject constructor(
         )
     }
 
-    private fun recordProbe(config: ParsedConfig, success: Boolean) {
-        val key = config.connectionKey()
-        val next = history.computeIfAbsent(key) { loadHistory(config) }
+    private fun recordProbe(config: ParsedConfig, success: Boolean, networkBucket: String) {
+        val key = historyKey(config, networkBucket)
+        val next = history.computeIfAbsent(key) { loadHistory(config, networkBucket) }
         val snapshot = synchronized(next) {
             // Exponential aging in attempt space: once the window is full, halve
             // the old evidence before adding the new result. This gives recent
@@ -72,15 +73,16 @@ class ScoringEngine @Inject constructor(
             if (success) next.successes++
             next.successes to next.attempts
         }
-        val storageKey = historyKey(config)
+        val storageKey = historyKey(config, networkBucket)
         historyPreferences?.edit()
             ?.putLong("${storageKey}_successes", snapshot.first)
             ?.putLong("${storageKey}_attempts", snapshot.second)
             ?.apply()
     }
 
-    private fun successRate(config: ParsedConfig): Float {
-        val item = history.computeIfAbsent(config.connectionKey()) { loadHistory(config) }
+    private fun successRate(config: ParsedConfig, networkBucket: String): Float {
+        val key = historyKey(config, networkBucket)
+        val item = history.computeIfAbsent(key) { loadHistory(config, networkBucket) }
         return synchronized(item) { item.rate() }
     }
 
@@ -90,14 +92,16 @@ class ScoringEngine @Inject constructor(
      */
     fun recordHardFailure(config: ParsedConfig, weight: Int = 2) {
         val w = weight.coerceIn(1, 5)
-        repeat(w) { recordProbe(config, success = false) }
+        val networkBucket = networkBucketProvider?.currentBucket() ?: "other"
+        repeat(w) { recordProbe(config, success = false, networkBucket = networkBucket) }
     }
 
     fun computeScore(
         latencyResults: List<LatencyResult>,
         speedResults: List<SpeedResult> = emptyList()
     ): List<ScoredServer> {
-        latencyResults.forEach { recordProbe(it.config, it.success) }
+        val networkBucket = networkBucketProvider?.currentBucket() ?: "other"
+        latencyResults.forEach { recordProbe(it.config, it.success, networkBucket) }
         val speedMap = speedResults
             .filter { it.success && it.speedMbps.isFinite() && it.speedMbps > 0f }
             .associateBy { it.config.connectionKey() }
@@ -109,13 +113,14 @@ class ScoringEngine @Inject constructor(
                 val speed = speedMap[lr.config.connectionKey()]?.speedMbps ?: 0f
                 val normalizedLatency = 1.0f / (lr.latencyMs.coerceAtLeast(1L).toFloat() / 100f)
                 val normalizedSpeed = speed / maxSpeed
-                val observedSuccessRate = successRate(lr.config)
+                val observedSuccessRate = successRate(lr.config, networkBucket)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
                 var score = 0.40f * normalizedLatency +
                     0.25f * normalizedSpeed +
                     0.35f * observedSuccessRate
-                val hist = history.computeIfAbsent(lr.config.connectionKey()) { loadHistory(lr.config) }
+                val historyKey = historyKey(lr.config, networkBucket)
+                val hist = history.computeIfAbsent(historyKey) { loadHistory(lr.config, networkBucket) }
                 val attempts = synchronized(hist) { hist.attempts }
                 if (attempts >= 5L && observedSuccessRate < 0.4f) {
                     score *= 0.5f
