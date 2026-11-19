@@ -265,7 +265,7 @@ class AutoSwitcher @Inject constructor(
         }
 
         try {
-            val result = healthMonitor.checkSelectedServer(current.config) ?: return
+            val result = healthMonitor.checkSelectedServer(current.config)
             val jitter = healthMonitor.calculateJitter(previousRtt, result.latencyMs)
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
 
