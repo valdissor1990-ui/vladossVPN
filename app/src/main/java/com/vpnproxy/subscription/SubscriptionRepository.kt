@@ -322,9 +322,14 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
-                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val cacheKey = MessageDigest.getInstance("SHA-256")
+                        .digest(sub.url.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val legacyCacheKey = sub.url.hashCode().toUInt().toString(16)
                     val cachedOutcome = runCatching {
-                        encryptedPrefs.getString(bodyKey, null)
+                        val cachedBody = encryptedPrefs.getString("subscription_body_$cacheKey", null)
+                            ?: encryptedPrefs.getString("subscription_body_$legacyCacheKey", null)
+                        cachedBody
                             ?.takeIf { it.isNotBlank() }
                             ?.let { parser.parseWithReport(it, providerTag = sub.name) }
                     }.getOrNull()
@@ -430,16 +435,28 @@ private val _deviceMetadataConsent = MutableStateFlow(
                         .digest(sourceUrl.toByteArray(Charsets.UTF_8))
                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
                     val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
-                    if (legacyCacheKey != cacheKey) {
-                        encryptedPrefs.edit()
-                            .remove("subscription_body_$legacyCacheKey")
-                            .remove("subscription_etag_$legacyCacheKey")
-                            .apply()
-                    }
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
+                    val legacyBodyKey = "subscription_body_$legacyCacheKey"
+                    val legacyEtagKey = "subscription_etag_$legacyCacheKey"
+                    // Read the legacy cache before retiring its keys. Otherwise the first
+                    // refresh after upgrade can erase the only per-provider fallback before
+                    // a failed network request has a chance to use it.
                     val cachedBody = encryptedPrefs.getString(bodyKey, null)
+                        ?: encryptedPrefs.getString(legacyBodyKey, null)
                     val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                        ?: encryptedPrefs.getString(legacyEtagKey, null)
+                    if (legacyCacheKey != cacheKey && (!cachedBody.isNullOrBlank() || !cachedEtag.isNullOrBlank())) {
+                        val migrated = encryptedPrefs.edit()
+                        if (!cachedBody.isNullOrBlank()) migrated.putString(bodyKey, cachedBody)
+                        if (!cachedEtag.isNullOrBlank()) migrated.putString(etagKey, cachedEtag)
+                        if (migrated.commit()) {
+                            encryptedPrefs.edit()
+                                .remove(legacyBodyKey)
+                                .remove(legacyEtagKey)
+                                .apply()
+                        }
+                    }
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
