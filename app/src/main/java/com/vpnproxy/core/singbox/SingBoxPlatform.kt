@@ -597,7 +597,11 @@ class SingBoxPlatform(
                 return
             }
             val currentListener = interfaceMonitorListener ?: return
-            notifyDefaultInterface(currentListener, "", -1, false)
+            if (notifyDefaultInterface(currentListener, "", -1, false)) {
+                // libbox accepted the unresolved interface; do not retain the previous
+                // physical underlay as probe evidence for a network it no longer selected.
+                networkBucketProvider?.updatePlatformSelectedUnderlay(null)
+            }
             logMonitor("DefaultInterfaceMonitor: network changed but interface unresolved for network=$network")
             return
         }
