@@ -341,7 +341,7 @@ class AutoSwitcher @Inject constructor(
                 if (serverConfirmations < AutoSwitcherConfig.serverDegradationConfirmations) {
                     transitionTo(AutoSwitchState.MONITORING, "server degradation confirmation $serverConfirmations/${AutoSwitcherConfig.serverDegradationConfirmations}; awaiting independent confirmation")
                 } else {
-                    transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed twice; checking transport")
+                    transitionTo(AutoSwitchState.MICRO_PROBE, "server degradation confirmed $serverConfirmations times; checking transport")
                     runMicroProbe()
                 }
             }
