@@ -242,8 +242,8 @@ private val _deviceMetadataConsent = MutableStateFlow(
                 sub.url in REMOVED_BUNDLED_URLS
         }
         val retained = current - removed.toSet()
-        // Remove response bodies and ETags for removed sources, including known retired
-        // URLs whose subscription records were deleted by an earlier app version.
+        // Remove response bodies and ETags for removed sources using every known
+        // URL-derived cache-key format, including URLs removed by earlier app versions.
         removed.forEach { removeSubscriptionBodyCache(it.url) }
         REMOVED_BUNDLED_URLS.forEach(::removeSubscriptionBodyCache)
         if (retained != current) {
