@@ -176,6 +176,23 @@
 - необходима повторная проверка diff и сборки CI после включения PR в основную цепочку;
 - ручные тесты и APK/device validation не выполнялись.
 
+### 2026-11-19 — P2.1 follow-up: текущий health-check использовал неподходящий probe path
+
+При проверке полного call path обнаружено отдельное несоответствие:
+- `VpnProxyService` запускает `AutoSwitcher.startMonitoring()` при получении `ConnectionState.Connected`.
+- Монитор текущего сервера вызывает `HealthMonitor.checkSelectedServer()` → `HealthChecker.testLatency()`.
+- `HealthChecker.withSingboxClient()` намеренно запрещает этот путь при активном VPN (`isRunning=true`), поскольку он предназначен для запуска изолированного ядра проверки альтернативного профиля.
+- В результате активный health monitor мог получать искусственный failed result и повторно входить в direct-vs-VPN validation вместо проверки трафика текущего туннеля.
+
+Создан Draft PR #185:
+- ветка `fix/autoswitcher-active-tunnel-healthcheck`;
+- HEAD `7160f6a6ea6b4f0a27507c4765d7745b14bba157`;
+- добавлен отдельный `testActiveTunnelLatency()` через локальный mixed inbound `127.0.0.1:10809`;
+- изолированный `testLatency()` для альтернативных профилей оставлен без изменений;
+- `HealthMonitor.checkSelectedServer()` переключён на проверку уже работающего туннеля.
+
+CI для PR #185 запущен автоматически; на момент фиксации ещё выполняется. Ручные тесты и runtime-проверки не проводились. PR остаётся Draft и не слит.
+
 ### 2026-11-19 — P2.1: статический аудит реального scoring pipeline
 
 Проверены `ScoringEngine.kt`, `AutoSwitcher.kt`, `DeepProbeEngine.kt`, `ServerScanner.kt`, `HealthChecker.kt` и production call sites через поиск по репозиторию.
@@ -196,4 +213,4 @@
 
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 — статический аудит scoring pipeline завершён; выявлены три несогласованные модели оценки. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 — статический аудит scoring pipeline завершён; выявлены три несогласованные модели оценки и отдельное несоответствие active health-check. Draft PR #185 исправляет последний пункт; CI выполняется. Никакие PR не слиты автоматически.
