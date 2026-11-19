@@ -357,7 +357,13 @@ class HomeViewModel @Inject constructor(
                         LatencyCalculator.compute(multi.results)
                     }
                     _latencyBreakdown.value = breakdown
-                    _googleRtt.value = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
+                    val measuredRtt = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
+                    _googleRtt.value = measuredRtt
+                    // The power-button quality indicator must follow fresh active-tunnel
+                    // measurements, not only the RTT captured during server preflight.
+                    if (_uiState.value.connectionState.hasTunnel() && measuredRtt != null) {
+                        _uiState.value = _uiState.value.copy(currentRtt = measuredRtt)
+                    }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (_: Throwable) {
@@ -779,6 +785,18 @@ class HomeViewModel @Inject constructor(
 
     fun pingAllServers() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Isolated per-profile probes cannot run alongside the active VPN core.
+            // Do not report cached results as if a fresh measurement had completed.
+            if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                _uiState.value = _uiState.value.copy(
+                    notice = "Чтобы проверить задержку всех серверов, сначала отключите VPN"
+                )
+                return@launch
+            }
+            if (serverScanner.isScanning.value) {
+                _uiState.value = _uiState.value.copy(notice = "Проверка серверов уже выполняется")
+                return@launch
+            }
             val configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
             if (configs.isEmpty()) {
                 _uiState.value = _uiState.value.copy(notice = "Нет серверов для проверки задержки")
@@ -786,8 +804,15 @@ class HomeViewModel @Inject constructor(
             }
             _uiState.value = _uiState.value.copy(notice = "Измеряем задержку серверов…")
             try {
-                serverScanner.scanAll(configs, force = true)
-                _uiState.value = _uiState.value.copy(notice = "Задержка серверов обновлена")
+                val results = serverScanner.scanAll(configs, force = true)
+                val measured = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                val total = results.size
+                val message = if (measured > 0) {
+                    "Проверено серверов: $measured из $total"
+                } else {
+                    "Не удалось подтвердить доступность серверов"
+                }
+                _uiState.value = _uiState.value.copy(notice = message)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
