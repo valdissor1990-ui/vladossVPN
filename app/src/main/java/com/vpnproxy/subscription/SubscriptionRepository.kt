@@ -238,7 +238,7 @@ class SubscriptionRepository @Inject constructor(
 
             for (sub in subs) {
                 try {
-                    val (outcome, sourceUrl) = fetchAndParseWithReport(sub)
+                    val outcome = fetchAndParseWithReport(sub)
                     val configs = outcome.configs
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
@@ -341,7 +341,7 @@ class SubscriptionRepository @Inject constructor(
                 providerDuplicates = providerDuplicates,
                 globalDuplicates = globalDuplicates,
                 globallyUniqueCount = globallyUniqueCount,
-                usedCache = providerReports.any { it.source != "network" },
+                usedCache = providerReports.any { it.source == "encrypted_body" || it.source == "aggregate_cache" },
                 completedAt = System.currentTimeMillis()
             )
             logCollector.info(
@@ -463,18 +463,18 @@ class SubscriptionRepository @Inject constructor(
 
     private suspend fun fetchAndParseWithReport(
         sub: ProviderSubscription
-    ): Pair<SubscriptionParser.ParseOutcome, String> {
-        val (body, sourceUrl) = fetchWithFallback(sub)
+    ): SubscriptionParser.ParseOutcome {
+        val (body, _) = fetchWithFallback(sub)
         val outcome = parser.parseWithReport(body, providerTag = sub.name)
         logCollector.info(
             TAG,
             "Fetch succeeded: provider=${sub.name}, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${outcome.configs.size}, contentType=subscription-response"
         )
-        return outcome to sourceUrl
+        return outcome
     }
 
     suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
-        fetchAndParseWithReport(sub).first.configs
+        fetchAndParseWithReport(sub).configs
 
     private fun SubscriptionParser.ParseReport.toProviderSummary(
         providerName: String,
