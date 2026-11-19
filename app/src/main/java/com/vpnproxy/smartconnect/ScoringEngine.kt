@@ -173,11 +173,11 @@ class ScoringEngine @Inject constructor(
                 val observedSuccessRate = successRate(latencyResult.config, evidenceBucket)
                 // Continuity: success history weighs as much as raw RTT — free nodes
                 // often answer TCP/HTTP probes while collapsing under real traffic later.
-                val score = (
+                var score = (
                     0.40f * normalizedLatency +
                         (if (includeSpeedMetric) 0.25f * normalizedSpeed else 0f) +
                         0.35f * observedSuccessRate
-                    ) / if (includeSpeedMetric) 1f else 0.75f
+                    ) / (if (includeSpeedMetric) 1f else 0.75f)
                 val key = historyKey(latencyResult.config, evidenceBucket)
                 val hist = history.computeIfAbsent(key) { loadHistory(latencyResult.config, evidenceBucket) }
                 val attempts = synchronized(hist) { hist.attempts }
