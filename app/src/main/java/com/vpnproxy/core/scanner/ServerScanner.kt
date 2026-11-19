@@ -407,7 +407,15 @@ class ServerScanner @Inject constructor(
             if (restoredByKey.containsKey(sk)) return@forEach
             val lastOk = successHistory.getLong(historyKey(config, bucket), 0L)
             if (lastOk > 0L && now - lastOk in 0..historyTtlMs) {
-                restoredByKey[sk] = ScoredServer(config = config, latencyMs = 1L, speedMbps = 0f, successRate = 0.75f, score = 0.5f)
+                // Historical success is useful for ordering, but it is not a live RTT measurement.
+                // Keep latency/score unknown so stale history cannot masquerade as a 1 ms probe.
+                restoredByKey[sk] = ScoredServer(
+                    config = config,
+                    latencyMs = Long.MAX_VALUE,
+                    speedMbps = 0f,
+                    successRate = 0.75f,
+                    score = 0f
+                )
             }
         }
         if (restoredByKey.isNotEmpty()) {
