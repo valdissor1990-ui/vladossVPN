@@ -742,6 +742,8 @@ class HomeViewModel @Inject constructor(
                 val next = autoSwitcher.switchToNext() ?: return@launch
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
                 ensureServiceRunning()
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "switchServer failed", e)
             }
@@ -764,6 +766,8 @@ class HomeViewModel @Inject constructor(
                 subscriptionRepository.refreshAll()
                 updateAutoSwitcherProviderScope()
                 if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
             } finally {
