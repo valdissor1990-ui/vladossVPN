@@ -6,6 +6,7 @@ import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.smartconnect.DeepProbeEngine
+import com.vpnproxy.smartconnect.PhysicalNetworkSnapshot
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.ScoringEngine.ScoredServer
