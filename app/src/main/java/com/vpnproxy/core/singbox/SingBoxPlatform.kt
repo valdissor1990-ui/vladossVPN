@@ -13,10 +13,10 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
-import android.util.Log
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
+import com.vpnproxy.logging.LogCollectorHolder
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
 import java.net.Inet6Address
@@ -37,6 +37,23 @@ class SingBoxPlatform(
 ) : PlatformInterface {
     companion object { private const val TAG = "SingBoxPlatform" }
 
+    private fun logDebug(message: String) {
+        LogCollectorHolder.get()?.debug(TAG, message)
+    }
+
+    private fun logInfo(message: String) {
+        LogCollectorHolder.get()?.info(TAG, message)
+    }
+
+    private fun logWarn(message: String, throwable: Throwable? = null) {
+        if (throwable == null) LogCollectorHolder.get()?.warn(TAG, message)
+        else LogCollectorHolder.get()?.error(TAG, message, throwable)
+    }
+
+    private fun logError(message: String, throwable: Throwable? = null) {
+        LogCollectorHolder.get()?.error(TAG, message, throwable)
+    }
+
     @Volatile private var tunDescriptor: ParcelFileDescriptor? = null
 
     // One monitor per PlatformInterface instance. The callback and its HandlerThread are
@@ -51,7 +68,7 @@ class SingBoxPlatform(
     override fun usePlatformAutoDetectInterfaceControl(): Boolean {
         val enabled = true
         com.vpnproxy.logging.LogCollectorHolder.get()?.debug(TAG, "PLATFORM-AUTO-DETECT enabled=$enabled")
-        Log.d(TAG, "PLATFORM-AUTO-DETECT enabled=$enabled")
+        logDebug( "PLATFORM-AUTO-DETECT enabled=$enabled")
         return enabled
     }
 
@@ -64,31 +81,31 @@ class SingBoxPlatform(
         if (service == null) {
             val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=not-applicable (no VpnService)"
             collector?.warn(TAG, line)
-            Log.w(TAG, line)
+            logWarn( line)
             return // Proxy-only probes have no TUN to bypass.
         }
 
         val ok = runCatching { service.protect(fd) }
             .onFailure { error ->
                 collector?.error(TAG, "protect(fd=$fd) threw for outbound=<unknown> result=false: ${error.message}")
-                Log.e(TAG, "protect(fd=$fd) threw for outbound=<unknown> result=false", error)
+                logError( "protect(fd=$fd) threw for outbound=<unknown> result=false", error)
             }
             .getOrDefault(false)
 
         val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=$ok"
         if (ok) {
             collector?.info(TAG, line)
-            Log.i(TAG, line)
+            logInfo( line)
         } else {
             collector?.error(TAG, "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
-            Log.e(TAG, "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
+            logError( "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
             error("VpnService.protect($fd) failed; refusing an unprotected outbound socket")
         }
     }
 
     override fun openTun(options: TunOptions): Int {
         try {
-            Log.i(TAG, "openTun requested by libbox")
+            logInfo( "openTun requested by libbox")
             val service = vpnService ?: error("TUN is unavailable in proxy-only probe mode")
 
             val prepareIntent = VpnService.prepare(context)
@@ -177,17 +194,17 @@ class SingBoxPlatform(
             while (excludeIterator.hasNext()) excludes += excludeIterator.next()
             val diagnosticOptions = DiagnosticSettings.load(context)
             val disallowSelf = diagnosticOptions.useDisallowSelfPackage
-            Log.i(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=" + disallowSelf)
+            logInfo( "DIAG USE_DISALLOW_SELF_PACKAGE=" + disallowSelf)
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG USE_DISALLOW_SELF_PACKAGE=$disallowSelf")
-            Log.i(TAG, "DIAG AUTO_DETECT_INTERFACE=" + diagnosticOptions.autoDetectInterface)
+            logInfo( "DIAG AUTO_DETECT_INTERFACE=" + diagnosticOptions.autoDetectInterface)
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG AUTO_DETECT_INTERFACE=${diagnosticOptions.autoDetectInterface}")
-            Log.i(TAG, "DIAG TUN_STACK=" + diagnosticOptions.tunStack)
+            logInfo( "DIAG TUN_STACK=" + diagnosticOptions.tunStack)
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG TUN_STACK=${diagnosticOptions.tunStack}")
-            Log.i(TAG, "DIAG DNS_MODE=" + diagnosticOptions.dnsMode)
+            logInfo( "DIAG DNS_MODE=" + diagnosticOptions.dnsMode)
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG DNS_MODE=${diagnosticOptions.dnsMode}")
-            Log.i(TAG, "DIAG protect_enabled=true")
+            logInfo( "DIAG protect_enabled=true")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG protect_enabled=true")
-            Log.i(TAG, "DIAG disallow_self=" + disallowSelf)
+            logInfo( "DIAG disallow_self=" + disallowSelf)
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "DIAG disallow_self=$disallowSelf")
 
             if (splitTunnelManager != null) {
@@ -201,7 +218,7 @@ class SingBoxPlatform(
                         builder.addAllowedApplication(packageName)
                         allowedAppsCount++
                     } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
-                        Log.w(TAG, "Unknown included package: " + packageName, e)
+                        logWarn( "Unknown included package: " + packageName, e)
                     }
                 }
             } else {
@@ -212,46 +229,46 @@ class SingBoxPlatform(
                         disallowedAppsCount++
                         if (packageName == context.packageName) disallowSelfApplied = true
                     } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
-                        Log.w(TAG, "Unknown excluded package: " + packageName, e)
+                        logWarn( "Unknown excluded package: " + packageName, e)
                     }
                 }
             }
 
-            Log.i(TAG, "BUILDER disallowSelf=$disallowSelfApplied")
+            logInfo( "BUILDER disallowSelf=$disallowSelfApplied")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER disallowSelf=$disallowSelfApplied")
-            Log.i(TAG, "BUILDER allowedApps=$allowedAppsCount")
+            logInfo( "BUILDER allowedApps=$allowedAppsCount")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER allowedApps=$allowedAppsCount")
-            Log.i(TAG, "BUILDER disallowedApps=$disallowedAppsCount")
+            logInfo( "BUILDER disallowedApps=$disallowedAppsCount")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER disallowedApps=$disallowedAppsCount")
-            Log.i(TAG, "BUILDER routes=$configuredRoutes")
+            logInfo( "BUILDER routes=$configuredRoutes")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER routes=$configuredRoutes")
-            Log.i(TAG, "BUILDER dns=$configuredDns")
+            logInfo( "BUILDER dns=$configuredDns")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER dns=$configuredDns")
-            Log.i(TAG, "BUILDER mtu=1400")
+            logInfo( "BUILDER mtu=1400")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER mtu=1400")
-            Log.i(TAG, "BUILDER blocking=$blocking")
+            logInfo( "BUILDER blocking=$blocking")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "BUILDER blocking=$blocking")
-            Log.d(TAG, "Attempting to create TUN interface...")
+            logDebug( "Attempting to create TUN interface...")
             val pfd = try {
                 builder.establish()
             } catch (t: Throwable) {
-                Log.e(TAG, "VpnService.Builder.establish() threw an exception", t)
+                logError( "VpnService.Builder.establish() threw an exception", t)
                 throw t
             }
             if (pfd == null) {
                 val reason = classifyEstablishNull()
-                Log.e(TAG, "establish() returned null → $reason")
+                logError( "establish() returned null → $reason")
                 throw VpnStartException(reason)
             }
             tunDescriptor = pfd
-            Log.d(TAG, "TUN created successfully, fd=${pfd.fd}")
-            Log.i(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
+            logDebug( "TUN created successfully, fd=${pfd.fd}")
+            logInfo( "TUN established: fd=${pfd.fd}, mtu=1400")
             com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, "TUN established: fd=${pfd.fd}, mtu=1400")
             return pfd.fd
         } catch (e: VpnStartException) {
             throw e
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to open TUN / establish VPN interface", t)
+            logError( "Failed to open TUN / establish VPN interface", t)
             throw VpnStartException(
                 VpnFailureReason.CoreError("Sing-box openTun failed: ${t.message}"),
                 t
@@ -291,7 +308,7 @@ class SingBoxPlatform(
     }
 
     fun closeTun() {
-        runCatching { tunDescriptor?.close() }.onFailure { Log.w(TAG, "Failed to close TUN", it) }
+        runCatching { tunDescriptor?.close() }.onFailure { logWarn( "Failed to close TUN", it) }
         tunDescriptor = null
     }
 
@@ -333,7 +350,7 @@ class SingBoxPlatform(
                 override fun onAvailable(network: Network) {
                     if (!isCurrentMonitor(this)) return
                     if (!isPhysicalInternetNetwork(connectivity, network)) {
-                        Log.d(TAG, "DefaultInterfaceMonitor: ignoring non-physical network=$network")
+                        logDebug( "DefaultInterfaceMonitor: ignoring non-physical network=$network")
                         return
                     }
                     monitoredDefaultNetwork = network
@@ -397,7 +414,7 @@ class SingBoxPlatform(
                 interfaceMonitorThread = null
                 monitoredDefaultNetwork = null
                 thread.quitSafely()
-                Log.e(TAG, "DefaultInterfaceMonitor registration failed", t)
+                logError( "DefaultInterfaceMonitor registration failed", t)
                 throw IllegalStateException("Unable to register Android default network monitor: ${t.message}", t)
             }
 
@@ -436,7 +453,7 @@ class SingBoxPlatform(
         }
         if (callback != null && connectivity != null) {
             runCatching { connectivity.unregisterNetworkCallback(callback) }
-                .onFailure { Log.w(TAG, "DefaultInterfaceMonitor unregister failed: ${it.message}") }
+                .onFailure { logWarn( "DefaultInterfaceMonitor unregister failed: ${it.message}") }
         }
         thread?.quitSafely()
         logMonitor("DefaultInterfaceMonitor stopped")
@@ -506,11 +523,11 @@ class SingBoxPlatform(
                 logMonitor("Interface[$index]: name=${entry.first} index=${entry.second} addresses=${entry.third}")
             }
             if (result.isEmpty()) {
-                Log.w(TAG, "getInterfaces returned zero physical interfaces; allNetworks=${connectivity.allNetworks.size}, javaInterfaces=${javaInterfaces.map { it.name }}")
+                logWarn( "getInterfaces returned zero physical interfaces; allNetworks=${connectivity.allNetworks.size}, javaInterfaces=${javaInterfaces.map { it.name }}")
             }
             return InterfaceArray(result.iterator())
         } catch (t: Throwable) {
-            Log.e(TAG, "getInterfaces failed", t)
+            logError( "getInterfaces failed", t)
             com.vpnproxy.logging.LogCollectorHolder.get()?.error(TAG, "getInterfaces failed: ${t.message}")
             throw IllegalStateException("Unable to enumerate Android network interfaces: ${t.message}", t)
         }
@@ -594,11 +611,11 @@ class SingBoxPlatform(
         isExpensive: Boolean
     ) {
         runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
-            .onFailure { Log.e(TAG, "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+            .onFailure { logError( "InterfaceUpdateListener.updateDefaultInterface failed", it) }
     }
 
     private fun logMonitor(message: String) {
-        Log.i(TAG, message)
+        logInfo( message)
         com.vpnproxy.logging.LogCollectorHolder.get()?.info(TAG, message)
     }
 
@@ -638,18 +655,18 @@ class SingBoxPlatform(
     override fun cancelNotification(identifier: String, typeID: Int) = unsupportedUnit("cancelNotification")
 
     private fun <T> unsupported(method: String, fallback: T): T {
-        Log.w(TAG, "unsupported PlatformInterface method: $method")
+        logWarn( "unsupported PlatformInterface method: $method")
         return fallback
     }
     private fun unsupportedUnit(method: String) {
-        Log.w(TAG, "unsupported PlatformInterface method: $method")
+        logWarn( "unsupported PlatformInterface method: $method")
     }
     private fun <T> unsupportedNullable(method: String): T? {
-        Log.w(TAG, "unsupported PlatformInterface method: $method")
+        logWarn( "unsupported PlatformInterface method: $method")
         return null
     }
     private fun unsupported(method: String): Nothing {
-        Log.w(TAG, "unsupported PlatformInterface method: $method")
+        logWarn( "unsupported PlatformInterface method: $method")
         error("unsupported PlatformInterface method: $method")
     }
 
