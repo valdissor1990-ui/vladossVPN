@@ -238,14 +238,21 @@ private val _deviceMetadataConsent = MutableStateFlow(
         // IDs and source URLs identify bundled feeds. A matching display name alone
         // is not sufficient: users may legitimately name their own feed the same way.
         val removed = current.filter { sub ->
+            val hasUserGeneratedId = runCatching {
+                java.util.UUID.fromString(sub.id)
+            }.isSuccess
             sub.id in REMOVED_BUNDLED_IDS ||
-                sub.url in REMOVED_BUNDLED_URLS
+                (sub.url in REMOVED_BUNDLED_URLS && !hasUserGeneratedId)
         }
         val retained = current - removed.toSet()
-        // Remove response bodies and ETags for removed sources using every known
-        // URL-derived cache-key format, including URLs removed by earlier app versions.
-        removed.forEach { removeSubscriptionBodyCache(it.url) }
-        REMOVED_BUNDLED_URLS.forEach(::removeSubscriptionBodyCache)
+        // Never purge a URL cache if a retained user subscription still references it.
+        // This protects a manually added UUID-backed source that happens to reuse a
+        // URL once shipped as a bundled feed.
+        val retainedUserUrls = retained.map { it.url }.toSet()
+        val retiredUrlsToPurge = (removed.map { it.url } + REMOVED_BUNDLED_URLS)
+            .distinct()
+            .filterNot { it in retainedUserUrls }
+        retiredUrlsToPurge.forEach(::removeSubscriptionBodyCache)
         if (retained != current) {
             _subscriptions.value = retained
             saveToPrefs()
