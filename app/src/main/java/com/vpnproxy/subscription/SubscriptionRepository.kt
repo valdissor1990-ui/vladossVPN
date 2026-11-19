@@ -220,10 +220,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
     /** Remove all bundled feeds from existing installations while preserving user-added sources. */
     private fun removeBundledSubscriptions(): Set<String> {
         val current = _subscriptions.value
+        // IDs and source URLs identify bundled feeds. A matching display name alone
+        // is not sufficient: users may legitimately name their own feed the same way.
         val removed = current.filter { sub ->
             sub.id in REMOVED_BUNDLED_IDS ||
-                sub.url in REMOVED_BUNDLED_URLS ||
-                sub.name in REMOVED_BUNDLED_NAMES
+                sub.url in REMOVED_BUNDLED_URLS
         }
         val retained = current - removed.toSet()
         if (retained != current) {
@@ -231,7 +232,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
             saveToPrefs()
             logCollector.info(TAG, "Removed bundled subscriptions: removed=${removed.size}; userSources=${retained.size}")
         }
-        return removed.map { it.name }.toSet()
+        // Cached profiles only retain providerTag (the display name), not source ID.
+        // If a user feed reuses a bundled display name, keep that tag's cache rather
+        // than deleting the user's profiles together with the retired bundled feed.
+        val retainedUserNames = retained.map { it.name }.toSet()
+        return (removed.map { it.name }.toSet() + REMOVED_BUNDLED_NAMES) - retainedUserNames
     }
 
     suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
