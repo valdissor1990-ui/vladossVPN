@@ -18,24 +18,37 @@ object SensitiveMasker {
     /** https?://... — обрезаем до host, маскируем query/path. */
     private val URL_REGEX = Regex("https?://[^\\s\"']+")
 
-    /** pbk=XXXX или publicKey=XXXX / "publicKey": "XXXX" — захватываем значение в группу. */
+    /** Reality public key in URI/query or JSON-like log output. */
     private val REALITY_KEY_REGEX = Regex(
-        """(?:pbk=|publicKey["']?\\s*[:=]\\s*["']?)([A-Za-z0-9_\\-]+)""",
+        """(?:pbk|publicKey|public_key)["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]+)""",
         RegexOption.IGNORE_CASE
     )
 
-    /** sid=XXXX или shortId=XXXX / "shortId": "XXXX". */
+    /** Short ID in URI query or JSON-like log output. */
     private val SHORT_ID_REGEX = Regex(
-        """(?:^|[^A-Za-z0-9_])sid=([a-fA-F0-9]{6,})""",
+        """(?:^|[^A-Za-z0-9_])["']?(?:sid|shortId|short_id)["']?\s*[:=]\s*["']?([a-fA-F0-9]{6,})""",
         RegexOption.IGNORE_CASE
+    )
+
+    /** Credential-like key/value pairs, including quoted JSON keys and bearer tokens. */
+    private val SECRET_PARAMETER_REGEX = Regex(
+        """(?i)["']?(uuid|password|passwd|secret|access[-_]token|refresh[-_]token|client[-_]secret|private[-_]key|authorization|auth|api[-_]key|obfs[-_]password|session(?:_?id)?_?key)["']?\s*([=:]\s*|\s+)(?:Bearer\s+)?(?:"([^"]*)"|'([^']*)'|([^\s,;&}]+))"""
+    )
+
+    /** Public/private IPv4 literals in diagnostic text; loopback remains useful for local proxy debugging. */
+    private val IPV4_REGEX = Regex(
+        """(?<![A-Za-z0-9_.])(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(?![A-Za-z0-9_.])"""
+    )
+    /** IPv6 literals, including bracketed addresses retained as URL authorities. */
+    private val IPV6_REGEX = Regex(
+        """(?<![A-Za-z0-9:])(?:[0-9A-Fa-f]{1,4}:){2,}[0-9A-Fa-f:]{0,}(?![A-Za-z0-9:])"""
     )
 
     /** token=XXX / token: XXX. */
     private val TOKEN_REGEX = Regex(
-        """(?:token[=:]\\s*)([A-Za-z0-9_\\-]+)""",
+        """(?:token[=:]\s*)([A-Za-z0-9_\-]+)""",
         RegexOption.IGNORE_CASE
     )
-
     /**
      * Заменяет чувствительные значения на ***.
      * Безопасно вызывается многократно; никаких исключений не бросает.
@@ -57,13 +70,24 @@ object SensitiveMasker {
                 val schemeEnd = url.indexOf("://") + 3
                 if (schemeEnd in 1 until url.length) {
                     val afterScheme = url.substring(schemeEnd)
-                    val hostEnd = afterScheme.indexOfFirst { it == '/' || it == '?' || it == '#' }
-                    val host = if (hostEnd > 0) afterScheme.substring(0, hostEnd) else afterScheme
-                    val hostOnly = host.substringBefore(':')
-                    if (hostOnly == "127.0.0.1" || hostOnly.equals("localhost", ignoreCase = true)) {
+                    val authorityEnd = afterScheme.indexOfFirst { it == '/' || it == '?' || it == '#' }
+                    val authority = if (authorityEnd > 0) afterScheme.substring(0, authorityEnd) else afterScheme
+                    // Never retain URL user-info (user:password@host), even for local proxy URLs.
+                    val hostAndPort = authority.substringAfterLast('@')
+                    val hostOnly = if (hostAndPort.startsWith("[")) {
+                        hostAndPort.substringBefore("]") + "]"
+                    } else {
+                        hostAndPort.substringBefore(':')
+                    }
+                    val isBareLocalProxy = (hostOnly == "127.0.0.1" ||
+                        hostOnly.equals("localhost", ignoreCase = true)) &&
+                        authority == hostAndPort && authorityEnd < 0
+                    if (isBareLocalProxy) {
+                        // Preserve a bare local proxy endpoint, but never preserve local URL
+                        // paths or query strings: those can still carry credentials.
                         url
                     } else {
-                        "${url.substring(0, schemeEnd)}$host/***"
+                        "${url.substring(0, schemeEnd)}$hostAndPort/***"
                     }
                 } else "***URL***"
             }
@@ -83,7 +107,26 @@ object SensitiveMasker {
                 full.substring(0, prefixLen) + "***SID***"
             }
 
-            // 5. token
+            // 5. Generic credential-like parameters.
+            result = SECRET_PARAMETER_REGEX.replace(result) { m ->
+                m.groupValues[1] + m.groupValues[2] + "***SECRET***"
+            }
+
+            // 6. IP addresses. Keep only the loopback endpoints needed to diagnose local proxy routing.
+            result = IPV4_REGEX.replace(result) { match ->
+                if (match.value == "127.0.0.1" || match.value == "0.0.0.0") match.value else "***IP***"
+            }
+            result = IPV6_REGEX.replace(result) { match ->
+                val value = match.value
+                // Do not mistake clock values such as 12:34:56 for IPv6.
+                if (value == "::1" || (!value.contains("::") && value.count { it == ':' } < 7)) {
+                    value
+                } else {
+                    "***IPV6***"
+                }
+            }
+
+            // 7. token
             result = TOKEN_REGEX.replace(result) { m ->
                 val full = m.value
                 val prefixLen = full.length - m.groupValues[1].length
@@ -92,8 +135,8 @@ object SensitiveMasker {
 
             result
         } catch (t: Throwable) {
-            // Маскировщик НИКОГДА не должен ронять приложение — лучше вернуть оригинал
-            "[masker-error:${t.javaClass.simpleName}] $input"
+            // Fail closed: never return the unmasked input when sanitization fails.
+            "[masker-error:${t.javaClass.simpleName}; content redacted]"
         }
     }
 }
