@@ -629,7 +629,7 @@ class SubscriptionParser @Inject constructor(
      * only firstOrNull() silently discarded every remaining candidate.
      */
     private fun extractAllFromJsonObject(obj: JsonObject, providerTag: String): List<ParsedConfig> {
-        val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull
+        val protocol = (obj["protocol"] as? JsonPrimitive)?.contentOrNull
         if (!protocol.equals("vless", ignoreCase = true)) {
             return listOfNotNull(extractFromJsonObject(obj, providerTag))
         }
@@ -655,7 +655,7 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun countJsonCandidates(obj: JsonObject): Int {
-        if (!obj["protocol"]?.jsonPrimitive?.contentOrNull.equals("vless", ignoreCase = true)) return 1
+        if (!(obj["protocol"] as? JsonPrimitive)?.contentOrNull.equals("vless", ignoreCase = true)) return 1
         val vnext = (obj["settings"] as? JsonObject)?.get("vnext") as? JsonArray ?: return 1
         val count = vnext.sumOf { rawNode ->
             ((rawNode as? JsonObject)?.get("users") as? JsonArray)?.size ?: 0
