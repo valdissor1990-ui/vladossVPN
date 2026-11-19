@@ -178,49 +178,49 @@ class SubscriptionParser @Inject constructor(
 
     private fun classifyJsonRejection(obj: JsonObject): String {
         return try {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
-        if (!type.isNullOrBlank()) {
-            if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
-            if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
-            val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return "missing_port"
-            if (port !in 1..65535) return "invalid_port"
-            if (obj["uuid"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
-            val reality = obj["tls"]?.jsonObject?.get("reality")?.jsonObject
-            if (reality?.get("enabled")?.jsonPrimitive?.booleanOrNull == true &&
-                reality["public_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_reality_public_key"
-            return "invalid_or_malformed_entry"
-        }
-        val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull ?: return "missing_protocol"
-        if (!protocol.equals("vless", ignoreCase = true) && !protocol.equals("hysteria", ignoreCase = true)) return "unsupported_protocol"
-        if (protocol.equals("hysteria", ignoreCase = true)) {
+            val type = obj["type"]?.jsonPrimitive?.contentOrNull
+            if (!type.isNullOrBlank()) {
+                if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
+                if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+                val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: return "missing_port"
+                if (port !in 1..65535) return "invalid_port"
+                if (obj["uuid"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+                val reality = obj["tls"]?.jsonObject?.get("reality")?.jsonObject
+                if (reality?.get("enabled")?.jsonPrimitive?.booleanOrNull == true &&
+                    reality["public_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_reality_public_key"
+                return "invalid_or_malformed_entry"
+            }
+            val protocol = obj["protocol"]?.jsonPrimitive?.contentOrNull ?: return "missing_protocol"
+            if (!protocol.equals("vless", ignoreCase = true) && !protocol.equals("hysteria", ignoreCase = true)) return "unsupported_protocol"
+            if (protocol.equals("hysteria", ignoreCase = true)) {
+                val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+                val stream = obj["streamSettings"]?.jsonObject
+                val version = settings["version"]?.jsonPrimitive?.intOrNull
+                    ?: stream?.get("hysteriaSettings")?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull
+                if (version != 2) return "unsupported_protocol_version"
+                if (settings["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    settings["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_server"
+                if (settings["auth"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    settings["password"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
+                    stream?.get("hysteriaSettings")?.jsonObject?.get("auth")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+                ) return "missing_credentials"
+                return "invalid_or_malformed_entry"
+            }
             val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
+            val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_server"
+            if (vnext["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
+            val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_credentials"
+            if (user["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
+            val port = vnext["port"]?.jsonPrimitive?.intOrNull ?: 443
+            if (port !in 1..65535) return "invalid_port"
             val stream = obj["streamSettings"]?.jsonObject
-            val version = settings["version"]?.jsonPrimitive?.intOrNull
-                ?: stream?.get("hysteriaSettings")?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull
-            if (version != 2) return "unsupported_protocol_version"
-            if (settings["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                settings["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_server"
-            if (settings["auth"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                settings["password"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() &&
-                stream?.get("hysteriaSettings")?.jsonObject?.get("auth")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-            ) return "missing_credentials"
-            return "invalid_or_malformed_entry"
-        }
-        val settings = obj["settings"]?.jsonObject ?: return "missing_required_settings"
-        val vnext = settings["vnext"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_server"
-        if (vnext["address"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
-        val user = vnext["users"]?.jsonArray?.firstOrNull()?.jsonObject ?: return "missing_credentials"
-        if (user["id"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_credentials"
-        val port = vnext["port"]?.jsonPrimitive?.intOrNull ?: 443
-        if (port !in 1..65535) return "invalid_port"
-        val stream = obj["streamSettings"]?.jsonObject
-        val reality = stream?.get("realitySettings")?.jsonObject
-        if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
-            reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
-        ) return "missing_reality_public_key"
-        "invalid_or_malformed_entry"
+            val reality = stream?.get("realitySettings")?.jsonObject
+            if (stream?.get("security")?.jsonPrimitive?.contentOrNull.equals("reality", ignoreCase = true) &&
+                reality?.get("publicKey")?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            ) return "missing_reality_public_key"
+            "invalid_or_malformed_entry"
         } catch (_: Exception) {
             "invalid_or_malformed_entry"
         }
