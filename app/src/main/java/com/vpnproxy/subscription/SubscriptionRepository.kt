@@ -396,16 +396,28 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     val sendDeviceMetadata = _deviceMetadataConsent.value
                     val cacheKey = subscriptionCacheKey(sourceUrl)
                     val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
-                    if (legacyCacheKey != cacheKey) {
-                        encryptedPrefs.edit()
-                            .remove("subscription_body_$legacyCacheKey")
-                            .remove("subscription_etag_$legacyCacheKey")
-                            .apply()
-                    }
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
-                    val cachedBody = encryptedPrefs.getString(bodyKey, null)
-                    val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                    val legacyBodyKey = "subscription_body_$legacyCacheKey"
+                    val legacyEtagKey = "subscription_etag_$legacyCacheKey"
+                    val currentBody = encryptedPrefs.getString(bodyKey, null)
+                    val currentEtag = encryptedPrefs.getString(etagKey, null)
+                    // Migrate the old hashCode-keyed cache before cleanup. Deleting the
+                    // legacy entry before a network request succeeds would erase the only
+                    // offline copy for users upgrading from older app versions.
+                    val legacyBody = if (legacyCacheKey != cacheKey) {
+                        encryptedPrefs.getString(legacyBodyKey, null)
+                    } else null
+                    val legacyEtag = if (legacyCacheKey != cacheKey) {
+                        encryptedPrefs.getString(legacyEtagKey, null)
+                    } else null
+                    val cachedBody = currentBody ?: legacyBody
+                    val cachedEtag = currentEtag ?: legacyEtag
+                    if (legacyCacheKey != cacheKey && !cachedBody.isNullOrBlank()) {
+                        val migration = encryptedPrefs.edit().putString(bodyKey, cachedBody)
+                        if (!cachedEtag.isNullOrBlank()) migration.putString(etagKey, cachedEtag)
+                        migration.remove(legacyBodyKey).remove(legacyEtagKey).apply()
+                    }
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
