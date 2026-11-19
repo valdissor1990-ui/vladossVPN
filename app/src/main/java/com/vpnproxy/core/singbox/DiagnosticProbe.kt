@@ -16,9 +16,11 @@ data class TrafficProbeResult(val success: Boolean, val endpoint: String, val st
 }
 
 object DiagnosticProbe {
+    // AndroidManifest disables cleartext traffic. Keep every diagnostic endpoint HTTPS,
+    // otherwise the first two probes fail locally before they can test the VPN route.
     private val endpoints = listOf(
-        "http://cp.cloudflare.com/generate_204",
-        "http://neverssl.com",
+        "https://cp.cloudflare.com/generate_204",
+        "https://connectivitycheck.gstatic.com/generate_204",
         "https://www.gstatic.com/generate_204"
     )
 
