@@ -37,7 +37,7 @@ object SensitiveMasker {
 
     /** Domain values attached to endpoint-related keys in diagnostic messages. */
     private val HOST_PARAMETER_REGEX = Regex(
-        """(?i)\b(server(?:_name|Name)?|hostname|address|host|sni|domain)(\s*[=:]\s*)((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?::\d{1,5})?"""
+        """(?i)["']?\b(server(?:_name|Name)?|hostname|address|host|sni|domain)["']?(\s*[=:]\s*)["']?((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?::\d{1,5})?["']?"""
     )
 
     /** Public/private IPv4 literals in diagnostic text; loopback remains useful for local proxy debugging. */
