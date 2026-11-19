@@ -79,7 +79,7 @@ class SingBoxCore(
                 setupComplete = true
                 Log.i(TAG, "Libbox.setup() completed")
             } catch (t: Throwable) {
-                Log.e(TAG, "JNI failure during Libbox initialization", t)
+                LogCollectorHolder.get()?.error(TAG, "JNI failure during Libbox initialization", t)
                 throw t
             }
         }
@@ -130,14 +130,14 @@ class SingBoxCore(
             // process recreation, and log export in release as well as debug builds.
             val safeLine = SensitiveMasker.mask("[LIBBOX] $line")
             runCatching { appendNativeLogLine(safeLine) }
-                .onFailure { Log.e(TAG, "Could not persist native callback line", it) }
+                .onFailure { logCollector?.error(TAG, "Could not persist native callback line", it) }
             try {
                 logCollector?.debug("LIBBOX", safeLine)
                 if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
                     logCollector?.error("LIBBOX", "exact handshake failure: $safeLine")
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "writeDebugMessage could not append to LogCollector; callback suppressed", t)
+                logCollector?.error(TAG, "writeDebugMessage could not append to LogCollector; callback suppressed", t)
             }
             try {
                 Log.d(TAG, safeLine)
@@ -323,7 +323,7 @@ class SingBoxCore(
             throw c
         } catch (t: Throwable) {
             logCollector?.error(TAG, "Core lifecycle: start failed: ${t.message}")
-            Log.e(TAG, "Failed to initialize/start libbox", t)
+            logCollector?.error(TAG, "Failed to initialize/start libbox", t)
             server?.let { created ->
                 runCatching { created.closeService() }
                     .onFailure { logCollector?.warn(TAG, "CommandServer.closeService cleanup failed: ${it.message}") }
