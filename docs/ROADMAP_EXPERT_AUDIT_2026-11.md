@@ -340,3 +340,20 @@ PR #174 намеренно не включён: его persistent scan-cache reu
 - server-list full scan и deep probe не запускаются при активном/переходящем VPN; initial scan ждёт полного завершения transition.
 
 Build validation также проверяет Play Release merged manifest без подписания release APK. Подписанный Play release по-прежнему заблокирован до предоставления keystore и заполнения Play Console деклараций.
+
+### 2026-11-19 — CI завершён, Debug APK подготовлены для пользовательской проверки
+
+На точном HEAD `2ef98b853b54d9adbcfe80102aab06531a034d71` PR #197 все 7 GitHub Actions checks завершились успешно:
+- Unit Tests;
+- Pull Request Build Validation;
+- Dependency Audit;
+- SCA and SBOM;
+- Gradle Dependency Graph;
+- Security Branch Validation;
+- CodeQL.
+
+В Build Validation успешно собраны Direct Debug и Play Debug APK, обработан Play Release merged manifest и проверены ограничения разрешений. APK-артефакты workflow run `44515622704`: Direct artifact `14525627963`, Play artifact `14525332985`. Для пользователя подготовлены ARM64 APK из этих артефактов. SHA-256:
+- Direct ARM64 Debug: `ccfe155b3d5b3e2a367dca7795bc6706db67936850f1e09c9813e18b248d6852`;
+- Play ARM64 Debug: `1071ad82c57326fd7aa7ceae86dd2f0c5b261cea7b237fdae0a72fea75834871`.
+
+Unit Tests запущены GitHub Actions и завершились успешно на этом exact HEAD. Ручные тесты и Android device validation не выполнялись. PR #197 остаётся Draft, в main ничего не слито. Следующий этап — пользовательская проверка APK на устройстве; по её результатам фиксировать только воспроизводимые дефекты отдельными PR.
