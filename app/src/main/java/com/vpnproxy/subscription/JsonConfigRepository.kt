@@ -188,6 +188,8 @@ class JsonConfigRepository @Inject constructor(
                     logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
                     parsed.size
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "JSON import failed", e)
                 null
