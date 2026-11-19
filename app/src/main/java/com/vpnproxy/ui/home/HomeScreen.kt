@@ -31,8 +31,6 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -101,7 +99,6 @@ fun HomeScreen(
     var subscriptionMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
-    var pinnedId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
     LaunchedEffect(uiState.notice) {
@@ -224,10 +221,6 @@ fun HomeScreen(
                         menuExpanded = subscriptionMenu,
                         onMenuExpanded = { subscriptionMenu = it },
                         onSelectSubscription = { viewModel.setAutomaticSubscription(it) },
-                        pinned = selected != null && pinnedId == selected.id,
-                        onTogglePin = {
-                            pinnedId = if (selected != null && pinnedId == selected.id) null else selected?.id
-                        },
                         refreshing = uiState.isRefreshingSubscription,
                         scanning = uiState.isScanningServers,
                         onRefresh = { viewModel.refreshSubscription() },
@@ -329,8 +322,6 @@ private fun SubscriptionHeader(
     menuExpanded: Boolean,
     onMenuExpanded: (Boolean) -> Unit,
     onSelectSubscription: (String) -> Unit,
-    pinned: Boolean,
-    onTogglePin: () -> Unit,
     refreshing: Boolean,
     scanning: Boolean,
     onRefresh: () -> Unit,
@@ -377,13 +368,6 @@ private fun SubscriptionHeader(
             Column(Modifier.weight(1f).clickable { onMenuExpanded(true) }) {
                 Text(title, color = HappInk, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("$updated | Автообновление", color = HappMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            IconButton(onClick = onTogglePin, enabled = subscription != null) {
-                Icon(
-                    if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = "Закрепить",
-                    tint = if (pinned) Color(0xFF7C6BF2) else HappMuted
-                )
             }
             IconButton(onClick = onRefresh, enabled = !refreshing) {
                 if (refreshing) {
