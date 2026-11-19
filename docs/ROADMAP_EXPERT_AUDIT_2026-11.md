@@ -252,7 +252,7 @@
 - `ServerScanner` переносит evidence в `ScoredServer`, не переиспользует кэш без typed evidence как текущий ping и отбрасывает preflight-результаты, если сеть сменилась во время проверки.
 - Отдельно сохранён правильный интервал speed measurement: время запуска временного Sing-box core не входит в throughput.
 
-Текущий HEAD PR #188: `6241da448349b6458bc0258f716107cbe11f65ec`. PR остаётся Draft. Для stacked PR пока не опубликованы GitHub Actions runs/status checks; CI не подтверждён. Ручные тесты и APK/device validation не выполнялись.
+Текущий HEAD PR #188: `5bdb915e82fb004c34817bbc2d97b513ecb09c1c`. PR остаётся Draft. Для stacked PR пока не опубликованы GitHub Actions runs/status checks; CI не подтверждён. Ручные тесты и APK/device validation не выполнялись.
 
 Ограничение: generation увеличивается при наблюдаемом изменении network identity. Callback-driven epoch ещё не подключён; быстрый A→B→A переход, целиком прошедший между snapshots, теоретически может быть пропущен. Это остаётся обязательной частью P2.4 перед релизом.
 
