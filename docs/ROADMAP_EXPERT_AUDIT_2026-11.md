@@ -42,8 +42,8 @@
 ### P2 — Интегрированный Smart Autopilot
 
 - [x] P2.1 Проследить реальные call sites ScoringEngine, DeepProbeEngine, ServerScanner и AutoSwitcher; документировать, какие метрики реально участвуют в каждом решении.
-- [ ] P2.2 Устранить расхождение между заявленным composite score и фактически передаваемыми метриками (в частности, отсутствующими speed/history/deep-probe данными).
-- [ ] P2.3 Определить единый ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
+- [x] P2.2 Зафиксировать единый контракт измерений и скоринга; определить безопасное применение preflight, active health-check и deep diagnostic. Документ: `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`.
+- [ ] P2.3 Реализовать типизированный ProbeResult/ServerQuality contract с latency, jitter, loss, throughput, traffic validation, confidence, timestamp и network identity.
 - [ ] P2.4 Обеспечить, чтобы автоматический выбор учитывал только свежие результаты текущего типа сети; Wi-Fi и cellular не смешивать.
 - [ ] P2.5 Проверить hysteresis, cooldown, quarantine и защиту от thrashing; показывать объяснение «почему выбран этот сервер».
 - Критерий: каждый score имеет объяснимые исходные измерения; отсутствие метрики не подменяется фиктивным успехом.
@@ -191,7 +191,7 @@
 - изолированный `testLatency()` для альтернативных профилей оставлен без изменений;
 - `HealthMonitor.checkSelectedServer()` переключён на проверку уже работающего туннеля.
 
-CI для актуального HEAD PR #185 запущен автоматически: Unit Tests и Gradle Dependency Graph — success, CodeQL, Dependency Audit, Security Branch Validation, Build Validation и SCA/SBOM выполняются; более ранние runs на SHA `7160f6a6ea6b4f0a27507c4765d7745b14bba157` отменены после нового commit. Ручные тесты и runtime-проверки не проводились. PR остаётся Draft и не слит.
+На актуальном HEAD PR #185 (`02a1a9670a608df7ba0d0923ed6d0a98b1533242`) все 7/7 GitHub Actions checks завершились успешно. Ручные тесты и runtime-проверки не проводились. PR остаётся Draft и не слит.
 
 ### 2026-11-19 — P2.1: статический аудит реального scoring pipeline
 
@@ -215,6 +215,23 @@ CI для актуального HEAD PR #185 запущен автоматич�
 
 Ручные тесты не запускались; runtime поведение не проверялось.
 
+### 2026-11-19 — P2.2: контракт измерений Smart Autopilot
+
+Создан документ `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md` в ветке roadmap:
+- Разделены preflight профиля, health-check активного туннеля и ручной DeepProbe-диагностики.
+- Зафиксированы обязательные метаданные измерений: полный ключ профиля, network bucket/epoch, timestamp, метод, endpoint set, sample counts и доступность каждой метрики.
+- Запрещено сравнивать результаты разных сетей, поколений сканирования и разных методов как единый score.
+- Зафиксировано, что отсутствие throughput-измерения — это unknown, а не нулевая скорость.
+- Описан безопасный путь recovery через свежие preflight-кандидаты текущей сети; если данные устарели, запрещено переключение наугад.
+- Объявленные в `AutoSwitcherConfig` параметры URLTest не имеют production call sites; `SingboxConfigBuilder.buildVpn()` пока не создаёт urltest group/standby outbounds. Их внедрение выделено в отдельное архитектурное решение.
+
+Дополнительно подтверждены риски текущей реализации:
+- `ScoringEngine.rankAll()` тестирует throughput только у top-5 latency-кандидатов, но включает в итоговый score все latency-кандидаты; непроверенные по скорости получают speed=0. Такой score не является честным сравнением при частичных данных.
+- История `ScoringEngine` привязана к полному ключу профиля, но не к network bucket; качество на Wi-Fi может влиять на оценку того же профиля в cellular.
+- `rankInBackground()` после Connected блокируется, пока активен основной core; это не должно маскироваться фиктивным запуском isolated probes.
+
+P2.2 завершён как проектирование контракта. Кодовая реализация начинается в P2.3/P2.4 после проверки существующих моделей и совместимости с текущими call sites. Никакие runtime свойства не заявляются.
+
 ## Текущий статус
 
-План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 — статический аудит scoring pipeline завершён; выявлены три несогласованные модели оценки и отдельное несоответствие active health-check. Draft PR #185 исправляет последний пункт; CI выполняется. Никакие PR не слиты автоматически.
+План зафиксирован отдельной веткой и опубликован в Draft PR #183. P0.2: PR #180 — CI 7/7 успешно. P0.3: PR #169 — CI 7/7 успешно, включая CodeQL. P1.1 и P1.2 выполнены; P1.3 начат в Draft PR #184 (подписки + прямой JSON-импорт, privacy log cleanup), CI не подтверждён. P2.1 и P2.2 завершены на уровне статического аудита и проектного контракта; создан `docs/SMART_AUTOPILOT_SCORING_CONTRACT.md`. PR #185 исправляет active health-check, его CI 7/7 успешно. P2.3/P2.4 — реализация единого контракта и network-scoped scoring ещё впереди. Никакие PR не слиты автоматически.
