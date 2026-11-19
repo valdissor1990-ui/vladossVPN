@@ -1,10 +1,8 @@
 name: Unit Tests
 
+# Tests remain available manually; do not execute them until explicitly authorized.
 on:
-  push:
-    branches: [ main, 'feat/**', 'chore/**' ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   unit-tests:
