@@ -29,6 +29,8 @@ fun SubscriptionsScreen(
     val refreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
+    val importReport by viewModel.importReport.collectAsStateWithLifecycle()
+    val jsonImportReport by viewModel.jsonImportReport.collectAsStateWithLifecycle()
     val scannedServers by viewModel.scannedServers.collectAsStateWithLifecycle()
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
     // TCP reachability is a hint only; keep unverified profiles in the candidate set.
@@ -124,6 +126,132 @@ fun SubscriptionsScreen(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
+            }
+
+            importReport?.let { report ->
+                item(key = "subscription-import-report") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Отчёт последнего обновления", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Получено записей: ${report.candidateCount?.toString() ?: "не определено"}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Распознано: ${report.acceptedCount}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Отклонено: ${report.rejectedCount?.toString() ?: "не определено"}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Дубликаты источников: ${report.providerDuplicates}; совпадения между источниками: ${report.globalDuplicates}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Уникальных профилей: ${report.globallyUniqueCount}", style = MaterialTheme.typography.bodySmall)
+                            if (report.usedCache) {
+                                Text("Часть профилей восстановлена из кэша", color = WarningYellow, style = MaterialTheme.typography.bodySmall)
+                            }
+                            report.providers.forEach { provider ->
+                                HorizontalDivider()
+                                Text(provider.providerName, style = MaterialTheme.typography.titleSmall)
+                                val sourceLabel = when (provider.source) {
+                                    "network" -> "загружено из сети"
+                                    "etag_cache" -> "ответ не изменился, использован ETag-кэш"
+                                    "encrypted_body" -> "восстановлено из защищённого кэша"
+                                    "aggregate_cache" -> "восстановлено из локального кэша"
+                                    else -> "не обновлено"
+                                }
+                                val formatLabel = when (provider.format) {
+                                    "uri" -> "URI-ссылки"
+                                    "json" -> "JSON"
+                                    "clash_yaml" -> "Clash YAML"
+                                    "aggregate_cache" -> "локальный кэш"
+                                    "empty" -> "пустой ответ"
+                                    else -> "не определён"
+                                }
+                                Text(
+                                    "Источник: $sourceLabel; формат: $formatLabel",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                                Text(
+                                    "Кандидаты: ${provider.candidateCount?.toString() ?: "н/д"}; принято: ${provider.acceptedCount}; отклонено: ${provider.rejectedCount?.toString() ?: "н/д"}; дубликаты: ${provider.duplicateCount}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if (provider.protocolCounts.isNotEmpty()) {
+                                    Text(
+                                        "Протоколы: " + provider.protocolCounts.entries.sortedBy { it.key }
+                                            .joinToString { "${it.key} ${it.value}" },
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                                provider.rejectionReasons.forEach { (reason, count) ->
+                                    val reasonLabel = when (reason) {
+                                        "unsupported_scheme" -> "Неподдерживаемая схема ссылки"
+                                        "unsupported_protocol" -> "Неподдерживаемый протокол"
+                                        "unsupported_protocol_version" -> "Неподдерживаемая версия протокола"
+                                        "malformed_uri" -> "Некорректная структура ссылки"
+                                        "invalid_query_parameters" -> "Некорректные параметры ссылки"
+                                        "missing_server" -> "Не указан адрес сервера"
+                                        "missing_port" -> "Не указан порт сервера"
+                                        "invalid_port" -> "Некорректный порт сервера"
+                                        "missing_credentials" -> "Не указаны обязательные данные доступа"
+                                        "missing_reality_public_key" -> "Не указан публичный ключ Reality"
+                                        "missing_protocol" -> "Не указан протокол"
+                                        "missing_required_settings" -> "Отсутствуют обязательные настройки"
+                                        "invalid_or_malformed_entry" -> "Некорректные параметры профиля"
+                                        "malformed_or_unclassified_entry" -> "Не удалось определить причину отклонения"
+                                        "invalid_or_unsupported_uri" -> "Некорректные или неподдерживаемые URI"
+                                        "invalid_or_unsupported_json_entry" -> "Некорректные или неподдерживаемые JSON-записи"
+                                        "invalid_or_unsupported_clash_proxy" -> "Некорректные или неподдерживаемые Clash-профили"
+                                        else -> "Формат не распознан или повреждён"
+                                    }
+                                    Text("$reasonLabel: $count", style = MaterialTheme.typography.labelSmall)
+                                }
+                                provider.failureCode?.let { code ->
+                                    val failureLabel = when (code) {
+                                        "SocketTimeoutException" -> "Истёк срок ожидания ответа"
+                                        "ConnectException" -> "Не удалось подключиться к источнику"
+                                        "IOException" -> "Ошибка загрузки источника"
+                                        else -> "Не удалось обновить источник"
+                                    }
+                                    Text(failureLabel, color = WarningYellow, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            jsonImportReport?.let { report ->
+                item(key = "json-import-report") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Отчёт последнего JSON-импорта", style = MaterialTheme.typography.titleMedium)
+                            Text("Формат: ${report.detectedFormat}; Base64: ${if (report.decodedBase64) "да" else "нет"}", style = MaterialTheme.typography.bodySmall)
+                            Text("Кандидаты: ${report.candidateCount?.toString() ?: "н/д"}; принято: ${report.acceptedCount}; отклонено: ${report.rejectedCount?.toString() ?: "н/д"}", style = MaterialTheme.typography.bodySmall)
+                            if (report.protocolCounts.isNotEmpty()) {
+                                Text(
+                                    "Протоколы: " + report.protocolCounts.entries.sortedBy { it.key }
+                                        .joinToString { "${it.key} ${it.value}" },
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            report.rejectionReasons.forEach { (reason, count) ->
+                                Text("Причина: ${reason.replace('_', ' ')} — $count", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
             }
             if (subs.isEmpty()) {
                 item {
