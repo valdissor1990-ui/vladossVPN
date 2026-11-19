@@ -54,9 +54,14 @@ object SingboxProxyClient {
             LogCollectorHolder.get()?.info(TAG, "Temporary proxy-only Sing-box ready on all " + ports.size + " inbounds: " + ports)
             true
         } catch (interrupted: InterruptedException) {
-            Thread.currentThread().interrupt()
             LogCollectorHolder.get()?.warn(TAG, "Temporary Sing-box startup interrupted")
-            runCatching { core.stop() }
+            // InterruptedException clears the thread flag. Keep it cleared while stop()
+            // performs its cleanup, then restore the flag before propagating cancellation.
+            try {
+                runCatching { core.stop() }
+            } finally {
+                Thread.currentThread().interrupt()
+            }
             throw CancellationException("Temporary Sing-box startup interrupted").also {
                 it.initCause(interrupted)
             }
