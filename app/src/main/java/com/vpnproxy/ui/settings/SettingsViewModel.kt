@@ -12,6 +12,7 @@ import com.vpnproxy.smartconnect.BatteryPolicy
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,7 +52,9 @@ class SettingsViewModel @Inject constructor(
     val deviceMetadataConsent: StateFlow<Boolean> = subscriptionRepository.deviceMetadataConsent
 
     fun setDeviceMetadataConsent(enabled: Boolean) {
-        subscriptionRepository.setDeviceMetadataConsent(enabled)
+        viewModelScope.launch(Dispatchers.IO) {
+            subscriptionRepository.setDeviceMetadataConsent(enabled)
+        }
     }
 
     private val _batteryEconomyMode = MutableStateFlow(BatteryPolicy.isEconomyModeEnabled(context))
