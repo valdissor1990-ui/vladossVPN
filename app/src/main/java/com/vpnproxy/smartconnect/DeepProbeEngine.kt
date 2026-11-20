@@ -10,6 +10,9 @@ import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -136,13 +139,20 @@ class DeepProbeEngine @Inject constructor(
 
     private val running = AtomicBoolean(false)
     private val cancellationGeneration = AtomicLong(0L)
+    // cancel() is called from ViewModel.onCleared(), which normally runs on Main.
+    // SingboxProxyClient.stop() is synchronized with startup/native teardown and may block;
+    // keep that wait off the UI thread.
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Cancel the active probe without releasing its slot before its coroutine has exited. */
+    /** Cancel the active probe without blocking the caller or releasing its slot early. */
     fun cancel() {
         cancellationGeneration.incrementAndGet()
         if (running.get()) {
-            runCatching { SingboxProxyClient.stop(context) }
-            logCollector.info(TAG, "DeepProbe cancellation requested — temporary core stopped")
+            cleanupScope.launch {
+                runCatching { SingboxProxyClient.stop(context) }
+                    .onFailure { logCollector.error(TAG, "Temporary core cancellation cleanup failed", it) }
+            }
+            logCollector.info(TAG, "DeepProbe cancellation requested — temporary core stop scheduled")
         } else {
             logCollector.info(TAG, "DeepProbe cancellation generation advanced (no active probe)")
         }
