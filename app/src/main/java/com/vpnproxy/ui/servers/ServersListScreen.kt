@@ -364,7 +364,7 @@ fun ServerListContent(
         }
         if (deepProbeResults.isNotEmpty()) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Text("Результаты глубокого анализа", color = Color.White, style = MaterialTheme.typography.titleSmall)
+                Text("Результаты глубокого анализа", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                 deepProbeResults.forEach { result ->
                     Text(
                         text = "${result.config.name}: score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
