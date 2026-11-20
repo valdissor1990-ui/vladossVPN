@@ -126,7 +126,8 @@ class NetworkBucketProvider @Inject constructor(
                 selectedBucket != null &&
                 selectedCapabilities != null &&
                 selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
-                selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             ) {
                 return snapshotFor(selectedBucket, selected)
             }
