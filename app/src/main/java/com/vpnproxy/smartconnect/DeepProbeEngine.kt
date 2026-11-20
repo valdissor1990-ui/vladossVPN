@@ -21,10 +21,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
@@ -329,12 +334,9 @@ class DeepProbeEngine @Inject constructor(
                             attemptedSamples++
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
-                                val elapsed = runInterruptible(Dispatchers.IO) {
-                                    val start = System.nanoTime()
-                                    client.newCall(request).execute().use { response ->
-                                        val measured = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                                        if (response.code in 200..399) measured else null
-                                    }
+                                val elapsed = executeCancellable(client, request) { response ->
+                                    val measured = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                    if (response.code in 200..399) measured else null
                                 }
                                 if (elapsed != null) samples += elapsed else failures++
                             } catch (cancelled: CancellationException) {
@@ -352,17 +354,18 @@ class DeepProbeEngine @Inject constructor(
                         try {
                             attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
-                            runInterruptible(Dispatchers.IO) {
-                                val start = System.nanoTime()
-                                client.newCall(request).execute().use { response ->
-                                    if (response.isSuccessful) {
-                                        val bytes = response.body?.bytes()?.size ?: 0
-                                        val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
-                                        speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
-                                        speedOk = bytes > 0
-                                    }
+                            val measurement = executeCancellable(client, request) { response ->
+                                if (response.isSuccessful) {
+                                    val bytes = response.body?.bytes()?.size ?: 0
+                                    val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
+                                    val measuredSpeed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
+                                    measuredSpeed to (bytes > 0)
+                                } else {
+                                    0.0 to false
                                 }
                             }
+                            speed = measurement.first
+                            speedOk = measurement.second
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {
@@ -412,6 +415,36 @@ class DeepProbeEngine @Inject constructor(
         } finally {
             running.set(false)
         }
+    }
+
+    /**
+     * Execute and consume an OkHttp call with cancellation wired to Call.cancel().
+     * Thread interruption alone does not reliably abort OkHttp socket reads.
+     */
+    private suspend fun <T> executeCancellable(
+        client: OkHttpClient,
+        request: Request,
+        consume: (Response) -> T
+    ): T = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                if (!continuation.isActive) {
+                    response.close()
+                    return
+                }
+                try {
+                    continuation.resumeWith(Result.success(response.use(consume)))
+                } catch (failure: Throwable) {
+                    continuation.resumeWith(Result.failure(failure))
+                }
+            }
+        })
     }
 
     /** Wait for the single temporary Sing-box core slot instead of fabricating failed results. */
