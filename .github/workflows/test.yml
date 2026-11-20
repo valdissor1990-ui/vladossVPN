@@ -81,7 +81,7 @@ jobs:
             app/build/reports/license-audit/**
           if-no-files-found: warn
 
-      - name: Run unit tests
+      - name: Run unit tests (Direct + Play flavors)
         run: ./gradlew testDirectDebugUnitTest testPlayDebugUnitTest --stacktrace
 
       - name: Build release variants for license asset verification
