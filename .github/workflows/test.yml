@@ -38,7 +38,7 @@ jobs:
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
             mkdir -p gradle/wrapper
             curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+              https://raw.githubusercontent.com/gradle/gradle/v8.14.8/gradle/wrapper/gradle-wrapper.jar
           fi
 
       - name: Record exact source revision in license assets
