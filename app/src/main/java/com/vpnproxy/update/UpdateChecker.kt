@@ -4,7 +4,9 @@ import android.content.Context
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.logging.LogCollector
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -64,7 +66,7 @@ class UpdateChecker @Inject constructor(
                 requestBuilder.header("If-None-Match", cachedEtag)
             }
 
-            http.newCall(requestBuilder.build()).execute().use { resp ->
+            runInterruptible(Dispatchers.IO) { http.newCall(requestBuilder.build()).execute() }.use { resp ->
                 val body = when {
                     resp.code == 304 -> {
                         val cachedBody = prefs.getString(KEY_BODY, null)
@@ -77,12 +79,32 @@ class UpdateChecker @Inject constructor(
                         cachedBody
                     }
                     !resp.isSuccessful -> {
+                        // GitHub's unauthenticated API can return 403/429 when its shared
+                        // rate limit is exhausted. Reuse the last validated public release
+                        // list rather than hiding update state solely because of rate limits.
+                        if (resp.code == 403 || resp.code == 429) {
+                            val cachedBody = prefs.getString(KEY_BODY, null)
+                            val cachedRelease = cachedBody?.takeIf { it.isNotBlank() }
+                                ?.let { runCatching { selectNewestRelease(it) }.getOrNull() }
+                            if (cachedRelease != null) {
+                                val remoteCode = cachedRelease.extractVersionCode()
+                                val hasUpdate = remoteCode > BuildConfig.VERSION_CODE
+                                logCollector.warn(
+                                    TAG,
+                                    "Update API HTTP ${resp.code}; using cached release metadata tag=${cachedRelease.tagName} remote=$remoteCode"
+                                )
+                                return@withContext Result(
+                                    hasUpdate = hasUpdate,
+                                    release = cachedRelease
+                                )
+                            }
+                        }
                         val err = "HTTP ${resp.code}"
                         logCollector.warn(TAG, "Update check failed: $err")
                         return@withContext Result(hasUpdate = false, error = err)
                     }
                     else -> {
-                        val responseBody = resp.body?.string()
+                        val responseBody = runInterruptible(Dispatchers.IO) { resp.body?.string() }
                             ?: return@withContext Result(hasUpdate = false, error = "Empty response")
                         val etag = resp.header("ETag")
                         if (!etag.isNullOrBlank()) {
@@ -109,6 +131,8 @@ class UpdateChecker @Inject constructor(
                 )
                 Result(hasUpdate = hasUpdate, release = release)
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: ConnectException) {
             logCollector.warn(TAG, "Update check unavailable: connection refused/unreachable (${e.message})")
             Result(hasUpdate = false, error = "Network connection failed")
@@ -139,19 +163,19 @@ class UpdateChecker @Inject constructor(
             .filter { it.findApkAsset("direct") != null }
             .maxByOrNull { it.extractVersionCode() }
 
-    private fun fetchWithoutCache(url: String): Result {
+    private suspend fun fetchWithoutCache(url: String): Result {
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "VPNProxy/${BuildConfig.VERSION_NAME}")
             .build()
-        return http.newCall(request).execute().use { resp ->
+        return runInterruptible(Dispatchers.IO) { http.newCall(request).execute() }.use { resp ->
             if (!resp.isSuccessful) {
                 val err = "HTTP ${resp.code}"
                 logCollector.warn(TAG, "Update check retry failed: $err")
                 return@use Result(hasUpdate = false, error = err)
             }
-            val body = resp.body?.string()
+            val body = runInterruptible(Dispatchers.IO) { resp.body?.string() }
                 ?: return@use Result(hasUpdate = false, error = "Empty response")
             val etag = resp.header("ETag")
             val editor = prefs.edit().putString(KEY_BODY, body)
