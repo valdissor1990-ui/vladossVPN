@@ -334,6 +334,7 @@ class DeepProbeEngine @Inject constructor(
                             attemptedSamples++
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
+                                val start = System.nanoTime()
                                 val elapsed = executeCancellable(client, request) { response ->
                                     val measured = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
                                     if (response.code in 200..399) measured else null
@@ -354,6 +355,7 @@ class DeepProbeEngine @Inject constructor(
                         try {
                             attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
+                            val start = System.nanoTime()
                             val measurement = executeCancellable(client, request) { response ->
                                 if (response.isSuccessful) {
                                     val bytes = response.body?.bytes()?.size ?: 0
