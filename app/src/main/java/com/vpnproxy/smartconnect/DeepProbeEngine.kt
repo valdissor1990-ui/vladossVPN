@@ -142,12 +142,15 @@ class DeepProbeEngine @Inject constructor(
     private val running = AtomicBoolean(false)
     private val cancellationGeneration = AtomicLong(0L)
 
-    /** Cancel the active probe without releasing its slot before its coroutine has exited. */
+    /**
+     * Signal cancellation without synchronously stopping the native core from the caller.
+     * The probe coroutine owns the CorePortLease and performs core teardown in its finally
+     * block; SingboxProxyClient.start() also cleans up if its interruptible startup is cancelled.
+     */
     fun cancel() {
         cancellationGeneration.incrementAndGet()
         if (running.get()) {
-            runCatching { SingboxProxyClient.stop(context) }
-            logCollector.info(TAG, "DeepProbe cancellation requested — temporary core stopped")
+            logCollector.info(TAG, "DeepProbe cancellation requested — probe owner will stop temporary core")
         } else {
             logCollector.info(TAG, "DeepProbe cancellation generation advanced (no active probe)")
         }
