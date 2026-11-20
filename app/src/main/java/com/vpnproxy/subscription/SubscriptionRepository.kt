@@ -31,6 +31,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.io.IOException
 import java.net.ConnectException
+import java.net.URI
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
@@ -264,7 +265,16 @@ private val _deviceMetadataConsent = MutableStateFlow(
         return (removed.map { it.name }.toSet() + REMOVED_BUNDLED_NAMES) - retainedUserNames
     }
 
+    fun isSecureSubscriptionUrl(url: String): Boolean = runCatching {
+        val uri = URI(url.trim())
+        uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+    }.getOrDefault(false)
+
     suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
+        if (!isSecureSubscriptionUrl(url)) {
+            logCollector.warn(TAG, "Subscription rejected: HTTPS URL required")
+            return@withContext false
+        }
         try {
             val id = java.util.UUID.randomUUID().toString()
             val sub = ProviderSubscription(
