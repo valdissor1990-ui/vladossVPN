@@ -34,7 +34,9 @@ object AutoSwitcherConfig {
     const val maxConsecutiveErrors = 3
     const val rttDegradationFactor = 2.5
     const val microProbeBufferBytes = 8 * 1_024
-    const val directProbePort = 53
+    // TCP/53 is commonly blocked by mobile carriers. Use Cloudflare's HTTPS
+    // endpoint port so the protected underlay probe remains usable on cellular.
+    const val directProbePort = 443
     const val evidenceHistoryLimit = 12
     /** Minimum relative score gain required for a background auto-switch (~25%). */
     const val minimumAutoSwitchScoreGain = 0.25f
