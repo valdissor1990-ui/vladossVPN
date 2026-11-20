@@ -789,6 +789,8 @@ class HomeViewModel @Inject constructor(
                 subscriptionRepository.refreshAll()
                 updateAutoSwitcherProviderScope()
                 if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
             } finally {
@@ -972,7 +974,14 @@ class HomeViewModel @Inject constructor(
             }
             val added = subscriptionRepository.subscriptions.value.lastOrNull()
             if (added != null) setAutomaticSubscription(added.id)
-            val refreshed = runCatching { subscriptionRepository.refreshAll() }.getOrDefault(0)
+            val refreshed = try {
+                subscriptionRepository.refreshAll()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logCollector.error(TAG, "addSubscription refresh failed", failure)
+                0
+            }
             _uiState.value = _uiState.value.copy(
                 notice = if (refreshed > 0) "Подписка добавлена · профилей: $refreshed" else "Подписка сохранена. Обновите её, если список пуст"
             )
