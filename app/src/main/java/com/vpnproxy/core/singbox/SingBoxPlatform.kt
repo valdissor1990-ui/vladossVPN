@@ -17,6 +17,7 @@ import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.splittunnel.SplitTunnelManager
 import com.vpnproxy.logging.LogCollectorHolder
+import com.vpnproxy.smartconnect.NetworkBucketProvider
 import io.nekohasekai.libbox.*
 import io.nekohasekai.libbox.RoutePrefix
 import java.net.Inet6Address
@@ -33,7 +34,8 @@ import kotlinx.coroutines.runBlocking
 class SingBoxPlatform(
     private val context: Context,
     private val vpnService: VpnService? = null,
-    private val splitTunnelManager: SplitTunnelManager? = null
+    private val splitTunnelManager: SplitTunnelManager? = null,
+    private val networkBucketProvider: NetworkBucketProvider? = null
 ) : PlatformInterface {
     companion object { private const val TAG = "SingBoxPlatform" }
 
@@ -372,7 +374,9 @@ class SingBoxPlatform(
                     val replacement = findCurrentPhysicalNetwork(connectivity, exclude = network)
                     monitoredDefaultNetwork = replacement
                     if (replacement == null) {
-                        notifyDefaultInterface(listener, "", -1, false)
+                        if (notifyDefaultInterface(listener, "", -1, false)) {
+                            networkBucketProvider?.updatePlatformSelectedUnderlay(null)
+                        }
                         logMonitor("DefaultInterfaceMonitor: network lost; no physical default network")
                     } else {
                         publishDefaultInterface(connectivity, replacement, this, 0)
@@ -407,6 +411,7 @@ class SingBoxPlatform(
                 interfaceMonitorHandler = null
                 interfaceMonitorThread = null
                 monitoredDefaultNetwork = null
+                networkBucketProvider?.clearPlatformSelectedUnderlay()
                 thread.quitSafely()
                 logError( "DefaultInterfaceMonitor registration failed", t)
                 throw IllegalStateException("Unable to register Android default network monitor: ${t.message}", t)
@@ -417,9 +422,13 @@ class SingBoxPlatform(
             val initialName = initial?.name.orEmpty()
             val initialIndex = initial?.index ?: -1
             if (initialNetwork == null) {
-                notifyDefaultInterface(listener, "", -1, false)
+                if (notifyDefaultInterface(listener, "", -1, false)) {
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(null)
+                }
             } else if (initial != null) {
-                notifyDefaultInterface(listener, initialName, initialIndex, isNetworkMetered(connectivity, initialNetwork))
+                if (notifyDefaultInterface(listener, initialName, initialIndex, isNetworkMetered(connectivity, initialNetwork))) {
+                    networkBucketProvider?.updatePlatformSelectedUnderlay(initialNetwork)
+                }
             } else {
                 // LinkProperties may not be ready yet; publish the real interface from the
                 // callback once Android finishes configuring the network.
@@ -445,6 +454,7 @@ class SingBoxPlatform(
             interfaceMonitorThread = null
             monitoredDefaultNetwork = null
         }
+        networkBucketProvider?.clearPlatformSelectedUnderlay()
         if (callback != null && connectivity != null) {
             runCatching { connectivity.unregisterNetworkCallback(callback) }
                 .onFailure { logWarn( "DefaultInterfaceMonitor unregister failed: ${it.message}") }
@@ -587,15 +597,59 @@ class SingBoxPlatform(
                 return
             }
             val currentListener = interfaceMonitorListener ?: return
-            notifyDefaultInterface(currentListener, "", -1, false)
+            publishAcceptedUnderlay(
+                callback = callback,
+                network = network,
+                listener = currentListener,
+                name = "",
+                index = -1,
+                isExpensive = false,
+                selectedUnderlay = null
+            )
             logMonitor("DefaultInterfaceMonitor: network changed but interface unresolved for network=$network")
             return
         }
 
         if (monitoredDefaultNetwork != network) return
         val currentListener = interfaceMonitorListener ?: return
-        notifyDefaultInterface(currentListener, snapshot.name, snapshot.index, isNetworkMetered(connectivity, network))
+        publishAcceptedUnderlay(
+            callback = callback,
+            network = network,
+            listener = currentListener,
+            name = snapshot.name,
+            index = snapshot.index,
+            isExpensive = isNetworkMetered(connectivity, network),
+            selectedUnderlay = network
+        )
         logMonitor("DefaultInterfaceMonitor: network changed to ${snapshot.name} index=${snapshot.index}")
+    }
+
+    /**
+     * Linearize libbox publication with monitor shutdown. Without this lock, a callback
+     * that passed isCurrentMonitor() could publish its old Network after close() cleared
+     * the shared underlay, leaving stale probe identity behind.
+     */
+    private fun publishAcceptedUnderlay(
+        callback: ConnectivityManager.NetworkCallback,
+        network: Network,
+        listener: InterfaceUpdateListener,
+        name: String,
+        index: Int,
+        isExpensive: Boolean,
+        selectedUnderlay: Network?
+    ): Boolean = synchronized(interfaceMonitorLock) {
+        if (
+            interfaceMonitorCallback !== callback ||
+            interfaceMonitorListener !== listener ||
+            monitoredDefaultNetwork != network
+        ) {
+            return@synchronized false
+        }
+        if (!notifyDefaultInterface(listener, name, index, isExpensive)) {
+            return@synchronized false
+        }
+        networkBucketProvider?.updatePlatformSelectedUnderlay(selectedUnderlay)
+        true
     }
 
     private fun notifyDefaultInterface(
@@ -603,9 +657,10 @@ class SingBoxPlatform(
         name: String,
         index: Int,
         isExpensive: Boolean
-    ) {
-        runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
-            .onFailure { logError( "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+    ): Boolean {
+        val result = runCatching { listener.updateDefaultInterface(name, index, isExpensive, false) }
+        result.onFailure { logError( "InterfaceUpdateListener.updateDefaultInterface failed", it) }
+        return result.isSuccess
     }
 
     private fun logMonitor(message: String) {

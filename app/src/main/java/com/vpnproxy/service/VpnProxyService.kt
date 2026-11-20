@@ -33,6 +33,7 @@ import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.AutoSwitcher
+import com.vpnproxy.smartconnect.NetworkBucketProvider
 import com.vpnproxy.smartconnect.DeepProbeEngine
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -86,6 +87,7 @@ class VpnProxyService : VpnService() {
     @Inject lateinit var splitTunnelManager: SplitTunnelManager
     @Inject lateinit var trafficCollector: TrafficStatsCollector
     @Inject lateinit var autoSwitcher: AutoSwitcher
+    @Inject lateinit var networkBucketProvider: NetworkBucketProvider
     @Inject lateinit var deepProbeEngine: DeepProbeEngine
     @Inject lateinit var dualPathStore: DualPathStore
     @Inject lateinit var logCollector: LogCollector
@@ -143,7 +145,7 @@ class VpnProxyService : VpnService() {
 
         try {
             autoSwitcher.attachVpnService(this)
-            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager), logCollector)
+            val core = SingBoxCore(this, SingBoxPlatform(this, this, splitTunnelManager, networkBucketProvider), logCollector)
             lifecycleController = VpnLifecycleController(core, logCollector)
             logCollector.info(TAG, "Service created; libbox 1.14.3 single-process core ready")
         } catch (t: Throwable) {
