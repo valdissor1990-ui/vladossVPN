@@ -309,7 +309,13 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                 )
-            }.collect { _profileServers.value = it }
+            }.collect {
+                // Keep the visible picker latency-ordered; Smart Connect retains its
+                // independent reliability/history ordering for automatic selection.
+                _profileServers.value = it.sortedWith(
+                    compareBy<ScoringEngine.ScoredServer>({ it.latencyMs == Long.MAX_VALUE }, { it.latencyMs })
+                )
+            }
         }
     }
 
