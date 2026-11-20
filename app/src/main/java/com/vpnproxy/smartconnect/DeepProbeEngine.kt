@@ -329,11 +329,14 @@ class DeepProbeEngine @Inject constructor(
                             attemptedSamples++
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
-                                val start = System.nanoTime()
-                                client.newCall(request).execute().use { response ->
-                                    val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                                    if (response.code in 200..399) samples += elapsed else failures++
+                                val elapsed = runInterruptible(Dispatchers.IO) {
+                                    val start = System.nanoTime()
+                                    client.newCall(request).execute().use { response ->
+                                        val measured = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                        if (response.code in 200..399) measured else null
+                                    }
                                 }
+                                if (elapsed != null) samples += elapsed else failures++
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Exception) {
@@ -349,13 +352,15 @@ class DeepProbeEngine @Inject constructor(
                         try {
                             attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
-                            val start = System.nanoTime()
-                            client.newCall(request).execute().use { response ->
-                                if (response.isSuccessful) {
-                                    val bytes = response.body?.bytes()?.size ?: 0
-                                    val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
-                                    speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
-                                    speedOk = bytes > 0
+                            runInterruptible(Dispatchers.IO) {
+                                val start = System.nanoTime()
+                                client.newCall(request).execute().use { response ->
+                                    if (response.isSuccessful) {
+                                        val bytes = response.body?.bytes()?.size ?: 0
+                                        val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
+                                        speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
+                                        speedOk = bytes > 0
+                                    }
                                 }
                             }
                         } catch (cancelled: CancellationException) {
