@@ -105,7 +105,7 @@ class UpdateCheckWorker(
                 )
                 deps.logCollector().debug("UpdateCheckWorker", "Cancelled by WorkManager")
             } catch (_: Exception) { /* ignore */ }
-            Result.success()
+            throw e
         } catch (t: Throwable) {
             try {
                 val deps = EntryPointAccessors.fromApplication(
