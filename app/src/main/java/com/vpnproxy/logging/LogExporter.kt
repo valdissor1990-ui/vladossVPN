@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -160,6 +161,8 @@ class LogExporter @Inject constructor(
             val content = buildExportText()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) exportViaMediaStore(fileName, content)
             else exportViaFile(fileName, content)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             logCollector.error(TAG, "exportToDownloads failed", t)
             null
@@ -190,6 +193,8 @@ class LogExporter @Inject constructor(
         resolver.update(uri, values, null, null)
         logCollector.info(TAG, "Exported to Downloads: $fileName")
         uri
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaMediaStore failed", t)
         null
@@ -203,6 +208,8 @@ class LogExporter @Inject constructor(
         val file = File(dir, fileName)
         file.writeText(content, Charsets.UTF_8)
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaFile failed", t)
         null
