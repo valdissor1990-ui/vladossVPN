@@ -106,15 +106,16 @@ JVM-лаунчер декодирует его в ANSI — это известн
 Обход: вынести проект и `GRADLE_USER_HOME` на ASCII-пути (например через
 `subst`) или задать `android.overridePathCheck=true`. В CI (Linux) проблемы нет.
 
-## Что не менялось
+## CI / provenance
 
-Правки файлов `.github/workflows/*` не входят в коммит: у `gh` нет scope
-`workflow`, и push с изменением workflow будет отклонён. Из-за этого в workflow
-остаются косметические хардкоды (`gradle-8.14.6` в bootstrap шаге — он лишь
-извлекает wrapper JAR 8.14.6, а фактически скачивается дистрибутив 8.14.8 из
-`gradle-wrapper.properties`; строки-метки «libbox 1.14.3» в названиях шагов и
-`SOURCE_COMMIT.txt`). Для их приведения к 1.14.4-lx.35 требуется
-`gh auth refresh -h github.com -s workflow`.
+Правки workflow вынесены в отдельный PR #281, чтобы не смешивать обновление
+зависимостей и ядра с изменениями CI. В #281 исправляются provenance-ссылки
+релизной и тестовой сборок на libbox `1.14.4-lx.35`, cronet-go и NaiveProxy,
+а также устаревшие подписи версии ядра в PR build workflow.
+
+Bootstrap Gradle Wrapper JAR пока извлекается из архива Gradle 8.14.6
+(совместимый wrapper JAR); фактический Gradle distribution задаётся и
+проверяется через `gradle-wrapper.properties` как 8.14.8.
 
 ## Где остановились (handoff, 2026-11-21)
 
@@ -153,7 +154,7 @@ JVM-лаунчер декодирует его в ANSI — это известн
 
 ### Блокеры / ограничения
 
-- Push правок workflow невозможен: у `gh` нет scope `workflow`.
+- CI/provenance исправления вынесены в отдельный PR #281; его CI ещё должен завершиться.
 - AGP 9.x / compileSdk 36–37 / Compose 1.13 / Kotlin 2.4 / OkHttp 5.5 — отложены
   по причинам совместимости (CI ставит только `platforms;android-35 build-tools;35.0.0`).
 - Runtime/device-тесты не выполнялись (запрещены без отдельного разрешения).
@@ -163,7 +164,7 @@ JVM-лаунчер декодирует его в ANSI — это известн
 
 1. Мержить ли draft PR #277 (`integration → main`; запустит `release.yml`).
 2. Какую версию/`versionCode` использовать для релиза.
-3. Нужно ли разрешение на `gh auth refresh ... -s workflow` и на device-тесты.
+3. Нужно ли разрешение на device-тесты.
 
 ### Как продолжить локально (Windows, кириллица в пути профиля)
 
