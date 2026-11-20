@@ -41,7 +41,7 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Download full sing-box-lx libbox 1.14.3-lx.23
+      - name: Download full sing-box-lx libbox (version pinned and SHA-256 verified by script)
         run: |
           chmod +x scripts/download_libbox.sh
           ./scripts/download_libbox.sh
