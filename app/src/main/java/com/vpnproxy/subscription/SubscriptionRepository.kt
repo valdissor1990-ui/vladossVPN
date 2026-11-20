@@ -175,13 +175,15 @@ private val _deviceMetadataConsent = MutableStateFlow(
     val lastImportReport: StateFlow<SubscriptionImportReport?> = _lastImportReport.asStateFlow()
 
     private val refreshMutex = Mutex()
+    private var removedBundledProviderTags: Set<String> = emptySet()
 
     init {
         loadFromPrefs()
-        removeBundledSubscriptions()
+        removedBundledProviderTags = removeBundledSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
-            val retainedCached = cached.filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+            // Cached profiles retain providerTag (the source display name), not its URL or ID.
+            val retainedCached = cached.filterNot { it.providerTag in removedBundledProviderTags }
             _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -212,19 +214,54 @@ private val _deviceMetadataConsent = MutableStateFlow(
         }
     }
 
-    /** Remove all bundled feeds from existing installations while preserving user-added sources. */
-    private fun removeBundledSubscriptions() {
-        val current = _subscriptions.value
-        val retained = current.filterNot { sub ->
-            sub.id in REMOVED_BUNDLED_IDS ||
-                sub.url in REMOVED_BUNDLED_URLS ||
-                sub.name in REMOVED_BUNDLED_NAMES
+    /** Remove the encrypted response body and ETag associated with a retired provider URL. */
+    private fun removeSubscriptionBodyCache(sourceUrl: String) {
+        runCatching {
+            val cacheKey = MessageDigest.getInstance("SHA-256")
+                .digest(sourceUrl.toByteArray(Charsets.UTF_8))
+                .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+            val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
+            encryptedPrefs.edit()
+                .remove("subscription_body_$cacheKey")
+                .remove("subscription_etag_$cacheKey")
+                .remove("subscription_body_$legacyCacheKey")
+                .remove("subscription_etag_$legacyCacheKey")
+                .apply()
+        }.onFailure {
+            logCollector.warn(TAG, "Could not purge retired subscription response cache: ${it.javaClass.simpleName}")
         }
+    }
+
+    /** Remove all bundled feeds from existing installations while preserving user-added sources. */
+    private fun removeBundledSubscriptions(): Set<String> {
+        val current = _subscriptions.value
+        // IDs and source URLs identify bundled feeds. A matching display name alone
+        // is not sufficient: users may legitimately name their own feed the same way.
+        val removed = current.filter { sub ->
+            val hasUserGeneratedId = runCatching {
+                java.util.UUID.fromString(sub.id)
+            }.isSuccess
+            sub.id in REMOVED_BUNDLED_IDS ||
+                (sub.url in REMOVED_BUNDLED_URLS && !hasUserGeneratedId)
+        }
+        val retained = current - removed.toSet()
+        // Never purge a URL cache if a retained user subscription still references it.
+        // This protects a manually added UUID-backed source that happens to reuse a
+        // URL once shipped as a bundled feed.
+        val retainedUserUrls = retained.map { it.url }.toSet()
+        val retiredUrlsToPurge = (removed.map { it.url } + REMOVED_BUNDLED_URLS)
+            .distinct()
+            .filterNot { it in retainedUserUrls }
+        retiredUrlsToPurge.forEach(::removeSubscriptionBodyCache)
         if (retained != current) {
             _subscriptions.value = retained
             saveToPrefs()
-            logCollector.info(TAG, "Removed bundled subscriptions: removed=${current.size - retained.size}; userSources=${retained.size}")
+            logCollector.info(TAG, "Removed bundled subscriptions: removed=${removed.size}; userSources=${retained.size}")
         }
+        // Aggregate cached profiles only store providerTag. Preserve ambiguous cache
+        // when a retained user source reuses a retired bundled display name.
+        val retainedUserNames = retained.map { it.name }.toSet()
+        return (removed.map { it.name }.toSet() + REMOVED_BUNDLED_NAMES) - retainedUserNames
     }
 
     suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
@@ -285,9 +322,14 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
-                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val cacheKey = MessageDigest.getInstance("SHA-256")
+                        .digest(sub.url.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val legacyCacheKey = sub.url.hashCode().toUInt().toString(16)
                     val cachedOutcome = runCatching {
-                        encryptedPrefs.getString(bodyKey, null)
+                        val cachedBody = encryptedPrefs.getString("subscription_body_$cacheKey", null)
+                            ?: encryptedPrefs.getString("subscription_body_$legacyCacheKey", null)
+                        cachedBody
                             ?.takeIf { it.isNotBlank() }
                             ?.let { parser.parseWithReport(it, providerTag = sub.name) }
                     }.getOrNull()
@@ -393,16 +435,28 @@ private val _deviceMetadataConsent = MutableStateFlow(
                         .digest(sourceUrl.toByteArray(Charsets.UTF_8))
                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
                     val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
-                    if (legacyCacheKey != cacheKey) {
-                        encryptedPrefs.edit()
-                            .remove("subscription_body_$legacyCacheKey")
-                            .remove("subscription_etag_$legacyCacheKey")
-                            .apply()
-                    }
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
+                    val legacyBodyKey = "subscription_body_$legacyCacheKey"
+                    val legacyEtagKey = "subscription_etag_$legacyCacheKey"
+                    // Read the legacy cache before retiring its keys. Otherwise the first
+                    // refresh after upgrade can erase the only per-provider fallback before
+                    // a failed network request has a chance to use it.
                     val cachedBody = encryptedPrefs.getString(bodyKey, null)
+                        ?: encryptedPrefs.getString(legacyBodyKey, null)
                     val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                        ?: encryptedPrefs.getString(legacyEtagKey, null)
+                    if (legacyCacheKey != cacheKey && (!cachedBody.isNullOrBlank() || !cachedEtag.isNullOrBlank())) {
+                        val migrated = encryptedPrefs.edit()
+                        if (!cachedBody.isNullOrBlank()) migrated.putString(bodyKey, cachedBody)
+                        if (!cachedEtag.isNullOrBlank()) migrated.putString(etagKey, cachedEtag)
+                        if (migrated.commit()) {
+                            encryptedPrefs.edit()
+                                .remove(legacyBodyKey)
+                                .remove(legacyEtagKey)
+                                .apply()
+                        }
+                    }
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
@@ -558,7 +612,8 @@ private val _deviceMetadataConsent = MutableStateFlow(
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
-        loadConfigsFromCache().filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+        loadConfigsFromCache()
+            .filterNot { it.providerTag in removedBundledProviderTags }
             .map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
