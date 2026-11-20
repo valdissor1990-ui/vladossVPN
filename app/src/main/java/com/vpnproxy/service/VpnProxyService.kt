@@ -499,9 +499,14 @@ class VpnProxyService : VpnService() {
                 logCollector.info(TAG, "TUN stack=${diagnosticOptions.tunStack} strict_route=${diagnosticOptions.strictRoute} mtu=1400")
                 logCollector.info(TAG, "Route auto_detect_interface=${diagnosticOptions.autoDetectInterface} final=${diagnosticOptions.routeFinal}")
                 // Dual-path: selected apps -> foreign (non-RU) outbound when available
-      val dualPackages = runCatching {
-          dualPathStore.installedPackagesForRules()
-      }.getOrDefault(emptyList())
+                val dualPackages = try {
+                    dualPathStore.installedPackagesForRules()
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    logCollector.warn(TAG, "Could not load dual-path app rules; continuing without foreign routing: ${failure.message}")
+                    emptyList()
+                }
       val foreignParsed = if (dualPackages.isNotEmpty()) {
           val rankedConfigs = autoSwitcher.rankedServers.value.map { it.config }
           val fromRanked = ServerRegionClassifier.pickBestForeign(rankedConfigs, preferredNot = parsed)
@@ -662,7 +667,13 @@ class VpnProxyService : VpnService() {
             var outboundSuccessLogged = false
             logCollector.info(TAG, "PassiveProbe lifecycle started server=$serverName intervalMs=5000")
             while (isActive && connectionCoordinator.state.value is ConnectionState.Connected) {
-                val probe = runCatching { DiagnosticProbe.runOnce(serverName, logCollector) }
+                val probe = try {
+                    Result.success(DiagnosticProbe.runOnce(serverName, logCollector))
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    Result.failure(failure)
+                }
                 probe.onSuccess { result ->
                     if (result.success && !outboundSuccessLogged) {
                         val config = autoSwitcher.currentServer.value?.config
