@@ -16,6 +16,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.ui.theme.OnDark
 import com.vpnproxy.ui.theme.WarningYellow
+import com.vpnproxy.subscription.SubscriptionDiff
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,6 +31,7 @@ fun SubscriptionsScreen(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val usingCache by viewModel.usingCache.collectAsStateWithLifecycle()
     val importReport by viewModel.importReport.collectAsStateWithLifecycle()
+    val lastDiff by viewModel.lastDiff.collectAsStateWithLifecycle()
     val jsonImportReport by viewModel.jsonImportReport.collectAsStateWithLifecycle()
     val scannedServers by viewModel.scannedServers.collectAsStateWithLifecycle()
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
@@ -126,6 +128,33 @@ fun SubscriptionsScreen(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
+            }
+
+            lastDiff?.takeIf { !it.isFirstSnapshot && it.hasChanges }?.let { diff ->
+                item(key = "subscription-update-diff") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Изменения при обновлении", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Новые: ${diff.added.size}; изменённые: ${diff.changed.size}; удалённые: ${diff.removed.size}; без изменений: ${diff.unchangedCount}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            DiffGroup("Новые", diff.added)
+                            DiffGroup("Изменённые", diff.changed)
+                            DiffGroup("Удалённые", diff.removed)
+                            Text(
+                                "Настройки подписки, закрепление и последний рабочий сервер сохранены.",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
             }
 
             importReport?.let { report ->
@@ -312,5 +341,23 @@ fun SubscriptionsScreen(
             },
             dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Отмена") } }
         )
+    }
+}
+
+/** Shows at most five names per group; the rest is summarised to keep the card compact. */
+@Composable
+private fun DiffGroup(title: String, entries: List<SubscriptionDiff.Entry>) {
+    if (entries.isEmpty()) return
+    val visible = entries.take(5)
+    Text(title, style = MaterialTheme.typography.labelMedium)
+    visible.forEach { entry ->
+        Text(
+            "• ${entry.providerTag}: ${entry.displayName}",
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
+        )
+    }
+    if (entries.size > visible.size) {
+        Text("и ещё ${entries.size - visible.size}", style = MaterialTheme.typography.labelSmall)
     }
 }

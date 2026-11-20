@@ -174,6 +174,13 @@ private val _deviceMetadataConsent = MutableStateFlow(
     private val _lastImportReport = MutableStateFlow<SubscriptionImportReport?>(null)
     val lastImportReport: StateFlow<SubscriptionImportReport?> = _lastImportReport.asStateFlow()
 
+    /**
+     * Difference between the previous and the refreshed profile set (P1.4).
+     * Contains only display names and counters; no URIs, credentials or keys.
+     */
+    private val _lastDiff = MutableStateFlow<SubscriptionDiff.Result?>(null)
+    val lastDiff: StateFlow<SubscriptionDiff.Result?> = _lastDiff.asStateFlow()
+
     private val refreshMutex = Mutex()
 
     init {
@@ -259,6 +266,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
             _lastImportReport.value = null
+            val previousConfigs = _allConfigs.value
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
@@ -360,6 +368,15 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
             _allConfigs.value = providerUniqueConfigs
             saveToPrefs()
+            val diff = SubscriptionDiff.compute(previousConfigs, providerUniqueConfigs)
+            _lastDiff.value = diff
+            if (!diff.isFirstSnapshot && diff.hasChanges) {
+                logCollector.info(
+                    TAG,
+                    "Subscription profile diff: added=${diff.added.size}; changed=${diff.changed.size}; " +
+                        "removed=${diff.removed.size}; unchanged=${diff.unchangedCount}"
+                )
+            }
             val allCandidateCountsKnown = providerReports.all { it.candidateCount != null }
             val allRejectionCountsKnown = providerReports.all { it.rejectedCount != null }
             _lastImportReport.value = SubscriptionImportReport(

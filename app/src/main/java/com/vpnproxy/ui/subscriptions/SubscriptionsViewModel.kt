@@ -38,6 +38,7 @@ class SubscriptionsViewModel @Inject constructor(
     }
 
     val importReport = repository.lastImportReport
+    val lastDiff = repository.lastDiff
     val jsonImportReport = jsonConfigRepository.lastImportReport
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
@@ -107,7 +108,13 @@ class SubscriptionsViewModel @Inject constructor(
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
                 val scanResults = serverScanner.scanAfterSubscriptionUpdate(merged)
                 val tcpResponsiveCount = scanResults.count { it.successRate > 0.5f }
-                _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
+                val diff = repository.lastDiff.value
+                val diffLabel = if (diff != null && !diff.isFirstSnapshot && diff.hasChanges) {
+                    "; изменения: +${diff.added.size} / ~${diff.changed.size} / -${diff.removed.size}"
+                } else {
+                    ""
+                }
+                _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount$diffLabel. Это не подтверждает работу VPN."
                 logCollector.info(
                     "SubscriptionsVM",
                     "Refreshed and scanned: tcpResponsive=$tcpResponsiveCount; scannedUnique=${scanResults.size}"
@@ -115,7 +122,8 @@ class SubscriptionsViewModel @Inject constructor(
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                _message.value = "Ошибка: ${e.message}"
+                // Never surface exception text: it can contain a subscription URL or credentials.
+                _message.value = "Не удалось обновить подписки. Подробности — в журнале диагностики."
                 logCollector.error("SubscriptionsVM", "Refresh failed", e)
             } finally {
                 _isRefreshing.value = false
