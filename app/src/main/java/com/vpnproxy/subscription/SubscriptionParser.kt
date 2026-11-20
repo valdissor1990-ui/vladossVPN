@@ -776,6 +776,11 @@ class SubscriptionParser @Inject constructor(
             val security = stream?.get("security")?.jsonPrimitive?.content ?: "none"
             val reality = stream?.get("realitySettings")?.jsonObject
             val xhttp = stream?.get("xhttpSettings")?.jsonObject
+            val xhttpExtra = xhttp?.let { settings ->
+                val nestedExtra = settings["extra"]?.jsonObject
+                if (nestedExtra == null) settings
+                else JsonObject(settings.filterKeys { it != "extra" } + nestedExtra)
+            }
             val grpc = stream?.get("grpcSettings")?.jsonObject
             val tls = stream?.get("tlsSettings")?.jsonObject
             val transportPath = if (transport.equals("grpc", ignoreCase = true)) {
@@ -797,7 +802,8 @@ class SubscriptionParser @Inject constructor(
                 insecure = tls?.get("allowInsecure")?.jsonPrimitive?.booleanOrNull ?: false,
                 alpn = tls?.get("alpn")?.jsonArray
                     ?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
-                    ?: emptyList()
+                    ?: emptyList(),
+                extra = if (transport.equals("xhttp", ignoreCase = true)) xhttpExtra?.toString() else null
             ).takeIf { it.isValid() }
         } catch (_: Exception) { null }
     }
