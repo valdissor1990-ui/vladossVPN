@@ -597,22 +597,59 @@ class SingBoxPlatform(
                 return
             }
             val currentListener = interfaceMonitorListener ?: return
-            if (notifyDefaultInterface(currentListener, "", -1, false)) {
-                // libbox accepted the unresolved interface; do not retain the previous
-                // physical underlay as probe evidence for a network it no longer selected.
-                networkBucketProvider?.updatePlatformSelectedUnderlay(null)
-            }
+            publishAcceptedUnderlay(
+                callback = callback,
+                network = network,
+                listener = currentListener,
+                name = "",
+                index = -1,
+                isExpensive = false,
+                selectedUnderlay = null
+            )
             logMonitor("DefaultInterfaceMonitor: network changed but interface unresolved for network=$network")
             return
         }
 
         if (monitoredDefaultNetwork != network) return
         val currentListener = interfaceMonitorListener ?: return
-        if (notifyDefaultInterface(currentListener, snapshot.name, snapshot.index, isNetworkMetered(connectivity, network))) {
-            // Publish the probe bucket only after libbox accepted this interface update.
-            networkBucketProvider?.updatePlatformSelectedUnderlay(network)
-        }
+        publishAcceptedUnderlay(
+            callback = callback,
+            network = network,
+            listener = currentListener,
+            name = snapshot.name,
+            index = snapshot.index,
+            isExpensive = isNetworkMetered(connectivity, network),
+            selectedUnderlay = network
+        )
         logMonitor("DefaultInterfaceMonitor: network changed to ${snapshot.name} index=${snapshot.index}")
+    }
+
+    /**
+     * Linearize libbox publication with monitor shutdown. Without this lock, a callback
+     * that passed isCurrentMonitor() could publish its old Network after close() cleared
+     * the shared underlay, leaving stale probe identity behind.
+     */
+    private fun publishAcceptedUnderlay(
+        callback: ConnectivityManager.NetworkCallback,
+        network: Network,
+        listener: InterfaceUpdateListener,
+        name: String,
+        index: Int,
+        isExpensive: Boolean,
+        selectedUnderlay: Network?
+    ): Boolean = synchronized(interfaceMonitorLock) {
+        if (
+            interfaceMonitorCallback !== callback ||
+            interfaceMonitorListener !== listener ||
+            monitoredDefaultNetwork != network
+        ) {
+            return@synchronized false
+        }
+        if (!notifyDefaultInterface(listener, name, index, isExpensive)) {
+            return@synchronized false
+        }
+        networkBucketProvider?.updatePlatformSelectedUnderlay(selectedUnderlay)
+        true
     }
 
     private fun notifyDefaultInterface(
