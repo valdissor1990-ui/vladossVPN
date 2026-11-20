@@ -3,6 +3,7 @@ package com.vpnproxy.core.singbox
 import com.vpnproxy.logging.LogCollector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -16,9 +17,11 @@ data class TrafficProbeResult(val success: Boolean, val endpoint: String, val st
 }
 
 object DiagnosticProbe {
+    // AndroidManifest disables cleartext traffic. Keep every diagnostic endpoint HTTPS,
+    // otherwise the first two probes fail locally before they can test the VPN route.
     private val endpoints = listOf(
-        "http://cp.cloudflare.com/generate_204",
-        "http://neverssl.com",
+        "https://cp.cloudflare.com/generate_204",
+        "https://connectivitycheck.gstatic.com/generate_204",
         "https://www.gstatic.com/generate_204"
     )
 
@@ -30,13 +33,17 @@ object DiagnosticProbe {
             var connection: HttpURLConnection? = null
             try {
                 val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT))
-                connection = URL(endpoint).openConnection(proxy) as HttpURLConnection
-                connection.connectTimeout = 5000
-                connection.readTimeout = 5000
-                connection.instanceFollowRedirects = false
-                connection.requestMethod = "GET"
-                connection.connect()
-                val status = connection.responseCode
+                val activeConnection = URL(endpoint).openConnection(proxy) as HttpURLConnection
+                connection = activeConnection
+                activeConnection.connectTimeout = 5000
+                activeConnection.readTimeout = 5000
+                activeConnection.instanceFollowRedirects = false
+                activeConnection.requestMethod = "GET"
+                // Interrupt the blocking HTTP call when the passive-probe job is cancelled.
+                val status = runInterruptible(Dispatchers.IO) {
+                    activeConnection.connect()
+                    activeConnection.responseCode
+                }
                 val elapsed = SystemClock.elapsedRealtime() - started
                 val success = status in 200..399
                 last = TrafficProbeResult(success, endpoint, status, elapsed, "")
