@@ -35,8 +35,8 @@
 
 | # | Задача | Статус |
 |---|--------|--------|
-| 1.1 | Bump sing-box-lx → **1.14.3-lx.23** (`download_libbox.sh` + SHA + CI) | pending |
-| 1.2 | Оценить base **1.14.4** (когда lx догонит) | pending |
+| 1.1 | Bump sing-box-lx → **1.14.4-lx.35** (`download_libbox.sh` + SHA + CI) | done (ветка `chore/deps-upgrade-latest-stable`) |
+| 1.2 | Оценить base **1.14.4** (когда lx догонит) | done (база 1.14.4 включена в lx.35) |
 | 1.3 | Регресс по GOLDEN (DNS detour=proxy, multi-target probe) | pending |
 | 1.4 | Матрица протоколов на device: Reality/Vision, XHTTP, WS, H2, TUIC | pending |
 | 1.5 | Soft-restart / urltest после lx.23 | pending |
@@ -160,7 +160,7 @@
 
 ## Definition of Done (весь план)
 
-1. Ядро ≥ 1.14.3-lx.23 (или новее stable lx на 1.14.4+).
+1. Ядро ≥ 1.14.4-lx.35 (stable lx на base 1.14.4).
 2. GOLDEN acceptance стабильно зелёный.
 3. Multi-sub + QR + split UI + always-on.
 4. Базовые routing-правила без правки JSON.
@@ -174,3 +174,4 @@
 | Дата | Изменение |
 |------|-----------|
 | 2026-10-25 | Первая фиксация плана; старт фазы 0 |
+| 2026-11-21 | Обновлён тулчейн и зависимости (AGP 8.13.2, Gradle 8.14.8, Kotlin 2.3.21, Compose BOM 2026.06.01) и ядро до 1.14.4-lx.35; фаза 1.1/1.2 закрыты. См. `docs/DEPENDENCY_UPGRADE_2026-11.md` |

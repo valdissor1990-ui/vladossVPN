@@ -9,7 +9,7 @@ chmod +x scripts/download_libbox.sh
 ./scripts/download_libbox.sh
 ```
 
-Скрипт загружает полный официальный `libbox.aar` 1.14.3 и проверяет наличие `PlatformInterface` и Go bridge-классов. Не заменяйте AAR stripped-версией.
+Скрипт загружает полный официальный `libbox.aar` 1.14.4 и проверяет наличие `PlatformInterface` и Go bridge-классов. Не заменяйте AAR stripped-версией.
 
 ## VPN не запускается
 
@@ -20,7 +20,7 @@ chmod +x scripts/download_libbox.sh
 
 ## VLESS/Reality не устанавливает соединение
 
-Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с сервером. Используется sing-box-lx 1.14.3-lx.23 с поддержкой XHTTP. Проверьте `transport.type=xhttp`, режим `auto`/ `packet-up`/ `stream-one`, а также поля `host`, `path` и `extra`.
+Проверьте соответствие `pbk` (public key), `sid` (short ID), `sni` и `flow`. Для Vision обычно используется `xtls-rprx-vision`; значение flow должно совпадать с сервером. Используется sing-box-lx 1.14.4-lx.35 с поддержкой XHTTP. Проверьте `transport.type=xhttp`, режим `auto`/ `packet-up`/ `stream-one`, а также поля `host`, `path` и `extra`.
 
 ## Hysteria2 / TUIC не передают трафик
 
