@@ -113,8 +113,9 @@ JVM-лаунчер декодирует его в ANSI — это известн
 релизной и тестовой сборок на libbox `1.14.4-lx.35`, cronet-go и NaiveProxy,
 а также устаревшие подписи версии ядра в PR build workflow.
 
-Bootstrap Gradle Wrapper JAR пока извлекается из архива Gradle 8.14.6
-(совместимый wrapper JAR); фактический Gradle distribution задаётся и
+В PR #281 bootstrap wrapper JAR в PR build и Unit Tests workflows обновлён до
+Gradle 8.14.8. Release workflow пока извлекает проверенный wrapper JAR из
+архива 8.14.6; фактический Gradle distribution всё равно задаётся и
 проверяется через `gradle-wrapper.properties` как 8.14.8.
 
 ## Где остановились (handoff, 2026-11-21)
