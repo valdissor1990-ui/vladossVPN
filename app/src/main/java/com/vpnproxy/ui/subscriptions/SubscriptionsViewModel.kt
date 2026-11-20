@@ -56,6 +56,10 @@ class SubscriptionsViewModel @Inject constructor(
             addFromJsonConfig(trimmed, name, tag)
             return
         }
+        if (!repository.isSecureSubscriptionUrl(trimmed)) {
+            _message.value = "Укажите корректную HTTPS-ссылку. Незащищённый HTTP запрещён."
+            return
+        }
         viewModelScope.launch {
             val displayName = name.ifBlank { "Provider ${subscriptions.value.size + 1}" }
             val ok = repository.addSubscription(trimmed, displayName, tag)
