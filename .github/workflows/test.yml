@@ -135,11 +135,15 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: test-results
-          path: '**/build/test-results/testDirectDebugUnitTest/*.xml\n            **/build/test-results/testPlayDebugUnitTest/*.xml'
+          path: |
+            **/build/test-results/testDirectDebugUnitTest/*.xml
+            **/build/test-results/testPlayDebugUnitTest/*.xml
 
       - name: Upload test report HTML
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-report-html
-          path: '**/build/reports/tests/testDirectDebugUnitTest/**\n            **/build/reports/tests/testPlayDebugUnitTest/**'
+          path: |
+            **/build/reports/tests/testDirectDebugUnitTest/**
+            **/build/reports/tests/testPlayDebugUnitTest/**
