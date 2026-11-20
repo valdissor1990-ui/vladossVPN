@@ -115,3 +115,68 @@ JVM-лаунчер декодирует его в ANSI — это известн
 `gradle-wrapper.properties`; строки-метки «libbox 1.14.3» в названиях шагов и
 `SOURCE_COMMIT.txt`). Для их приведения к 1.14.4-lx.35 требуется
 `gh auth refresh -h github.com -s workflow`.
+
+## Где остановились (handoff, 2026-11-21)
+
+Работа остановлена по запросу пользователя. Текущая точка:
+
+- Ветка: `chore/deps-upgrade-latest-stable`
+- Коммит: `d493af6e36850e000d380a82756743c7151b1f10`
+- PR: **#280** → база `integration/full-vpn-client-final` (не в `main`)
+- CI на момент остановки: workflow `Pull Request Build Validation` в статусе
+  **pending** (run `44824197285`, job `136592482049`). Результат нужно забрать
+  из GitHub, он не подтверждён.
+
+### Сделано
+
+1. Тулчейн, библиотеки и ядро обновлены до последних стабильных, совместимых с
+   `compileSdk 35` (см. таблицы выше).
+2. Ядро: libbox `1.14.3-lx.23 → 1.14.4-lx.35`; в `SingBoxPlatform.kt` убран
+   `useProcFS`; обновлены пины cronet-go/naiveproxy в license-audit.
+3. Документация: актуализированы ссылки на ядро/cronet, закрыты ROADMAP 1.1/1.2,
+   добавлен этот документ.
+4. Локальная проверка (JDK 21, SDK 35): `assembleDirectDebug` / `assemblePlayDebug`
+   успешно; unit-тесты **149 Direct + 149 Play, 0 падений**.
+
+### Не сделано / следующие шаги
+
+1. Забрать и зафиксировать результат CI по PR #280; при падении — исправить в этой
+   же ветке и запушить (HOME SHA обновляется).
+2. Привести `.github/workflows/*` к 1.14.4-lx.35/8.14.8 — требует scope `workflow`
+   (сейчас файлы намеренно не тронуты, чтобы push не отклонялся).
+3. Доведение по аудитам: кодовая часть P0 (честный `Connected` + fallback
+   эндпоинтов) в интеграционной ветке уже есть (`ConnectionCoordinator`
+   переводит в `Connected` только после `TrafficValidationResult(success=true)`,
+   fallback через `tryFallback()`); остальное — пункты P1–P5 и runtime/device-гейты.
+4. Расширенный поиск багов — начат разбор `ConnectionCoordinator.kt` и
+   `TrafficValidator.kt`; выводов пока нет.
+
+### Блокеры / ограничения
+
+- Push правок workflow невозможен: у `gh` нет scope `workflow`.
+- AGP 9.x / compileSdk 36–37 / Compose 1.13 / Kotlin 2.4 / OkHttp 5.5 — отложены
+  по причинам совместимости (CI ставит только `platforms;android-35 build-tools;35.0.0`).
+- Runtime/device-тесты не выполнялись (запрещены без отдельного разрешения).
+- Нет signing-env → локальная release-сборка недоступна.
+
+### Открытые решения (нужен ответ пользователя)
+
+1. Мержить ли draft PR #277 (`integration → main`; запустит `release.yml`).
+2. Какую версию/`versionCode` использовать для релиза.
+3. Нужно ли разрешение на `gh auth refresh ... -s workflow` и на device-тесты.
+
+### Как продолжить локально (Windows, кириллица в пути профиля)
+
+Gradle ломает тест-воркер на не-ASCII пути (`GradleWorkerMain`). Обход — вынести
+проект и `GRADLE_USER_HOME` на ASCII-диски:
+
+```powershell
+subst G: "$env:USERPROFILE\.gradle"
+subst P: "$env:USERPROFILE\vladossVPN"
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
+$env:GRADLE_USER_HOME='G:\'
+cd P:\ ; P:\gradlew.bat :app:testDirectDebugUnitTest :app:testPlayDebugUnitTest
+```
+
+Перед повторной сборкой из исходного пути: `subst G: /D` и `subst P: /D`.
