@@ -37,9 +37,15 @@ internal object ConnectServerSelector {
         }
         val saved = lastServerStore.load()
         val lastConfig = saved?.let { last ->
-            usable.firstOrNull {
-                it.address == last.address && it.port == last.port &&
-                    (last.uuid.isBlank() || it.uuid == last.uuid)
+            if (last.fingerprint.isNotBlank()) {
+                usable.firstOrNull {
+                    lastServerStore.fingerprint(it.connectionKey()) == last.fingerprint
+                }
+            } else {
+                usable.firstOrNull {
+                    it.address == last.address && it.port == last.port &&
+                        (last.uuid.isBlank() || it.uuid == last.uuid)
+                }
             }
         }
         val selectedConfig = manualConfig ?: if (isAutomaticMode) usable.first() else lastConfig ?: usable.first()
