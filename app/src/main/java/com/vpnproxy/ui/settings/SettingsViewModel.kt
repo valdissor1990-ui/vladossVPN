@@ -36,17 +36,12 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         val KEY_AUTO_START = booleanPreferencesKey("auto_start")
-        val KEY_KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val KEY_CHECK_UPDATES = booleanPreferencesKey("check_updates")
     }
 
     val autoStart: StateFlow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_AUTO_START] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    val killSwitch: StateFlow<Boolean> = context.settingsDataStore.data
-        .map { it[KEY_KILL_SWITCH] ?: true }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val checkUpdates: StateFlow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_CHECK_UPDATES] ?: true }
@@ -100,12 +95,6 @@ class SettingsViewModel @Inject constructor(
 
         viewModelScope.launch {
             context.settingsDataStore.edit { it[KEY_AUTO_START] = enabled }
-        }
-    }
-
-    fun setKillSwitch(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[KEY_KILL_SWITCH] = enabled }
         }
     }
 
