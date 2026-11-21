@@ -60,9 +60,9 @@ class AutoSwitcher @Inject constructor(
     private val _rankedServers = MutableStateFlow<List<ScoredServer>>(emptyList())
     val rankedServers: StateFlow<List<ScoredServer>> = _rankedServers.asStateFlow()
 
-    private var consecutiveErrors = 0
-    private var baselineRtt = 0L
-    private var previousRtt: Long? = null
+    private val consecutiveErrors = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var baselineRtt = 0L
+    @Volatile private var previousRtt: Long? = null
     @Volatile private var vpnService: VpnProxyService? = null
     @Volatile private var state = AutoSwitchState.MONITORING
     fun currentState(): AutoSwitchState = state
@@ -270,23 +270,23 @@ class AutoSwitcher @Inject constructor(
             previousRtt = result.latencyMs.takeIf { result.success && it != Long.MAX_VALUE }
 
             if (!result.success || result.latencyMs == Long.MAX_VALUE) {
-                consecutiveErrors++
+                consecutiveErrors.incrementAndGet()
                 logCollector.warn(
                     TAG,
                     "Health check failed for ${current.config.name}",
-                    mapOf("errors" to consecutiveErrors)
+                    mapOf("errors" to consecutiveErrors.get())
                 )
-                if (consecutiveErrors >= AutoSwitcherConfig.maxConsecutiveErrors) {
+                if (consecutiveErrors.get() >= AutoSwitcherConfig.maxConsecutiveErrors) {
                     logCollector.warn(TAG, "Repeated health-check failures; require direct-vs-VPN validation before any switch")
                 }
                 if (state == AutoSwitchState.MONITORING) {
-                    transitionTo(AutoSwitchState.SUSPECT, "health check failed; errors=$consecutiveErrors")
+                    transitionTo(AutoSwitchState.SUSPECT, "health check failed; errors=${consecutiveErrors.get()}")
                     validateSlowServer(current.config, Long.MAX_VALUE, jitter)
                 }
                 return
             }
 
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             val baselineDegraded = baselineRtt > 0 && result.latencyMs > baselineRtt * AutoSwitcherConfig.rttDegradationFactor
             if (baselineDegraded || result.latencyMs > AutoSwitcherConfig.suspectRttMs || jitter > AutoSwitcherConfig.suspectJitterMs) {
                 if (state == AutoSwitchState.MONITORING) {
@@ -299,7 +299,7 @@ class AutoSwitcher @Inject constructor(
             throw e
         } catch (e: Exception) {
             logCollector.error(TAG, "Health check error", e)
-            consecutiveErrors++
+            consecutiveErrors.incrementAndGet()
         }
     }
 
@@ -468,7 +468,7 @@ class AutoSwitcher @Inject constructor(
             _currentServer.value = best
             baselineRtt = best.latencyMs
             previousRtt = null
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             _switchEvents.value = "Автопереключение на ${best.config.name}"
             logCollector.warn(TAG, "Slow-server detector switched to ${best.config.name}")
             return best
@@ -526,7 +526,7 @@ class AutoSwitcher @Inject constructor(
             .map { ScoredServer(it, Long.MAX_VALUE, 0f, 0f, 0f) }
         connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(_rankedServers.value))
         baselineRtt = 0L
-        consecutiveErrors = 0
+        consecutiveErrors.set(0)
         logCollector.info(TAG, "Instant connect to [${config.name}] — background probing scheduled")
         return selected
     }
@@ -538,7 +538,7 @@ class AutoSwitcher @Inject constructor(
         _rankedServers.value = listOf(selected) + filtered.filterNot { sameConfig(it.config, selected.config) }
         connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(_rankedServers.value))
         baselineRtt = selected.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
-        consecutiveErrors = 0
+        consecutiveErrors.set(0)
         logCollector.info(TAG, "Instant scanned-server selection -> ${selected.config.name} (${selected.latencyMs}ms)")
         return selected
     }
@@ -622,7 +622,7 @@ class AutoSwitcher @Inject constructor(
                             _currentServer.value = measuredCurrent
                             baselineRtt = measuredCurrent.latencyMs
                             previousRtt = null
-                            consecutiveErrors = 0
+                            consecutiveErrors.set(0)
                         }
                         suppressIfFrozen("ServerSelected", best.config.name) -> Unit
                         isInPostConnectWarmup() -> {
@@ -657,7 +657,7 @@ class AutoSwitcher @Inject constructor(
                                 _currentServer.value = best
                                 baselineRtt = best.latencyMs
                                 previousRtt = null
-                                consecutiveErrors = 0
+                                consecutiveErrors.set(0)
                                 _switchEvents.value = "Автопереключение на ${best.config.name}"
                                 val switchLimitReached = decisionEngine.recordSuccessfulSwitch()
                                 connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
@@ -706,7 +706,7 @@ class AutoSwitcher @Inject constructor(
         val best = ranked.firstOrNull() ?: return null
         _currentServer.value = best
         baselineRtt = best.latencyMs
-        consecutiveErrors = 0
+        consecutiveErrors.set(0)
         previousRtt = null
         logCollector.info(TAG, "selectBest -> ${best.config.name} (${best.latencyMs}ms)")
         return best
@@ -735,7 +735,7 @@ class AutoSwitcher @Inject constructor(
             _currentServer.value = server
             baselineRtt = server.latencyMs.takeIf { it != Long.MAX_VALUE } ?: 0L
             previousRtt = null
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             logCollector.info(TAG, "forceSelect -> ${server.config.name}")
             return true
         } finally {
@@ -766,7 +766,7 @@ class AutoSwitcher @Inject constructor(
             _currentServer.value = next
             baselineRtt = next.latencyMs
             previousRtt = null
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             _switchEvents.value = "Переключение на ${next.config.name}"
             logCollector.info(TAG, "switchToNext -> ${next.config.name}")
             return next
@@ -788,13 +788,13 @@ class AutoSwitcher @Inject constructor(
         if (sameServer(current?.config, best.config)) {
             _currentServer.value = best
             baselineRtt = best.latencyMs
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             logCollector.info(TAG, "Auto re-select skipped — already on ${best.config.name}; metrics refreshed")
             return
         }
         _currentServer.value = best
         baselineRtt = best.latencyMs
-        consecutiveErrors = 0
+        consecutiveErrors.set(0)
         _switchEvents.value = "Автопереключение на ${best.config.name}"
         logCollector.info(TAG, "Auto re-selected: ${best.config.name}")
         connectionCoordinator.send(ConnectionEvent.ResetRetryCount)

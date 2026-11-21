@@ -13,6 +13,9 @@ import java.net.URLDecoder
 internal object ExtraUriParsers {
     private const val TAG = "ExtraUriParsers"
 
+    private fun String?.isTruthy(): Boolean =
+        this?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } == true
+
     // Keep this list aligned with cipher methods accepted by the bundled libbox.
     // In particular, "chacha20-poly1305" is not the same declared method as
     // "chacha20-ietf-poly1305" and currently fails during libbox initialization.
@@ -218,7 +221,7 @@ internal object ExtraUriParsers {
                 name = name,
                 providerTag = providerTag,
                 password = password,
-                insecure = query["allowinsecure"] == "1" || query["insecure"] == "1"
+                insecure = query["allowinsecure"].isTruthy() || query["insecure"].isTruthy()
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
             logCollector.debug(TAG, "Failed to parse trojan URI: ${e.javaClass.simpleName}")

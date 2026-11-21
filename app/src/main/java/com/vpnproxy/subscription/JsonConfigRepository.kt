@@ -105,8 +105,18 @@ class JsonConfigRepository @Inject constructor(
         }
     }
 
+    /** Allow a later retry when storage was unavailable earlier (e.g. during Direct Boot). */
+    private fun retryPrefsInitIfNeeded() {
+        if (prefsOrNull == null) {
+            synchronized(prefsLock) {
+                prefsInitAttempted = false
+            }
+        }
+    }
+
     private fun load() {
         try {
+            retryPrefsInitIfNeeded()
             val prefs = prefs() ?: return
             val stored = prefs.getString(KEY_ENTRIES, null) ?: return
             val list = json.decodeFromString(entrySerializer, stored)
@@ -197,6 +207,7 @@ class JsonConfigRepository @Inject constructor(
         }
 
     suspend fun remove(id: String): Boolean = withContext(Dispatchers.IO) {
+        retryPrefsInitIfNeeded()
         mutationMutex.withLock {
             val currentEntries = _entries.value
             val updatedEntries = currentEntries.filterNot { it.id == id }
@@ -212,6 +223,7 @@ class JsonConfigRepository @Inject constructor(
     }
 
     suspend fun clear(): Boolean = withContext(Dispatchers.IO) {
+        retryPrefsInitIfNeeded()
         mutationMutex.withLock {
             if (_entries.value.isEmpty()) return@withLock true
             if (!persist(emptyList())) {

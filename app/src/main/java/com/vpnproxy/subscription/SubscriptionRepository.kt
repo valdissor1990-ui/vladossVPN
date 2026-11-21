@@ -1,6 +1,7 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -96,15 +97,22 @@ class SubscriptionRepository @Inject constructor(
     private val listSerializer = ListSerializer(ProviderSubscription.serializer())
     private val configsSerializer = ListSerializer(CachedConfig.serializer())
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val encryptedPrefs = EncryptedSharedPreferences.create(
-        context, PREFS_NAME, masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    // Keystore access can fail (corrupted key, Direct Boot) and must not crash
+    // Hilt injection. Mirror JsonConfigRepository: degrade to null, never throw.
+    private val encryptedPrefs: SharedPreferences? by lazy {
+        runCatching {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context, PREFS_NAME, masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        }.onFailure {
+            logCollector.error(TAG, "Encrypted preferences unavailable; persistence disabled", it)
+        }.getOrNull()
+    }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -144,7 +152,7 @@ class SubscriptionRepository @Inject constructor(
     )
 
 private val _deviceMetadataConsent = MutableStateFlow(
-        encryptedPrefs.getBoolean(KEY_DEVICE_METADATA_CONSENT, false)
+        encryptedPrefs?.getBoolean(KEY_DEVICE_METADATA_CONSENT, false) ?: false
     )
     val deviceMetadataConsent: StateFlow<Boolean> = _deviceMetadataConsent.asStateFlow()
 
@@ -153,9 +161,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
      * device model and Android version. Disabled by default and stored encrypted.
      */
     fun setDeviceMetadataConsent(enabled: Boolean) {
-        val saved = encryptedPrefs.edit()
-            .putBoolean(KEY_DEVICE_METADATA_CONSENT, enabled)
-            .commit()
+        val saved = encryptedPrefs?.edit()
+            ?.putBoolean(KEY_DEVICE_METADATA_CONSENT, enabled)
+            ?.commit() ?: false
         if (saved) {
             _deviceMetadataConsent.value = enabled
         } else {
@@ -197,7 +205,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
     private fun loadFromPrefs() {
         try {
-            val stored = encryptedPrefs.getString(KEY_SUBS, null) ?: return
+            val stored = encryptedPrefs?.getString(KEY_SUBS, null) ?: return
             val list = json.decodeFromString(listSerializer, stored)
             _subscriptions.value = list
             logCollector.info(TAG, "Loaded ${list.size} subscriptions from prefs")
@@ -209,7 +217,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
     private fun saveToPrefs() {
         try {
             val jsonStr = json.encodeToString(listSerializer, _subscriptions.value)
-            encryptedPrefs.edit().putString(KEY_SUBS, jsonStr).apply()
+            encryptedPrefs?.edit()?.putString(KEY_SUBS, jsonStr)?.apply()
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to save subscriptions", e)
         }
@@ -222,12 +230,12 @@ private val _deviceMetadataConsent = MutableStateFlow(
                 .digest(sourceUrl.toByteArray(Charsets.UTF_8))
                 .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
             val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
-            encryptedPrefs.edit()
-                .remove("subscription_body_$cacheKey")
-                .remove("subscription_etag_$cacheKey")
-                .remove("subscription_body_$legacyCacheKey")
-                .remove("subscription_etag_$legacyCacheKey")
-                .apply()
+            encryptedPrefs?.edit()
+                ?.remove("subscription_body_$cacheKey")
+                ?.remove("subscription_etag_$cacheKey")
+                ?.remove("subscription_body_$legacyCacheKey")
+                ?.remove("subscription_etag_$legacyCacheKey")
+                ?.apply()
         }.onFailure {
             logCollector.warn(TAG, "Could not purge retired subscription response cache: ${it.javaClass.simpleName}")
         }
@@ -298,8 +306,21 @@ private val _deviceMetadataConsent = MutableStateFlow(
     }
 
     fun removeSubscription(id: String) {
+        val removed = _subscriptions.value.firstOrNull { it.id == id } ?: return
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
         saveToPrefs()
+        // Purge the provider's cached response body/ETag so credentials do not linger
+        // encrypted on disk after the user removes the source.
+        removeSubscriptionBodyCache(removed.url)
+        // Drop the removed provider's profiles from the active pool. providerTag stores
+        // the source display name, so keep them if another subscription reuses that name.
+        if (_subscriptions.value.none { it.name == removed.name }) {
+            val remaining = _allConfigs.value.filterNot { it.providerTag == removed.name }
+            if (remaining.size != _allConfigs.value.size) {
+                _allConfigs.value = remaining
+                saveConfigsToCache(remaining)
+            }
+        }
     }
 
     suspend fun refreshAll(): Int = refreshMutex.withLock {
@@ -337,8 +358,8 @@ private val _deviceMetadataConsent = MutableStateFlow(
                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
                     val legacyCacheKey = sub.url.hashCode().toUInt().toString(16)
                     val cachedOutcome = runCatching {
-                        val cachedBody = encryptedPrefs.getString("subscription_body_$cacheKey", null)
-                            ?: encryptedPrefs.getString("subscription_body_$legacyCacheKey", null)
+                        val cachedBody = encryptedPrefs?.getString("subscription_body_$cacheKey", null)
+                            ?: encryptedPrefs?.getString("subscription_body_$legacyCacheKey", null)
                         cachedBody
                             ?.takeIf { it.isNotBlank() }
                             ?.let { parser.parseWithReport(it, providerTag = sub.name) }
@@ -452,19 +473,21 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     // Read the legacy cache before retiring its keys. Otherwise the first
                     // refresh after upgrade can erase the only per-provider fallback before
                     // a failed network request has a chance to use it.
-                    val cachedBody = encryptedPrefs.getString(bodyKey, null)
-                        ?: encryptedPrefs.getString(legacyBodyKey, null)
-                    val cachedEtag = encryptedPrefs.getString(etagKey, null)
-                        ?: encryptedPrefs.getString(legacyEtagKey, null)
+                    val cachedBody = encryptedPrefs?.getString(bodyKey, null)
+                        ?: encryptedPrefs?.getString(legacyBodyKey, null)
+                    val cachedEtag = encryptedPrefs?.getString(etagKey, null)
+                        ?: encryptedPrefs?.getString(legacyEtagKey, null)
                     if (legacyCacheKey != cacheKey && (!cachedBody.isNullOrBlank() || !cachedEtag.isNullOrBlank())) {
-                        val migrated = encryptedPrefs.edit()
-                        if (!cachedBody.isNullOrBlank()) migrated.putString(bodyKey, cachedBody)
-                        if (!cachedEtag.isNullOrBlank()) migrated.putString(etagKey, cachedEtag)
-                        if (migrated.commit()) {
-                            encryptedPrefs.edit()
-                                .remove(legacyBodyKey)
-                                .remove(legacyEtagKey)
-                                .apply()
+                        val migrated = encryptedPrefs?.edit()
+                        if (migrated != null) {
+                            if (!cachedBody.isNullOrBlank()) migrated.putString(bodyKey, cachedBody)
+                            if (!cachedEtag.isNullOrBlank()) migrated.putString(etagKey, cachedEtag)
+                            if (migrated.commit()) {
+                                encryptedPrefs?.edit()
+                                    ?.remove(legacyBodyKey)
+                                    ?.remove(legacyEtagKey)
+                                    ?.apply()
+                            }
                         }
                     }
                     val requestBuilder = Request.Builder()
@@ -529,10 +552,10 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             throw IOException("Subscription source returned no valid server configs")
                         }
                         val newEtag = response.header("ETag")
-                        val editor = encryptedPrefs.edit().putString(bodyKey, body)
-                        if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
-                        else editor.remove(etagKey)
-                        editor.apply()
+                        val editor = encryptedPrefs?.edit()?.putString(bodyKey, body)
+                        if (!newEtag.isNullOrBlank()) editor?.putString(etagKey, newEtag)
+                        else editor?.remove(etagKey)
+                        editor?.apply()
                         logCollector.info(TAG, "Subscription source OK")
                         return@withContext SubscriptionFetchResult(body, fromEtagCache = false)
                     }
@@ -680,7 +703,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
             val jsonStr = json.encodeToString(configsSerializer, cached)
             // Server profiles contain UUIDs, passwords and Reality credentials. Keep the
             // complete cache inside the same encrypted preferences store as subscriptions.
-            check(encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).commit()) {
+            val prefs = encryptedPrefs ?: run {
+                logCollector.warn(TAG, "Encrypted preferences unavailable; cache not persisted")
+                return
+            }
+            check(prefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).commit()) {
                 "Encrypted cache commit failed"
             }
         } catch (e: Exception) {
@@ -693,7 +720,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
     private fun loadConfigsFromCache(): List<CachedConfig> {
         return try {
-            val encrypted = encryptedPrefs.getString(KEY_CONFIG_CACHE, null)
+            val encrypted = encryptedPrefs?.getString(KEY_CONFIG_CACHE, null)
             if (!encrypted.isNullOrBlank()) {
                 val decoded = json.decodeFromString(configsSerializer, encrypted)
                 deleteLegacyPlaintextCache()
@@ -712,7 +739,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
             }
 
             if (decoded.isNotEmpty()) {
-                val stored = encryptedPrefs.edit().putString(KEY_CONFIG_CACHE, legacyJson).commit()
+                val stored = encryptedPrefs?.edit()?.putString(KEY_CONFIG_CACHE, legacyJson)?.commit() ?: false
                 if (!stored) {
                     logCollector.warn(TAG, "Legacy cache could not be committed to encrypted preferences")
                 }

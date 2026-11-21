@@ -37,6 +37,23 @@ class SingboxConfigBuilderTest {
     )
 
     @Test
+    fun directUdpDnsModeUsesDefaultDnsPort() {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.buildVpn(
+                config("vless", "vless-secret"),
+                DiagnosticOptions(dnsMode = "direct_udp_1111")
+            )
+        ).jsonObject
+        val server = root["dns"]!!.jsonObject["servers"]!!.jsonArray.single().jsonObject
+        assertEquals("udp", server["type"]!!.jsonPrimitive.content)
+        assertEquals("1.1.1.1", server["server"]!!.jsonPrimitive.content)
+        assertFalse(
+            "UDP DNS must not pin a non-standard port",
+            server.containsKey("server_port")
+        )
+    }
+
+    @Test
     fun hysteria2BuildsProxyModeOutbound() {
         val root = kotlinx.serialization.json.Json.parseToJsonElement(
             SingboxConfigBuilder.build(config("hysteria2", "hy2-secret"))
