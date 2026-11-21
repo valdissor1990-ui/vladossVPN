@@ -183,21 +183,19 @@ class TrafficValidator @Inject constructor(
         )
     }
 
-    private fun mapException(e: Exception): ProbeOutcome = when (e) {
-        is SocketTimeoutException -> ProbeOutcome.TIMEOUT
-        is UnknownHostException -> ProbeOutcome.DNS_ERROR
-        is ConnectException -> ProbeOutcome.REFUSED
-        else -> {
-            val msg = (e.message ?: "").lowercase()
-            when {
-                msg.contains("timeout") -> ProbeOutcome.TIMEOUT
-                msg.contains("unreachable") || msg.contains("network is unreachable") ->
-                    ProbeOutcome.UNREACHABLE
-                msg.contains("refused") -> ProbeOutcome.REFUSED
-                msg.contains("unable to resolve") || msg.contains("unknown host") ->
-                    ProbeOutcome.DNS_ERROR
-                else -> ProbeOutcome.IO_ERROR
-            }
+    /** Visible for tests: classify a probe exception into a user-facing outcome. */
+    internal fun mapException(e: Exception): ProbeOutcome {
+        val msg = (e.message ?: "").lowercase()
+        return when {
+            e is SocketTimeoutException || msg.contains("timeout") ||
+                msg.contains("timed out") -> ProbeOutcome.TIMEOUT
+            e is UnknownHostException || msg.contains("unable to resolve") ||
+                msg.contains("unknown host") -> ProbeOutcome.DNS_ERROR
+            // Check the message first: on Android ENETUNREACH can surface as a
+            // ConnectException, which must not be reported as REFUSED.
+            msg.contains("unreachable") -> ProbeOutcome.UNREACHABLE
+            e is ConnectException || msg.contains("refused") -> ProbeOutcome.REFUSED
+            else -> ProbeOutcome.IO_ERROR
         }
     }
 
