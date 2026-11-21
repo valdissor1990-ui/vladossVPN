@@ -429,4 +429,53 @@ class SingboxConfigBuilderTest {
         assertFalse(appRule.containsKey("process_name"))
     }
 
+    @Test
+    fun inboundPortsReadsEveryListenPortFromBuiltConfig() {
+        val json = SingboxConfigBuilder.buildMulti(
+            listOf(config("hysteria2", "one"), config("tuic", "two")),
+            listOf(12001, 12002)
+        )
+        assertEquals(setOf(12001, 12002), SingboxConfigBuilder.inboundPorts(json))
+    }
+
+    @Test
+    fun inboundPortsSkipsInboundsWithoutListenPort() {
+        val json = """{"inbounds":[{"type":"tun","tag":"tun-in"},{"type":"mixed","listen_port":34567}]}"""
+        assertEquals(setOf(34567), SingboxConfigBuilder.inboundPorts(json))
+    }
+
+    @Test
+    fun inboundPortsIsEmptyForMalformedOrPortlessConfig() {
+        assertTrue(SingboxConfigBuilder.inboundPorts("not json").isEmpty())
+        assertTrue(SingboxConfigBuilder.inboundPorts("""{"outbounds":[]}""").isEmpty())
+    }
+
+    @Test
+    fun probeConfigPortsExcludeTheFixedProxyPort() {
+        // Regression: a temporary probe core binds random loopback ports, so the core lifecycle
+        // must not gate its start on the fixed proxy port (10809). Waiting on 10809 while it was
+        // held by another core made every profile probe fail with "Sing-box failed to start".
+        val probeConfig = SingboxConfigBuilder.buildMulti(
+            listOf(config("hy2", "secret")),
+            listOf(12050)
+        )
+        val ports = SingboxConfigBuilder.inboundPorts(probeConfig)
+        assertEquals(setOf(12050), ports)
+        assertFalse(
+            "Probe config ports must not include the fixed proxy port",
+            ports.contains(SingboxConfigBuilder.PROXY_PORT)
+        )
+    }
+
+    @Test
+    fun vpnConfigPortsStillIncludeTheFixedProxyPort() {
+        val ports = SingboxConfigBuilder.inboundPorts(
+            SingboxConfigBuilder.buildVpn(config("ws", "secret"))
+        )
+        assertTrue(
+            "The VPN config keeps binding the fixed proxy port",
+            ports.contains(SingboxConfigBuilder.PROXY_PORT)
+        )
+    }
+
 }
