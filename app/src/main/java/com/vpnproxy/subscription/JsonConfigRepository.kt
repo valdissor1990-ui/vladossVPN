@@ -69,6 +69,9 @@ class JsonConfigRepository @Inject constructor(
     private val _configs = MutableStateFlow<List<ParsedConfig>>(emptyList())
     val configs: StateFlow<List<ParsedConfig>> = _configs.asStateFlow()
 
+    private val _lastImportReport = MutableStateFlow<SubscriptionParser.ParseReport?>(null)
+    val lastImportReport: StateFlow<SubscriptionParser.ParseReport?> = _lastImportReport.asStateFlow()
+
     init {
         // Best-effort load; safe when encrypted prefs are unavailable (direct boot).
         load()
@@ -102,8 +105,18 @@ class JsonConfigRepository @Inject constructor(
         }
     }
 
+    /** Allow a later retry when storage was unavailable earlier (e.g. during Direct Boot). */
+    private fun retryPrefsInitIfNeeded() {
+        if (prefsOrNull == null) {
+            synchronized(prefsLock) {
+                prefsInitAttempted = false
+            }
+        }
+    }
+
     private fun load() {
         try {
+            retryPrefsInitIfNeeded()
             val prefs = prefs() ?: return
             val stored = prefs.getString(KEY_ENTRIES, null) ?: return
             val list = json.decodeFromString(entrySerializer, stored)
@@ -160,8 +173,10 @@ class JsonConfigRepository @Inject constructor(
                     }
                 }
                 val displayName = name.ifBlank { "JSON" }
-                val parsed = parser.parse(rawJson, providerTag = displayName)
+                val outcome = parser.parseWithReport(rawJson, providerTag = displayName)
+                val parsed = outcome.configs
                 if (parsed.isEmpty()) {
+                    _lastImportReport.value = outcome.report
                     logCollector.warn(TAG, "No valid servers in JSON")
                     return@withContext null
                 }
@@ -179,9 +194,12 @@ class JsonConfigRepository @Inject constructor(
                     }
                     _entries.value = updatedEntries
                     reparseAll()
+                    _lastImportReport.value = outcome.report
                     logCollector.info(TAG, "JSON import ok: servers=${parsed.size} name=$displayName")
                     parsed.size
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "JSON import failed", e)
                 null
@@ -189,6 +207,7 @@ class JsonConfigRepository @Inject constructor(
         }
 
     suspend fun remove(id: String): Boolean = withContext(Dispatchers.IO) {
+        retryPrefsInitIfNeeded()
         mutationMutex.withLock {
             val currentEntries = _entries.value
             val updatedEntries = currentEntries.filterNot { it.id == id }
@@ -204,6 +223,7 @@ class JsonConfigRepository @Inject constructor(
     }
 
     suspend fun clear(): Boolean = withContext(Dispatchers.IO) {
+        retryPrefsInitIfNeeded()
         mutationMutex.withLock {
             if (_entries.value.isEmpty()) return@withLock true
             if (!persist(emptyList())) {

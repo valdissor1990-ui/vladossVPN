@@ -1,11 +1,11 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
-import android.util.Log
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.logging.SensitiveMasker
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -21,10 +21,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
@@ -41,6 +46,7 @@ import javax.inject.Singleton
 @Singleton
 class DeepProbeEngine @Inject constructor(
     private val healthChecker: HealthChecker,
+    private val networkBucketProvider: NetworkBucketProvider,
     private val logCollector: LogCollector,
     @ApplicationContext private val context: Context
 ) {
@@ -129,18 +135,22 @@ class DeepProbeEngine @Inject constructor(
         val speedScore: Double = 0.0,
         val jitterScore: Double = 0.0,
         val lossScore: Double = 0.0,
-        val normalizedScore: Double = 0.0
+        val normalizedScore: Double = 0.0,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     private val running = AtomicBoolean(false)
     private val cancellationGeneration = AtomicLong(0L)
 
-    /** Cancel the active probe without releasing its slot before its coroutine has exited. */
+    /**
+     * Signal cancellation without synchronously stopping the native core from the caller.
+     * The probe coroutine owns the CorePortLease and performs core teardown in its finally
+     * block; SingboxProxyClient.start() also cleans up if its interruptible startup is cancelled.
+     */
     fun cancel() {
         cancellationGeneration.incrementAndGet()
         if (running.get()) {
-            runCatching { SingboxProxyClient.stop(context) }
-            logCollector.info(TAG, "DeepProbe cancellation requested — temporary core stopped")
+            logCollector.info(TAG, "DeepProbe cancellation requested — probe owner will stop temporary core")
         } else {
             logCollector.info(TAG, "DeepProbe cancellation generation advanced (no active probe)")
         }
@@ -150,7 +160,8 @@ class DeepProbeEngine @Inject constructor(
         val config: ParsedConfig,
         val latencyMs: Long,
         val success: Boolean,
-        val successfulSamples: Int
+        val successfulSamples: Int,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     /**
@@ -167,8 +178,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                 "Проверка отдельных профилей доступна только при полностью остановленном VPN"
@@ -181,7 +192,7 @@ class DeepProbeEngine @Inject constructor(
                 "VPN начал запускаться до начала проверки профилей"
             }
             checkProbeActive(probeGeneration)
-            val started = SingboxProxyClient.start(context, configJson)
+            val started = runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             check(started) { "Sing-box failed to start for profile ping" }
             logCollector.info(TAG, "Profile probe session started: generation=$probeGeneration profiles=${configs.size} attemptsPerProfile=$PROFILE_PING_ATTEMPTS requiredSuccessSamples=2 concurrency=8 endpoints=${PROFILE_PING_URLS.size}")
 
@@ -202,10 +213,14 @@ class DeepProbeEngine @Inject constructor(
                                         .retryOnConnectionFailure(false)
                                         .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                                         .build()
+                                    val startedAtEpochMs = System.currentTimeMillis()
+                                    val startNetwork = networkBucketProvider.snapshot()
+                                    var attemptedSamples = 0
                                     val samples = mutableListOf<Long>()
                                     for (attempt in 0 until PROFILE_PING_ATTEMPTS) {
                                         if (samples.size >= 2 || samples.size + (PROFILE_PING_ATTEMPTS - attempt) < 2) break
                                         checkProbeActive(probeGeneration)
+                                        attemptedSamples++
                                         try {
                                             val probeUrl = PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]
                                             val request = Request.Builder().url(probeUrl).get().build()
@@ -224,11 +239,21 @@ class DeepProbeEngine @Inject constructor(
                                                 TAG,
                                                 "Profile probe failed: profile=${configs[index].name} attempt=${attempt + 1} " +
                                                     "endpoint=${PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]} " +
-                                                    "reason=${failure.javaClass.simpleName}: ${failure.message}"
+                                                    "reason=${failure.javaClass.simpleName}: ${SensitiveMasker.mask(failure.message.orEmpty())}"
                                             )
                                         }
                                     }
-                                    val result = summarizeProfileLatency(configs[index], samples)
+                                    val result = summarizeProfileLatency(configs[index], samples).copy(
+                                        evidence = ProbeMeasurementEvidence(
+                                            method = ProbeMethod.DEEP_PROFILE_LATENCY,
+                                            startedAtEpochMs = startedAtEpochMs,
+                                            completedAtEpochMs = System.currentTimeMillis(),
+                                            startNetwork = startNetwork,
+                                            endNetwork = networkBucketProvider.snapshot(),
+                                            attemptedSamples = attemptedSamples,
+                                            successfulSamples = samples.size
+                                        )
+                                    )
                                     logCollector.info(
                                         TAG,
                                         "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${result.success} successfulSamples=${result.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${result.latencyMs}"
@@ -253,9 +278,9 @@ class DeepProbeEngine @Inject constructor(
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box profile-ping core stopped")
             }
+            }
         } finally {
             running.set(false)
-        }
         }
     }
 
@@ -263,8 +288,8 @@ class DeepProbeEngine @Inject constructor(
         if (configs.isEmpty()) return@withContext emptyList()
         val probeGeneration = cancellationGeneration.get()
         awaitProbeSlot()
-        CorePortLease.mutex.withLock {
         try {
+            CorePortLease.mutex.withLock {
             checkProbeActive(probeGeneration)
             check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) { "Отключите VPN и дождитесь полной остановки ядра для глубокого анализа" }
             require(configs.isNotEmpty()) { "Нет серверов для глубокого анализа" }
@@ -277,7 +302,7 @@ class DeepProbeEngine @Inject constructor(
             checkProbeActive(probeGeneration)
             logCollector.info(TAG, "Starting temporary Sing-box proxy core for ${configs.size} candidates")
             val started = try {
-                SingboxProxyClient.start(context, configJson)
+                runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, configJson) }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -302,17 +327,22 @@ class DeepProbeEngine @Inject constructor(
                             .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                             .build()
 
+                        val startedAtEpochMs = System.currentTimeMillis()
+                        val startNetwork = networkBucketProvider.snapshot()
+                        var attemptedSamples = 0
                         val samples = mutableListOf<Long>()
                         var failures = 0
                         repeat(LATENCY_SAMPLES) {
                             checkProbeActive(probeGeneration)
+                            attemptedSamples++
                             try {
                                 val request = Request.Builder().url(LATENCY_URL).head().build()
                                 val start = System.nanoTime()
-                                client.newCall(request).execute().use { response ->
-                                    val elapsed = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
-                                    if (response.code in 200..399) samples += elapsed else failures++
+                                val elapsed = executeCancellable(client, request) { response ->
+                                    val measured = ((System.nanoTime() - start) / 1_000_000L).coerceAtLeast(1L)
+                                    if (response.code in 200..399) measured else null
                                 }
+                                if (elapsed != null) samples += elapsed else failures++
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Exception) {
@@ -326,16 +356,21 @@ class DeepProbeEngine @Inject constructor(
                         var speed = 0.0
                         var speedOk = false
                         try {
+                            attemptedSamples++
                             val request = Request.Builder().url(SPEED_URL).header("User-Agent", "VPNProxy/1.0").build()
                             val start = System.nanoTime()
-                            client.newCall(request).execute().use { response ->
+                            val measurement = executeCancellable(client, request) { response ->
                                 if (response.isSuccessful) {
                                     val bytes = response.body?.bytes()?.size ?: 0
                                     val elapsedMs = ((System.nanoTime() - start) / 1_000_000.0).coerceAtLeast(1.0)
-                                    speed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
-                                    speedOk = bytes > 0
+                                    val measuredSpeed = bytes * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)
+                                    measuredSpeed to (bytes > 0)
+                                } else {
+                                    0.0 to false
                                 }
                             }
+                            speed = measurement.first
+                            speedOk = measurement.second
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {
@@ -348,24 +383,73 @@ class DeepProbeEngine @Inject constructor(
                             speedMbps = speed,
                             jitterMs = jitter,
                             lossRate = failures.toDouble() / LATENCY_SAMPLES,
-                            healthOk = samples.size >= 2 && speedOk
+                            healthOk = samples.size >= 2 && speedOk,
+                            evidence = ProbeMeasurementEvidence(
+                                method = ProbeMethod.DEEP_DIAGNOSTIC,
+                                startedAtEpochMs = startedAtEpochMs,
+                                completedAtEpochMs = System.currentTimeMillis(),
+                                startNetwork = startNetwork,
+                                endNetwork = networkBucketProvider.snapshot(),
+                                attemptedSamples = attemptedSamples,
+                                successfulSamples = samples.size + if (speedOk) 1 else 0
+                            )
                         )
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (t: Throwable) {
-                        Log.w(TAG, "Probe failed for ${config.name}", t)
+                        logCollector.error(TAG, "Probe failed: ${t.javaClass.simpleName}", t)
                         ProbeMetrics(config, Long.MAX_VALUE, 0.0, Long.MAX_VALUE, 1.0, false)
                     }
                 }
-                scoreMetrics(results)
+                val networkAtCompletion = networkBucketProvider.snapshot()
+                val freshResults = results.filter { result ->
+                    result.evidence?.isFresh(networkAtCompletion, maxAgeMs = 90_000L) == true
+                }
+                if (freshResults.size != results.size) {
+                    logCollector.warn(
+                        TAG,
+                        "Discarded DeepProbe results from stale or changed physical network: discarded=${results.size - freshResults.size} kept=${freshResults.size}"
+                    )
+                }
+                scoreMetrics(freshResults)
             } finally {
                 SingboxProxyClient.stop(context)
                 logCollector.info(TAG, "Temporary Sing-box deep probe stopped")
             }
+            }
         } finally {
             running.set(false)
         }
-        }
+    }
+
+    /**
+     * Execute and consume an OkHttp call with cancellation wired to Call.cancel().
+     * Thread interruption alone does not reliably abort OkHttp socket reads.
+     */
+    private suspend fun <T> executeCancellable(
+        client: OkHttpClient,
+        request: Request,
+        consume: (Response) -> T
+    ): T = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                if (!continuation.isActive) {
+                    response.close()
+                    return
+                }
+                try {
+                    continuation.resumeWith(Result.success(response.use(consume)))
+                } catch (failure: Throwable) {
+                    continuation.resumeWith(Result.failure(failure))
+                }
+            }
+        })
     }
 
     /** Wait for the single temporary Sing-box core slot instead of fabricating failed results. */

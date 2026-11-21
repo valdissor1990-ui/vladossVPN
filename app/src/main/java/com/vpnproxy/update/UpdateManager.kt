@@ -4,6 +4,7 @@ import android.content.Context
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.logging.LogCollector
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,11 +41,17 @@ class UpdateManager @Inject constructor(
     private val pendingStore = PendingUpdateStore(context)
 
     init {
-        restoreReadyFromDisk()
+        if (BuildConfig.ENABLE_SELF_UPDATE) {
+            restoreReadyFromDisk()
+        }
     }
 
     /** If a previously downloaded APK is still newer than installed, surface Ready. */
     fun restoreReadyFromDisk() {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return
+        }
         val pending = pendingStore.read() ?: return
         val file = pendingStore.readyFile() ?: return
         val synthetic = GitHubRelease(
@@ -64,6 +71,10 @@ class UpdateManager @Inject constructor(
     }
 
     suspend fun checkForUpdate(force: Boolean = false) {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return
+        }
         if (!force && System.currentTimeMillis() - lastCheckAt < checkCooldownMs) {
             logCollector.debug("UpdateManager", "Skip check (cooldown)")
             return
@@ -73,10 +84,17 @@ class UpdateManager @Inject constructor(
                 logCollector.debug("UpdateManager", "Skip check (already done)")
                 return@withLock
             }
-            // Keep Ready if we already have a download at least as new as remote later.
-            val previousReady = _state.value as? State.Ready
+            // Keep the complete previous state if the check is cancelled.
+            val previousState = _state.value
+            val previousReady = previousState as? State.Ready
             _state.value = State.Checking
-            val result = checker.check()
+            val result = try {
+                checker.check()
+            } catch (cancelled: CancellationException) {
+                _state.value = previousState
+                if (previousReady == null) restoreReadyFromDisk()
+                throw cancelled
+            }
             lastCheckAt = System.currentTimeMillis()
             _state.value = when {
                 result.error != null -> {
@@ -136,6 +154,10 @@ class UpdateManager @Inject constructor(
     }
 
     suspend fun downloadUpdate(release: GitHubRelease) = downloadMutex.withLock {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) {
+            _state.value = State.Idle
+            return@withLock
+        }
         val flavor = if (context.packageName.endsWith(".play")) "play" else "direct"
         val asset = release.findApkAsset(flavor)
         if (asset == null) {
@@ -156,8 +178,15 @@ class UpdateManager @Inject constructor(
         }
 
         _state.value = State.Downloading(0, release)
-        val file = downloader.download(asset.downloadUrl, asset.name, asset.size) { percent ->
-            _state.value = State.Downloading(percent.coerceIn(0, 100), release)
+        val file = try {
+            downloader.download(asset.downloadUrl, asset.name, asset.size) { percent ->
+                _state.value = State.Downloading(percent.coerceIn(0, 100), release)
+            }
+        } catch (cancelled: CancellationException) {
+            // Keep an older verified pending APK available if one existed before this download.
+            restoreReadyFromDisk()
+            if (_state.value !is State.Ready) _state.value = State.UpdateAvailable(release)
+            throw cancelled
         }
         if (file != null) {
             pendingStore.save(release, file)
@@ -172,6 +201,7 @@ class UpdateManager @Inject constructor(
     }
 
     fun installReady() {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) return
         val ready = _state.value as? State.Ready ?: return
         if (!installer.canInstallPackages()) {
             logCollector.warn("UpdateManager", "Install blocked: unknown-sources permission not granted")

@@ -25,4 +25,4 @@
 
 ## XHTTP через sing-box-lx
 
-Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` `1.14.3-lx.23` с `with_xhttp`.
+Приложение использует полный `libbox.aar` из `Leadaxe/sing-box-lx` `1.14.4-lx.35` с `with_xhttp`.

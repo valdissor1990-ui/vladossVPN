@@ -2,7 +2,7 @@ package com.vpnproxy.core.tunnel
 
 import android.net.TrafficStats
 import android.os.Process
-import android.util.Log
+import com.vpnproxy.logging.LogCollectorHolder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,7 +47,7 @@ class TrafficStatsCollector @Inject constructor() {
 
         collectJob = scope.launch {
             while (isActive) {
-                try { collectOnce() } catch (e: Exception) { Log.e(TAG, "collect", e) }
+                try { collectOnce() } catch (e: Exception) { LogCollectorHolder.get()?.error(TAG, "Traffic stats collection failed", e) }
                 delay(UPDATE_INTERVAL_MS)
             }
         }

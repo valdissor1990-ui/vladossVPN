@@ -1,5 +1,6 @@
 package com.vpnproxy.core.singbox
 
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import com.vpnproxy.logging.LogCollectorHolder
 import kotlinx.serialization.json.Json
@@ -80,7 +81,7 @@ object SingboxConfigBuilder {
                 when (options.dnsMode) {
                     "proxy_dot_8888" -> add(dnsServer("tls", "proxy-dot", "8.8.8.8", 853, detour = "proxy"))
                     "direct_udp_8888" -> add(dnsServer("udp", "direct-dns", "8.8.8.8"))
-                    "direct_udp_1111" -> add(dnsServer("udp", "direct-dns", "1.1.1.1", 1111))
+                    "direct_udp_1111" -> add(dnsServer("udp", "direct-dns", "1.1.1.1"))
                     "direct_dot_1111" -> add(dnsServer("tls", "direct-dns", "1.1.1.1", 853))
                     "proxy_dot_1111" -> add(dnsServer("tls", "proxy-dot", "1.1.1.1", 853, detour = "proxy"))
                     "system_no_hijack" -> add(dnsServer("local", "direct-dns", "127.0.0.1"))
@@ -202,6 +203,26 @@ object SingboxConfigBuilder {
         val isTrojan = transportKey == "trojan"
         val isVmess = transportKey == "vmess"
         val isVless = !isHy2 && !isTuic && !isShadowsocks && !isSocks && !isTrojan && !isVmess
+        if (BuildConfig.IS_PLAY_STORE) {
+            val encryptedTransport = when {
+                isSocks -> false
+                isVless -> config.security.equals("tls", ignoreCase = true) ||
+                    config.security.equals("reality", ignoreCase = true)
+                isShadowsocks -> config.security.isBlank() ||
+                    (!config.security.equals("none", ignoreCase = true) &&
+                        !config.security.equals("plain", ignoreCase = true))
+                else -> true // VMess uses protocol encryption; Trojan/Hy2/TUIC require TLS.
+            }
+            require(encryptedTransport) {
+                "This profile does not provide an encrypted transport and is disabled in the Play Store build."
+            }
+            val usesTls = isHy2 || isTuic || isTrojan ||
+                config.security.equals("tls", ignoreCase = true) ||
+                config.security.equals("reality", ignoreCase = true)
+            require(!usesTls || !config.insecure) {
+                "Certificate verification cannot be disabled in the Play Store build."
+            }
+        }
         require(isVless || isHy2 || isTuic || isShadowsocks || isSocks || isTrojan || isVmess) {
             "Unsupported Sing-box outbound: ${config.transport}"
         }
@@ -329,7 +350,7 @@ object SingboxConfigBuilder {
                                 "xPaddingHeader" -> "x_padding_header"
                                 "xPaddingPlacement" -> "x_padding_placement"
                                 "xPaddingMethod" -> "x_padding_method"
-                                else -> key.replace(Regex("([a-z0-9])([A-Z])")) { match ->
+                                else -> key.replace('-', '_').replace(Regex("([a-z0-9])([A-Z])")) { match ->
                                     "${match.groupValues[1]}_${match.groupValues[2]}"
                                 }.lowercase()
                             }

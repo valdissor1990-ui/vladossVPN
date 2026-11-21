@@ -65,6 +65,10 @@ class HomeViewModel @Inject constructor(
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 80_000L
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
+        private const val KEY_SELECTION_MODE = "server_selection_mode"
+        private const val MODE_RECOMMEND = "recommend"
+        private const val MODE_AUTOMATIC = "automatic"
+        private const val MODE_MANUAL = "manual"
         private const val KEY_AUTOMATIC_SUBSCRIPTION_ID = "automatic_server_subscription_id"
         const val ALL_SUBSCRIPTIONS_ID = "all"
     }
@@ -80,7 +84,10 @@ class HomeViewModel @Inject constructor(
         val isScanningServers: Boolean = false,
         val scannedAvailableServers: Int = 0,
         val scanTotalServers: Int = 0,
-        val isAutomaticMode: Boolean = true,
+        val isAutomaticMode: Boolean = false,
+        val isRecommendationMode: Boolean = true,
+        val selectionMode: String = MODE_RECOMMEND,
+        val pendingRecommendation: ScoringEngine.ScoredServer? = null,
         val selectedSubscriptionId: String = ALL_SUBSCRIPTIONS_ID,
         val lastErrorMessage: String? = null,
         val dualPathEnabled: Boolean = false,
@@ -93,9 +100,23 @@ class HomeViewModel @Inject constructor(
     )
 
     private val modePreferences = context.getSharedPreferences("vladoss_ui_preferences", Context.MODE_PRIVATE)
+    private fun readSelectionMode(): String {
+        val saved = modePreferences.getString(KEY_SELECTION_MODE, null)
+        if (saved == MODE_RECOMMEND || saved == MODE_AUTOMATIC || saved == MODE_MANUAL) return saved!!
+        // Preserve an explicit manual preference; migrate existing automatic users to the
+        // safer recommendation-first flow.
+        val migrated = if (modePreferences.contains(KEY_AUTOMATIC_MODE) &&
+            !modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true)
+        ) MODE_MANUAL else MODE_RECOMMEND
+        modePreferences.edit().putString(KEY_SELECTION_MODE, migrated).apply()
+        return migrated
+    }
+    private val initialSelectionMode = readSelectionMode()
     private val _uiState = MutableStateFlow(
         UiState(
-            isAutomaticMode = modePreferences.getBoolean(KEY_AUTOMATIC_MODE, true),
+            isAutomaticMode = initialSelectionMode == MODE_AUTOMATIC,
+            isRecommendationMode = initialSelectionMode == MODE_RECOMMEND,
+            selectionMode = initialSelectionMode,
             selectedSubscriptionId = modePreferences.getString(KEY_AUTOMATIC_SUBSCRIPTION_ID, ALL_SUBSCRIPTIONS_ID)
                 ?: ALL_SUBSCRIPTIONS_ID
         )
@@ -116,11 +137,11 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     private var selectionJob: Job? = null
+    private var manualReconnectJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
-    @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
     @Volatile private var permissionFlowInProgress: Boolean = false
     @Volatile private var userStopRequested: Boolean = false
     private var stableClearJob: Job? = null
@@ -171,12 +192,8 @@ class HomeViewModel @Inject constructor(
                         cancelConnectingWatchdog()
                         permissionFlowInProgress = false
                         autoSwitcher.currentServer.value?.config?.let { server ->
-                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid)
+                            lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid, connectionKey = server.connectionKey())
                             serverScanner.recordSuccessfulConnection(server)
-                        }
-                        pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
-                            pendingRankingConfigs = emptyList()
-                            autoSwitcher.rankInBackground(configs)
                         }
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
@@ -194,7 +211,6 @@ class HomeViewModel @Inject constructor(
                         cancelSelectionJob("Error")
                         stableClearJob?.cancel()
                         permissionFlowInProgress = false
-                        pendingRankingConfigs = emptyList()
                         val prev = _uiState.value.connectionState
                         val unexpected = !userStopRequested &&
                             (prev == ConnectionUiState.CONNECTED || prev == ConnectionUiState.UNSTABLE)
@@ -287,7 +303,13 @@ class HomeViewModel @Inject constructor(
                         )
                     }
                 )
-            }.collect { _profileServers.value = it }
+            }.collect {
+                // Keep the visible picker latency-ordered; Smart Connect retains its
+                // independent reliability/history ordering for automatic selection.
+                _profileServers.value = it.sortedWith(
+                    compareBy<ScoringEngine.ScoredServer>({ it.latencyMs == Long.MAX_VALUE }, { it.latencyMs })
+                )
+            }
         }
     }
 
@@ -357,7 +379,13 @@ class HomeViewModel @Inject constructor(
                         LatencyCalculator.compute(multi.results)
                     }
                     _latencyBreakdown.value = breakdown
-                    _googleRtt.value = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
+                    val measuredRtt = if (breakdown.isValid) breakdown.compositeScore.toLong() else null
+                    _googleRtt.value = measuredRtt
+                    // The power-button quality indicator must follow fresh active-tunnel
+                    // measurements, not only the RTT captured during server preflight.
+                    if (_uiState.value.connectionState.hasTunnel() && measuredRtt != null) {
+                        _uiState.value = _uiState.value.copy(currentRtt = measuredRtt)
+                    }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (_: Throwable) {
@@ -400,7 +428,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun filterConfigsForSelectedSubscription(configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>): List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> {
-        if (!_uiState.value.isAutomaticMode) return configs
+        if (_uiState.value.selectionMode == MODE_MANUAL) return configs
         val selectedId = _uiState.value.selectedSubscriptionId
         if (selectedId == ALL_SUBSCRIPTIONS_ID) return configs
         val subscription = subscriptionRepository.subscriptions.value.firstOrNull { it.id == selectedId }
@@ -410,12 +438,13 @@ class HomeViewModel @Inject constructor(
 
     private fun updateAutoSwitcherProviderScope() {
         val state = _uiState.value
-        val scopedSelection = state.isAutomaticMode && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
+        val scopedSelection = state.selectionMode != MODE_MANUAL && state.selectedSubscriptionId != ALL_SUBSCRIPTIONS_ID
         val selectedSubscription = if (scopedSelection) subscriptionRepository.subscriptions.value.firstOrNull { it.id == state.selectedSubscriptionId } else null
         val blocked = scopedSelection && selectedSubscription == null
         val providerTag = selectedSubscription?.name
-        autoSwitcher.setManualSelectionMode(!state.isAutomaticMode)
-        connectionCoordinator.setManualSelectionMode(!state.isAutomaticMode)
+        val recommendationOnly = state.isRecommendationMode
+        autoSwitcher.setManualSelectionMode(!state.isAutomaticMode || recommendationOnly)
+        connectionCoordinator.setManualSelectionMode(!state.isAutomaticMode || recommendationOnly)
         autoSwitcher.setProviderScope(providerTag, blocked = blocked)
         connectionCoordinator.setProviderScope(providerTag, blocked = blocked)
     }
@@ -449,13 +478,52 @@ class HomeViewModel @Inject constructor(
     }
 
     fun setAutomaticMode(enabled: Boolean) {
-        modePreferences.edit().putBoolean(KEY_AUTOMATIC_MODE, enabled).apply()
-        _uiState.value = _uiState.value.copy(isAutomaticMode = enabled)
+        setSelectionMode(if (enabled) MODE_AUTOMATIC else MODE_MANUAL)
+    }
+
+    fun setSelectionMode(mode: String) {
+        val normalized = mode.takeIf { it == MODE_RECOMMEND || it == MODE_AUTOMATIC || it == MODE_MANUAL }
+            ?: MODE_RECOMMEND
+        modePreferences.edit()
+            .putString(KEY_SELECTION_MODE, normalized)
+            .putBoolean(KEY_AUTOMATIC_MODE, normalized == MODE_AUTOMATIC)
+            .apply()
+        if (normalized != MODE_MANUAL) manuallySelectedServer = null
+        _uiState.value = _uiState.value.copy(
+            selectionMode = normalized,
+            isAutomaticMode = normalized == MODE_AUTOMATIC,
+            isRecommendationMode = normalized == MODE_RECOMMEND,
+            pendingRecommendation = null
+        )
         updateAutoSwitcherProviderScope()
         if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
     }
 
-    private fun connect() {
+    fun dismissRecommendation() {
+        _uiState.value = _uiState.value.copy(pendingRecommendation = null)
+    }
+
+    fun confirmRecommendation() {
+        if (_uiState.value.isBusy || !_uiState.value.isRecommendationMode) return
+        val server = _uiState.value.pendingRecommendation ?: return
+        _uiState.value = _uiState.value.copy(
+            pendingRecommendation = null,
+            currentServerName = server.config.name,
+            currentRtt = server.latencyMs,
+            lastErrorMessage = null
+        )
+        manuallySelectedServer = server
+        // This is a second, explicit confirmation; bypass the original tap debounce.
+        lastConnectClickMs = 0L
+        logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}; starting normal permission and preflight flow"))
+        connect()
+    }
+
+    private fun connect(fromManualReconnect: Boolean = false) {
+        if (!fromManualReconnect) {
+            manualReconnectJob?.cancel()
+            manualReconnectJob = null
+        }
         runCatching { BatteryPolicy.requestIgnoreBatteryOptimizations(context) }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastConnectClickMs < 900L) {
@@ -564,7 +632,7 @@ class HomeViewModel @Inject constructor(
                 }
                 val verifiedServers = reachable
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
-                    .sortedBy { it.latencyMs }
+                    .sorted()
                 val verifiedConfigs = verifiedServers.map { it.config }
                 val manualFallback = if (verifiedConfigs.isEmpty()) {
                     manuallySelectedServer?.takeIf { manual ->
@@ -587,7 +655,7 @@ class HomeViewModel @Inject constructor(
                     withTimeoutOrNull(5_000L) {
                         ConnectServerSelector.select(
                             configs = verifiedConfigs,
-                            isAutomaticMode = _uiState.value.isAutomaticMode,
+                            isAutomaticMode = _uiState.value.isAutomaticMode || _uiState.value.isRecommendationMode,
                             manuallySelected = manuallySelectedServer,
                             scannedCandidates = verifiedServers,
                             lastServerStore = lastServerStore,
@@ -603,9 +671,21 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
+                if (_uiState.value.isRecommendationMode && manuallySelectedServer == null) {
+                    cancelConnectingWatchdog()
+                    endConnectFlow()
+                    _uiState.value = _uiState.value.copy(
+                        connectionState = ConnectionUiState.DISCONNECTED,
+                        isBusy = false,
+                        pendingRecommendation = selected,
+                        lastErrorMessage = null
+                    )
+                    logCollector.info(TAG, tmsg("Server recommendation is ready; waiting for explicit user confirmation"))
+                    return@launch
+                }
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
-                pendingRankingConfigs = emptyList()
+                if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
@@ -624,6 +704,8 @@ class HomeViewModel @Inject constructor(
 
     fun disconnect() {
         userStopRequested = true
+        manualReconnectJob?.cancel()
+        manualReconnectJob = null
         cancelConnectingWatchdog()
         cancelSelectionJob("user disconnect")
         serverScanner.cancelScan()
@@ -643,6 +725,8 @@ class HomeViewModel @Inject constructor(
 
     fun forceDisconnect() {
         userStopRequested = true
+        manualReconnectJob?.cancel()
+        manualReconnectJob = null
         cancelConnectingWatchdog()
         cancelSelectionJob("forceDisconnect")
         serverScanner.cancelScan()
@@ -663,9 +747,19 @@ class HomeViewModel @Inject constructor(
     fun switchServer() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val current = autoSwitcher.currentServer.value
                 val next = autoSwitcher.switchToNext() ?: return@launch
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(next, activeTraceId))
-                ensureServiceRunning()
+                if (current?.config?.connectionKey() == next.config.connectionKey()) {
+                    logCollector.info(TAG, "switchServer skipped: no different reachable server is available")
+                    return@launch
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    // Route the explicit switch through the same teardown + fresh preflight
+                    // path as tapping a server row.
+                    onServerSelected(next)
+                }
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 logCollector.error(TAG, "switchServer failed", e)
             }
@@ -688,6 +782,8 @@ class HomeViewModel @Inject constructor(
                 subscriptionRepository.refreshAll()
                 updateAutoSwitcherProviderScope()
                 if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
             } finally {
@@ -710,34 +806,74 @@ class HomeViewModel @Inject constructor(
             currentSuccessRate = server.successRate,
             selectedServerKey = server.config.connectionKey()
         )
-        // On a disconnected app, route manual selection through the same mandatory
-        // fresh preflight as the main Connect button. A stale list entry is not proof
-        // that the profile is reachable on the current network.
-        if (connectionCoordinator.state.value is ConnectionState.Disconnected ||
-            connectionCoordinator.state.value is ConnectionState.Error
-        ) {
+
+        val current = connectionCoordinator.state.value
+        if (current is ConnectionState.Disconnected && permissionFlowInProgress) {
+            // ConnectRequested deliberately keeps the coordinator Disconnected while
+            // permission/preflight is in progress. Record this choice for the active
+            // selection job instead of cancelling it and trying to start a second flow.
+            logCollector.info(TAG, "Manual server choice updated during active permission/preflight flow: ${server.config.name}")
+            return
+        }
+        if (current is ConnectionState.Disconnected || current is ConnectionState.Error) {
             connect()
             return
         }
+
+        // A server row may be selected while another tunnel is active or starting.
+        // Never feed its possibly stale scan result directly to ServerSelected: stop
+        // the old core first, then let the normal Connect flow perform fresh preflight.
+        manualReconnectJob?.cancel()
         val traceId = TraceId.newId()
         activeTraceId = traceId
-        permissionFlowInProgress = true
-        connectionCoordinator.send(ConnectionEvent.ConnectRequested(traceId, userInitiated = true))
-        viewModelScope.launch {
+        userStopRequested = true
+        manualReconnectJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                lastServerStore.save(address = server.config.address, port = server.config.port, name = server.config.name, uuid = server.config.uuid)
-                _uiState.value = _uiState.value.copy(currentServerName = server.config.name, currentRtt = server.latencyMs)
-                connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
-                connectionCoordinator.send(ConnectionEvent.ServerSelected(server, traceId))
-                if (connectionCoordinator.state.value is ConnectionState.Disconnected || connectionCoordinator.state.value is ConnectionState.Error) {
-                    connectionCoordinator.send(ConnectionEvent.UserConnect)
+                // Persist only after the new tunnel is actually Connected; a selected
+                // but unreachable profile must not replace the last known-good boot target.
+                connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
+                // Ensure a service instance is present to consume the stop request even
+                // if the previous connect had not finished starting the foreground service.
+                ensureServiceRunning(action = VpnProxyService.ACTION_FORCE_STOP)
+                val stopped = withTimeoutOrNull(20_000L) {
+                    while (
+                        VpnProxyService.isRunning.value ||
+                        VpnProxyService.isCoreTransitioning.value ||
+                        connectionCoordinator.state.value !is ConnectionState.Disconnected
+                    ) {
+                        delay(100L)
+                    }
+                    true
+                } ?: false
+
+                if (!stopped) {
+                    if (activeTraceId == traceId) {
+                        endConnectFlow()
+                        connectionCoordinator.send(
+                            ConnectionEvent.ShowError("Не удалось остановить прежнее подключение. Повторите попытку.")
+                        )
+                    }
+                    return@launch
                 }
-                ensureServiceRunning()
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: Exception) {
-                permissionFlowInProgress = false
-                logCollector.error(TAG, "onServerSelected failed", e)
+                if (activeTraceId != traceId) return@launch
+
+                withContext(Dispatchers.Main.immediate) {
+                    endConnectFlow()
+                    // connect() will request VPN permission if needed and run the same
+                    // fresh subscription/preflight pipeline as the main Connect button.
+                    lastConnectClickMs = 0L
+                    connect(fromManualReconnect = true)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (activeTraceId == traceId) {
+                    endConnectFlow()
+                    logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
+                    connectionCoordinator.send(
+                        ConnectionEvent.ShowError(failure.message ?: "Не удалось переключить сервер")
+                    )
+                }
             }
         }
     }
@@ -779,6 +915,18 @@ class HomeViewModel @Inject constructor(
 
     fun pingAllServers() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Isolated per-profile probes cannot run alongside the active VPN core.
+            // Do not report cached results as if a fresh measurement had completed.
+            if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                _uiState.value = _uiState.value.copy(
+                    notice = "Чтобы проверить задержку всех серверов, сначала отключите VPN"
+                )
+                return@launch
+            }
+            if (serverScanner.isScanning.value) {
+                _uiState.value = _uiState.value.copy(notice = "Проверка серверов уже выполняется")
+                return@launch
+            }
             val configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs())
             if (configs.isEmpty()) {
                 _uiState.value = _uiState.value.copy(notice = "Нет серверов для проверки задержки")
@@ -786,8 +934,15 @@ class HomeViewModel @Inject constructor(
             }
             _uiState.value = _uiState.value.copy(notice = "Измеряем задержку серверов…")
             try {
-                serverScanner.scanAll(configs, force = true)
-                _uiState.value = _uiState.value.copy(notice = "Задержка серверов обновлена")
+                val results = serverScanner.scanAll(configs, force = true)
+                val measured = results.count { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                val total = results.size
+                val message = if (measured > 0) {
+                    "Проверено серверов: $measured из $total"
+                } else {
+                    "Не удалось подтвердить доступность серверов"
+                }
+                _uiState.value = _uiState.value.copy(notice = message)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -812,7 +967,14 @@ class HomeViewModel @Inject constructor(
             }
             val added = subscriptionRepository.subscriptions.value.lastOrNull()
             if (added != null) setAutomaticSubscription(added.id)
-            val refreshed = runCatching { subscriptionRepository.refreshAll() }.getOrDefault(0)
+            val refreshed = try {
+                subscriptionRepository.refreshAll()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logCollector.error(TAG, "addSubscription refresh failed", failure)
+                0
+            }
             _uiState.value = _uiState.value.copy(
                 notice = if (refreshed > 0) "Подписка добавлена · профилей: $refreshed" else "Подписка сохранена. Обновите её, если список пуст"
             )
@@ -828,5 +990,13 @@ class HomeViewModel @Inject constructor(
         subscriptionRepository.removeSubscription(id)
         setAutomaticSubscription(ALL_SUBSCRIPTIONS_ID)
         _uiState.value = _uiState.value.copy(notice = "Подписка удалена")
+    }
+
+    override fun onCleared() {
+        // The coordinator is a singleton; drop the callback so it cannot retain
+        // this ViewModel (and, via the requester, the Activity) after teardown.
+        connectionCoordinator.registerSelectionCancel(null)
+        vpnPermissionRequester = null
+        super.onCleared()
     }
 }

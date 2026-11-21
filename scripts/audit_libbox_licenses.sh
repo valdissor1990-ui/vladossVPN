@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORE_VERSION="1.14.3-lx.23"
-CRONET_GO_COMMIT="0d28acc44093df24b2526dea3d6ffefd6b0a54f0"
-CRONET_LIB_COMMIT="c10c03c318db6d47bec8705c8290bad34bc32b64"
-NAIVEPROXY_COMMIT="72a06c9fca0e2d228588c7f3074bf7efff3ff686"
+CORE_VERSION="1.14.4-lx.35"
+CRONET_GO_COMMIT="095cb9e060468c80ca31d977c020dca82d101a8f"
+CRONET_LIB_COMMIT="3aac4ed44c5cf0af74a6051a7335c49dffd91c37"
+NAIVEPROXY_COMMIT="7c64cae24cd7bae18d9c603fdddc73b623c04462"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 ARCHES="arm64 arm 386 amd64"
@@ -22,8 +22,8 @@ export GOFLAGS="-tags=with_gvisor,with_quic,with_wireguard,with_utls,with_naive_
 
 cd "$WORK/sing-box-lx"
 # Fail if the upstream core tag changes the Cronet wrapper/binary pins without a notice review.
-grep -Fq "github.com/sagernet/cronet-go v0.0.0-20260912104727-0d28acc44093" go.mod
-grep -Fq "github.com/sagernet/cronet-go/lib/android_arm64 v0.0.0-20260912104006-c10c03c318db" go.mod
+grep -Fq "github.com/sagernet/cronet-go v0.0.0-20261103043844-095cb9e06046" go.mod
+grep -Fq "github.com/sagernet/cronet-go/lib/android_arm64 v0.0.0-20261103043047-3aac4ed44c5c" go.mod
 
 # Resolve package graphs for all Android ABIs supported by gomobile. Do not use
 # the Linux runner's default GOOS/GOARCH: it would report Linux-only packages.

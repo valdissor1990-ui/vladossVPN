@@ -61,16 +61,8 @@ sealed class VpnFailureReason {
                 (m.contains("illegalstateexception") && m.contains("config") && m.contains("libbox"))
         }
 
-        private fun isProfileConfigurationError(message: String): Boolean {
-            val m = message.lowercase()
-            return m.contains("unknown field") ||
-                m.contains("decode config") ||
-                m.contains("invalid configuration") ||
-                m.contains("invalid config") ||
-                m.contains("failed to parse config") ||
-                m.contains("configuration schema") ||
-                (m.contains("illegalstateexception") && m.contains("config") && m.contains("libbox"))
-        }
+        private fun isProfileConfigurationError(message: String): Boolean =
+            isConfigurationError(message)
 
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()

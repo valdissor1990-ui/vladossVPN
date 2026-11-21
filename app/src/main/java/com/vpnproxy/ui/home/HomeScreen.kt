@@ -28,11 +28,11 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -101,7 +101,19 @@ fun HomeScreen(
     var subscriptionMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
-    var pinnedId by remember { mutableStateOf<String?>(null) }
+    val uiPreferences = remember(context) {
+        context.getSharedPreferences("vladoss_ui_preferences", android.content.Context.MODE_PRIVATE)
+    }
+    var pinnedId by remember(uiPreferences) {
+        mutableStateOf(uiPreferences.getString("pinned_subscription_id", null))
+    }
+
+    LaunchedEffect(subscriptions, pinnedId) {
+        if (pinnedId != null && subscriptions.none { it.id == pinnedId }) {
+            pinnedId = null
+            uiPreferences.edit().remove("pinned_subscription_id").apply()
+        }
+    }
 
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
     LaunchedEffect(uiState.notice) {
@@ -220,13 +232,18 @@ fun HomeScreen(
                     SubscriptionHeader(
                         subscription = selected,
                         allMode = uiState.selectedSubscriptionId == HomeViewModel.ALL_SUBSCRIPTIONS_ID && subscriptions.size != 1,
-                        subscriptions = subscriptions,
+                        subscriptions = subscriptions.sortedByDescending { it.id == pinnedId },
                         menuExpanded = subscriptionMenu,
                         onMenuExpanded = { subscriptionMenu = it },
                         onSelectSubscription = { viewModel.setAutomaticSubscription(it) },
                         pinned = selected != null && pinnedId == selected.id,
                         onTogglePin = {
-                            pinnedId = if (selected != null && pinnedId == selected.id) null else selected?.id
+                            val next = if (selected != null && pinnedId == selected.id) null else selected?.id
+                            pinnedId = next
+                            uiPreferences.edit().apply {
+                                if (next == null) remove("pinned_subscription_id")
+                                else putString("pinned_subscription_id", next)
+                            }.apply()
                         },
                         refreshing = uiState.isRefreshingSubscription,
                         scanning = uiState.isScanningServers,
@@ -252,10 +269,10 @@ fun HomeScreen(
                                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
                         })
-                        AutoConnectRow(
-                            enabled = uiState.isAutomaticMode,
+                        SelectionModeRow(
+                            mode = uiState.selectionMode,
                             busy = uiState.isBusy,
-                            onChange = viewModel::setAutomaticMode
+                            onSelect = viewModel::setSelectionMode
                         )
                         HorizontalDivider(color = HappLine)
                         if (visibleServers.isEmpty()) {
@@ -300,6 +317,49 @@ fun HomeScreen(
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp)
+        )
+    }
+
+    uiState.pendingRecommendation?.let { recommended ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissRecommendation,
+            title = { Text("Нашли подходящий сервер", color = HappInk) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        recommended.config.name.ifBlank { recommended.config.address },
+                        color = HappInk,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (recommended.latencyMs != Long.MAX_VALUE) "Задержка: ${recommended.latencyMs} мс"
+                        else "Доступность подтверждена",
+                        color = HappMuted
+                    )
+                    if (recommended.speedMbps > 0f) {
+                        Text("Измеренная скорость: ${recommended.speedMbps.toInt()} Мбит/с", color = HappMuted)
+                    }
+                    Text(
+                        "Выбран среди доступных серверов по текущей задержке и истории успешных подключений. Скорость учитывается только при наличии свежего измерения.",
+                        color = HappMuted
+                    )
+                    Text(
+                        "Фактическая скорость может меняться во время подключения.",
+                        color = HappMuted
+                    )
+                    Text("Подключение начнётся только после вашего подтверждения.", color = HappMuted)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmRecommendation) {
+                    Text("Подключиться")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissRecommendation) {
+                    Text("Не сейчас")
+                }
+            }
         )
     }
 
@@ -381,7 +441,7 @@ private fun SubscriptionHeader(
             IconButton(onClick = onTogglePin, enabled = subscription != null) {
                 Icon(
                     if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = "Закрепить",
+                    contentDescription = if (pinned) "Открепить подписку" else "Закрепить подписку",
                     tint = if (pinned) Color(0xFF7C6BF2) else HappMuted
                 )
             }
@@ -474,24 +534,50 @@ private fun SubscriptionMeta(
 }
 
 @Composable
-private fun AutoConnectRow(
-    enabled: Boolean,
+private fun SelectionModeRow(
+    mode: String,
     busy: Boolean,
-    onChange: (Boolean) -> Unit
+    onSelect: (String) -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
+    val title = when (mode) {
+        "automatic" -> "Автоматический выбор"
+        "manual" -> "Ручной выбор"
+        else -> "Рекомендация сервера"
+    }
+    val description = when (mode) {
+        "automatic" -> "Приложение выбирает сервер самостоятельно"
+        "manual" -> "Вы подключаетесь к выбранному серверу"
+        else -> "Сначала проверка, затем ваше подтверждение"
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Автоподключение", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-            Text(
-                if (enabled) "Само выбирает самый стабильный сервер" else "Подключение только к выбранному серверу",
-                color = HappMuted,
-                fontSize = 12.sp
-            )
+            Text("Режим выбора сервера", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text("$title · $description", color = HappMuted, fontSize = 12.sp)
         }
-        Switch(checked = enabled, onCheckedChange = onChange, enabled = !busy)
+        Box {
+            TextButton(onClick = { expanded = true }, enabled = !busy) {
+                Text("Изменить", color = HappSelected)
+                Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = HappSelected)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Рекомендовать сервер") },
+                    onClick = { onSelect("recommend"); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Автоматический выбор") },
+                    onClick = { onSelect("automatic"); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Ручной выбор") },
+                    onClick = { onSelect("manual"); expanded = false }
+                )
+            }
+        }
     }
 }
 

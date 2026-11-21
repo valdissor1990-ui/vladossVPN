@@ -37,6 +37,8 @@ class SubscriptionsViewModel @Inject constructor(
         }
     }
 
+    val importReport = repository.lastImportReport
+    val jsonImportReport = jsonConfigRepository.lastImportReport
     val subscriptions = repository.subscriptions
     val allConfigs = repository.allConfigs
     val jsonConfigs = jsonConfigRepository.configs
@@ -52,6 +54,10 @@ class SubscriptionsViewModel @Inject constructor(
         // JSON config paste (sing-box outbound / array) — not a URL.
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             addFromJsonConfig(trimmed, name, tag)
+            return
+        }
+        if (!repository.isSecureSubscriptionUrl(trimmed)) {
+            _message.value = "Укажите корректную HTTPS-ссылку. Незащищённый HTTP запрещён."
             return
         }
         viewModelScope.launch {

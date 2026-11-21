@@ -6,11 +6,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import androidx.core.content.FileProvider
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -40,8 +40,6 @@ class LogExporter @Inject constructor(
     /** Export always contains a header and explicit sections for both sources. */
     fun buildExportText(): String = runCatching {
         val sources = readSources()
-        Log.i(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
-        Log.i(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
         logCollector.info(TAG, "LogExporter native bytes=${sources.nativeBytes} lines=${sources.nativeLines} path=${sources.nativePath}")
         logCollector.info(TAG, "LogExporter app bytes=${sources.appBytes} lines=${sources.appLines}")
         buildString {
@@ -57,8 +55,8 @@ class LogExporter @Inject constructor(
             append("=== NATIVE LIBBOX LOG END ===\n")
         }
     }.getOrElse { t ->
-        Log.e(TAG, "buildExportText failed", t)
-        "=== DIAG SESSION HEADER ===\napp_version=${BuildConfig.VERSION_NAME}\ncommit=${BuildConfig.GIT_COMMIT}\nbuild_type=${BuildConfig.BUILD_TYPE}\ndevice=${Build.MANUFACTURER} ${Build.MODEL}\nandroid_api=${Build.VERSION.SDK_INT}\nexport_error=${t.javaClass.simpleName}: ${t.message}\n=== APP LOG START ===\n=== APP LOG END ===\n=== NATIVE LIBBOX LOG START ===\n=== NATIVE LIBBOX LOG END ===\n"
+        logCollector.error(TAG, "buildExportText failed", t)
+        "=== DIAG SESSION HEADER ===\napp_version=${BuildConfig.VERSION_NAME}\ncommit=${BuildConfig.GIT_COMMIT}\nbuild_type=${BuildConfig.BUILD_TYPE}\ndevice=${Build.MANUFACTURER} ${Build.MODEL}\nandroid_api=${Build.VERSION.SDK_INT}\nexport_error=${t.javaClass.simpleName}: ${SensitiveMasker.mask(t.message.orEmpty())}\n=== APP LOG START ===\n=== APP LOG END ===\n=== NATIVE LIBBOX LOG START ===\n=== NATIVE LIBBOX LOG END ===\n"
     }
 
     /** Writes a test file and returns byte/line metrics for each source. */
@@ -163,6 +161,8 @@ class LogExporter @Inject constructor(
             val content = buildExportText()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) exportViaMediaStore(fileName, content)
             else exportViaFile(fileName, content)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
             logCollector.error(TAG, "exportToDownloads failed", t)
             null
@@ -193,6 +193,8 @@ class LogExporter @Inject constructor(
         resolver.update(uri, values, null, null)
         logCollector.info(TAG, "Exported to Downloads: $fileName")
         uri
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaMediaStore failed", t)
         null
@@ -206,6 +208,8 @@ class LogExporter @Inject constructor(
         val file = File(dir, fileName)
         file.writeText(content, Charsets.UTF_8)
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (t: Throwable) {
         logCollector.error(TAG, "exportViaFile failed", t)
         null

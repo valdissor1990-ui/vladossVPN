@@ -27,7 +27,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class HealthChecker @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val networkBucketProvider: NetworkBucketProvider
 ) {
     companion object {
         private const val TAG = "HealthChecker"
@@ -40,16 +41,53 @@ class HealthChecker @Inject constructor(
     data class LatencyResult(
         val config: ParsedConfig,
         val latencyMs: Long,
-        val success: Boolean
+        val success: Boolean,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
     data class SpeedResult(
         val config: ParsedConfig,
         val speedMbps: Float,
-        val success: Boolean
+        val success: Boolean,
+        val evidence: ProbeMeasurementEvidence? = null
     )
 
+    fun currentNetworkSnapshot(): PhysicalNetworkSnapshot = networkBucketProvider.snapshot()
+
+    suspend fun testActiveTunnelLatency(config: ParsedConfig): LatencyResult =
+        withContext(Dispatchers.IO) {
+            if (!VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                return@withContext LatencyResult(config, Long.MAX_VALUE, success = false)
+            }
+            try {
+                val startedAt = System.nanoTime()
+                val result = runInterruptible(Dispatchers.IO) {
+                    activeTunnelClient.newCall(Request.Builder().url(LATENCY_TEST_URL).head().build())
+                        .execute().use { response ->
+                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                            LatencyResult(config, elapsed, success = response.code in 200..399)
+                        }
+                }
+                if (!VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+                    LatencyResult(config, Long.MAX_VALUE, success = false)
+                } else result
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                LatencyResult(config, Long.MAX_VALUE, success = false)
+            }
+        }
+
+
     private val singboxProbeMutex = Mutex()
+
+    private val activeTunnelClient = OkHttpClient.Builder()
+        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
+        .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .readTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .callTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(LATENCY_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -69,14 +107,21 @@ class HealthChecker @Inject constructor(
 
     private suspend fun testSingleLatency(config: ParsedConfig): LatencyResult =
         withContext(Dispatchers.IO) {
-            try {
+            val startedAt = System.currentTimeMillis()
+            val startNetwork = networkBucketProvider.snapshot()
+            var attemptedSamples = 0
+            var successfulSamples = 0
+            val result = try {
                 withSingboxClient(config) { client ->
-                    val startedAt = System.nanoTime()
+                    val startedAtNanos = System.nanoTime()
                     val request = Request.Builder().url(LATENCY_TEST_URL).head().build()
+                    attemptedSamples++
                     runInterruptible(Dispatchers.IO) {
                         client.newCall(request).execute().use { response ->
-                            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-                            LatencyResult(config, elapsed, success = response.code in 200..399)
+                            val elapsed = ((System.nanoTime() - startedAtNanos) / 1_000_000L).coerceAtLeast(1L)
+                            val success = response.code in 200..399
+                            if (success) successfulSamples++
+                            LatencyResult(config, elapsed, success)
                         }
                     }
                 }
@@ -85,6 +130,17 @@ class HealthChecker @Inject constructor(
             } catch (_: Exception) {
                 LatencyResult(config, Long.MAX_VALUE, success = false)
             }
+            result.copy(
+                evidence = ProbeMeasurementEvidence(
+                    method = ProbeMethod.ISOLATED_PROFILE_LATENCY,
+                    startedAtEpochMs = startedAt,
+                    completedAtEpochMs = System.currentTimeMillis(),
+                    startNetwork = startNetwork,
+                    endNetwork = networkBucketProvider.snapshot(),
+                    attemptedSamples = attemptedSamples,
+                    successfulSamples = successfulSamples
+                )
+            )
         }
 
     suspend fun testSpeed(configs: List<ParsedConfig>): List<SpeedResult> =
@@ -96,20 +152,27 @@ class HealthChecker @Inject constructor(
 
     private suspend fun testSingleSpeed(config: ParsedConfig): SpeedResult =
         withContext(Dispatchers.IO) {
-            try {
+            val startedAt = System.currentTimeMillis()
+            val startNetwork = networkBucketProvider.snapshot()
+            var attemptedSamples = 0
+            var successfulSamples = 0
+            val result = try {
                 val action: suspend (OkHttpClient) -> SpeedResult = { client ->
                     val request = Request.Builder()
                         .url(SPEED_TEST_URL)
                         .header("User-Agent", "VPNProxy/1.0")
                         .build()
-                    val startedAt = System.currentTimeMillis()
+                    val speedStartedAt = System.currentTimeMillis()
+                    attemptedSamples++
                     runInterruptible(Dispatchers.IO) {
                         client.newCall(request).execute().use { response ->
                             if (!response.isSuccessful) error("Speed test HTTP ${response.code}")
                             val bytes = response.body?.bytes() ?: ByteArray(0)
-                            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+                            val elapsedMs = (System.currentTimeMillis() - speedStartedAt).coerceAtLeast(1L)
                             val speedMbps = (bytes.size * 8.0 / 1_000_000.0 / (elapsedMs / 1000.0)).toFloat()
-                            SpeedResult(config, speedMbps, success = bytes.isNotEmpty())
+                            val success = bytes.isNotEmpty()
+                            if (success) successfulSamples++
+                            SpeedResult(config, speedMbps, success)
                         }
                     }
                 }
@@ -119,6 +182,17 @@ class HealthChecker @Inject constructor(
             } catch (_: Exception) {
                 SpeedResult(config, 0f, success = false)
             }
+            result.copy(
+                evidence = ProbeMeasurementEvidence(
+                    method = ProbeMethod.ISOLATED_PROFILE_SPEED,
+                    startedAtEpochMs = startedAt,
+                    completedAtEpochMs = System.currentTimeMillis(),
+                    startNetwork = startNetwork,
+                    endNetwork = networkBucketProvider.snapshot(),
+                    attemptedSamples = attemptedSamples,
+                    successfulSamples = successfulSamples
+                )
+            )
         }
 
     /**
@@ -148,7 +222,7 @@ class HealthChecker @Inject constructor(
                 check(!VpnProxyService.isRunning.value && !VpnProxyService.isCoreTransitioning.value) {
                     "VPN core became active before health probe acquired the shared port lease"
                 }
-                val started = SingboxProxyClient.start(context, SingboxConfigBuilder.build(config))
+                val started = runInterruptible(Dispatchers.IO) { SingboxProxyClient.start(context, SingboxConfigBuilder.build(config)) }
                 if (!started) {
                     SingboxProxyClient.stop(context)
                     error("Sing-box failed to start for health check")

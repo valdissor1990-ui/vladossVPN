@@ -13,6 +13,9 @@ import java.net.URLDecoder
 internal object ExtraUriParsers {
     private const val TAG = "ExtraUriParsers"
 
+    private fun String?.isTruthy(): Boolean =
+        this?.lowercase()?.let { it in setOf("1", "true", "yes", "on") } == true
+
     // Keep this list aligned with cipher methods accepted by the bundled libbox.
     // In particular, "chacha20-poly1305" is not the same declared method as
     // "chacha20-ietf-poly1305" and currently fails during libbox initialization.
@@ -40,13 +43,22 @@ internal object ExtraUriParsers {
             URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8.name())
         }.getOrDefault(value)
 
+    /** Parse an authority without splitting on ':' so bracketed IPv6 remains intact. */
+    private fun parseHostPort(authority: String): Pair<String, Int>? = runCatching {
+        val parsed = URI("ss://$authority")
+        val host = parsed.host?.removePrefix("[")?.removeSuffix("]")?.takeIf { it.isNotBlank() } ?: return null
+        val port = parsed.port
+        if (port !in 1..65535) return null
+        host to port
+    }.getOrNull()
+
     fun parseShadowsocks(
         uri: String,
         providerTag: String,
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val raw = uri.removePrefix("ss://")
+            val raw = uri.substringAfter("://")
             val hashIdx = raw.indexOf('#')
             val name = if (hashIdx >= 0) {
                 decodeFragmentSafely(raw.substring(hashIdx + 1))
@@ -76,10 +88,9 @@ internal object ExtraUriParsers {
                 method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = body.substring(atIdx + 1)
-                val hp = hostPort.split(':')
-                if (hp.size < 2) return null
-                host = hp[0]
-                port = hp[1].toIntOrNull() ?: return null
+                val endpoint = parseHostPort(hostPort) ?: return null
+                host = endpoint.first
+                port = endpoint.second
             } else {
                 val decoded = String(
                     Base64.decode(body, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP)
@@ -92,10 +103,9 @@ internal object ExtraUriParsers {
                 method = userInfo.substring(0, colon).trim().lowercase()
                 password = userInfo.substring(colon + 1)
                 val hostPort = decoded.substring(at + 1)
-                val hp = hostPort.split(':')
-                if (hp.size < 2) return null
-                host = hp[0]
-                port = hp[1].toIntOrNull() ?: return null
+                val endpoint = parseHostPort(hostPort) ?: return null
+                host = endpoint.first
+                port = endpoint.second
             }
             if (method !in supportedShadowsocksMethods) {
                 logCollector.warn(
@@ -124,7 +134,7 @@ internal object ExtraUriParsers {
                 password = password
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse ss URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse ss URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -135,7 +145,7 @@ internal object ExtraUriParsers {
         logCollector: LogCollector
     ): SubscriptionParser.ParsedConfig? {
         return try {
-            val b64 = uri.removePrefix("vmess://")
+            val b64 = uri.substringAfter("://")
             val jsonText = String(
                 Base64.decode(b64, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP)
             )
@@ -168,7 +178,7 @@ internal object ExtraUriParsers {
                 providerTag = providerTag
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse vmess URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -188,6 +198,10 @@ internal object ExtraUriParsers {
                 if (i < 0) it to ""
                 else URLDecoder.decode(it.substring(0, i), "UTF-8") to
                     URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            }.let { decoded ->
+                decoded + decoded.entries.associate { (key, value) ->
+                    key.lowercase(java.util.Locale.ROOT) to value
+                }
             }
             val name = rawFragment?.let(::decodeFragmentSafely) ?: "Trojan $host"
             SubscriptionParser.ParsedConfig(
@@ -207,10 +221,10 @@ internal object ExtraUriParsers {
                 name = name,
                 providerTag = providerTag,
                 password = password,
-                insecure = query["allowInsecure"] == "1" || query["insecure"] == "1"
+                insecure = query["allowinsecure"].isTruthy() || query["insecure"].isTruthy()
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse trojan URI: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -248,7 +262,7 @@ internal object ExtraUriParsers {
                 password = pass
             ).takeIf { it.isValid() }
         } catch (e: Exception) {
-            logCollector.debug(TAG, "Failed to parse socks URI: ${e.message}")
+            logCollector.debug(TAG, "Failed to parse socks URI: ${e.javaClass.simpleName}")
             null
         }
     }

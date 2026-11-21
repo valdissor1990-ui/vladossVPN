@@ -58,7 +58,12 @@ class SplitTunnelManager @Inject constructor(
                     // never both. Explicit Sing-box includes therefore select allow-list mode.
                     allowedApplied += addAllowed(builder, (optionIncludes - optionExcludes) - context.packageName)
                 } else {
-                    disallowedApplied += addDisallowed(builder, excludes)
+                    // ALL_APPS must ignore the remembered selection list. That list is
+                    // applied only in EXCLUDE_SELECTED / INCLUDE_SELECTED modes; otherwise
+                    // switching back to "Все через VPN" would keep bypassing old selections.
+                    val allAppsExcludes = optionExcludes +
+                        if (disallowSelfPackage) setOf(context.packageName) else emptySet()
+                    disallowedApplied += addDisallowed(builder, allAppsExcludes)
                 }
             }
             SplitTunnelMode.EXCLUDE_SELECTED -> {

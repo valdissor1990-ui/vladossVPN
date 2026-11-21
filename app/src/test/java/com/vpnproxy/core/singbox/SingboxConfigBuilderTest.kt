@@ -1,5 +1,6 @@
 package com.vpnproxy.core.singbox
 
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
@@ -34,6 +35,23 @@ class SingboxConfigBuilderTest {
         obfsPassword = if (transport == "hysteria2") "obfs-secret" else null,
         congestionControl = "cubic"
     )
+
+    @Test
+    fun directUdpDnsModeUsesDefaultDnsPort() {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            SingboxConfigBuilder.buildVpn(
+                config("vless", "vless-secret"),
+                DiagnosticOptions(dnsMode = "direct_udp_1111")
+            )
+        ).jsonObject
+        val server = root["dns"]!!.jsonObject["servers"]!!.jsonArray.single().jsonObject
+        assertEquals("udp", server["type"]!!.jsonPrimitive.content)
+        assertEquals("1.1.1.1", server["server"]!!.jsonPrimitive.content)
+        assertFalse(
+            "UDP DNS must not pin a non-standard port",
+            server.containsKey("server_port")
+        )
+    }
 
     @Test
     fun hysteria2BuildsProxyModeOutbound() {
@@ -370,6 +388,15 @@ class SingboxConfigBuilderTest {
             fingerprint = null, publicKey = null, shortId = null, flow = null,
             name = "socks", password = "pass"
         )
+        if (BuildConfig.IS_PLAY_STORE) {
+            try {
+                SingboxConfigBuilder.build(cfg)
+                throw AssertionError("Unencrypted SOCKS must be rejected in the Play Store build")
+            } catch (expected: IllegalArgumentException) {
+                assertTrue(expected.message?.contains("encrypted transport") == true)
+            }
+            return
+        }
         val outbound = kotlinx.serialization.json.Json.parseToJsonElement(
             SingboxConfigBuilder.build(cfg)
         ).jsonObject["outbounds"]!!.jsonArray.first().jsonObject

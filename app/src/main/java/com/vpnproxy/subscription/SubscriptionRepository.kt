@@ -1,6 +1,7 @@
 package com.vpnproxy.subscription
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -28,8 +29,10 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.security.MessageDigest
 import java.io.IOException
 import java.net.ConnectException
+import java.net.URI
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
@@ -48,7 +51,9 @@ class SubscriptionRepository @Inject constructor(
         private const val TAG = "SubRepo"
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
+        private const val KEY_DEVICE_METADATA_CONSENT = "device_metadata_consent_v1"
         private const val CACHE_FILE = "cached_configs.json"
+        private const val KEY_CONFIG_CACHE = "cached_configs_json"
         // IDs, URLs and labels used by older bundled feeds. They are removed once
         // during migration; no bundled source is installed or refreshed afterwards.
         private val REMOVED_BUNDLED_IDS = setOf(
@@ -92,15 +97,22 @@ class SubscriptionRepository @Inject constructor(
     private val listSerializer = ListSerializer(ProviderSubscription.serializer())
     private val configsSerializer = ListSerializer(CachedConfig.serializer())
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val encryptedPrefs = EncryptedSharedPreferences.create(
-        context, PREFS_NAME, masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    // Keystore access can fail (corrupted key, Direct Boot) and must not crash
+    // Hilt injection. Mirror JsonConfigRepository: degrade to null, never throw.
+    private val encryptedPrefs: SharedPreferences? by lazy {
+        runCatching {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context, PREFS_NAME, masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        }.onFailure {
+            logCollector.error(TAG, "Encrypted preferences unavailable; persistence disabled", it)
+        }.getOrNull()
+    }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -109,7 +121,57 @@ class SubscriptionRepository @Inject constructor(
         .retryOnConnectionFailure(false)
         .build()
 
-    private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
+    data class ProviderImportSummary(
+        val providerName: String,
+        val source: String,
+        val format: String,
+        val candidateCount: Int?,
+        val acceptedCount: Int,
+        val rejectedCount: Int?,
+        val duplicateCount: Int,
+        val protocolCounts: Map<String, Int>,
+        val rejectionReasons: Map<String, Int>,
+        val failureCode: String? = null
+    )
+
+    data class SubscriptionImportReport(
+        val providers: List<ProviderImportSummary>,
+        val candidateCount: Int?,
+        val acceptedCount: Int,
+        val rejectedCount: Int?,
+        val providerDuplicates: Int,
+        val globalDuplicates: Int,
+        val globallyUniqueCount: Int,
+        val usedCache: Boolean,
+        val completedAt: Long
+    )
+
+    private data class SubscriptionFetchResult(
+        val body: String,
+        val fromEtagCache: Boolean
+    )
+
+private val _deviceMetadataConsent = MutableStateFlow(
+        encryptedPrefs?.getBoolean(KEY_DEVICE_METADATA_CONSENT, false) ?: false
+    )
+    val deviceMetadataConsent: StateFlow<Boolean> = _deviceMetadataConsent.asStateFlow()
+
+    /**
+     * Explicit opt-in for sending the subscription provider a hashed device identifier,
+     * device model and Android version. Disabled by default and stored encrypted.
+     */
+    fun setDeviceMetadataConsent(enabled: Boolean) {
+        val saved = encryptedPrefs?.edit()
+            ?.putBoolean(KEY_DEVICE_METADATA_CONSENT, enabled)
+            ?.commit() ?: false
+        if (saved) {
+            _deviceMetadataConsent.value = enabled
+        } else {
+            logCollector.warn(TAG, "Could not persist device metadata consent")
+        }
+    }
+
+        private val _subscriptions = MutableStateFlow<List<ProviderSubscription>>(emptyList())
     val subscriptions: StateFlow<List<ProviderSubscription>> = _subscriptions.asStateFlow()
 
     private val _allConfigs = MutableStateFlow<List<ParsedConfig>>(emptyList())
@@ -118,14 +180,19 @@ class SubscriptionRepository @Inject constructor(
     private val _lastRefreshUsedCache = MutableStateFlow(false)
     val lastRefreshUsedCache: StateFlow<Boolean> = _lastRefreshUsedCache.asStateFlow()
 
+    private val _lastImportReport = MutableStateFlow<SubscriptionImportReport?>(null)
+    val lastImportReport: StateFlow<SubscriptionImportReport?> = _lastImportReport.asStateFlow()
+
     private val refreshMutex = Mutex()
+    private var removedBundledProviderTags: Set<String> = emptySet()
 
     init {
         loadFromPrefs()
-        removeBundledSubscriptions()
+        removedBundledProviderTags = removeBundledSubscriptions()
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
-            val retainedCached = cached.filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+            // Cached profiles retain providerTag (the source display name), not its URL or ID.
+            val retainedCached = cached.filterNot { it.providerTag in removedBundledProviderTags }
             _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -138,7 +205,7 @@ class SubscriptionRepository @Inject constructor(
 
     private fun loadFromPrefs() {
         try {
-            val stored = encryptedPrefs.getString(KEY_SUBS, null) ?: return
+            val stored = encryptedPrefs?.getString(KEY_SUBS, null) ?: return
             val list = json.decodeFromString(listSerializer, stored)
             _subscriptions.value = list
             logCollector.info(TAG, "Loaded ${list.size} subscriptions from prefs")
@@ -150,28 +217,72 @@ class SubscriptionRepository @Inject constructor(
     private fun saveToPrefs() {
         try {
             val jsonStr = json.encodeToString(listSerializer, _subscriptions.value)
-            encryptedPrefs.edit().putString(KEY_SUBS, jsonStr).apply()
+            encryptedPrefs?.edit()?.putString(KEY_SUBS, jsonStr)?.apply()
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to save subscriptions", e)
         }
     }
 
-    /** Remove all bundled feeds from existing installations while preserving user-added sources. */
-    private fun removeBundledSubscriptions() {
-        val current = _subscriptions.value
-        val retained = current.filterNot { sub ->
-            sub.id in REMOVED_BUNDLED_IDS ||
-                sub.url in REMOVED_BUNDLED_URLS ||
-                sub.name in REMOVED_BUNDLED_NAMES
-        }
-        if (retained != current) {
-            _subscriptions.value = retained
-            saveToPrefs()
-            logCollector.info(TAG, "Removed bundled subscriptions: removed=${current.size - retained.size}; userSources=${retained.size}")
+    /** Remove the encrypted response body and ETag associated with a retired provider URL. */
+    private fun removeSubscriptionBodyCache(sourceUrl: String) {
+        runCatching {
+            val cacheKey = MessageDigest.getInstance("SHA-256")
+                .digest(sourceUrl.toByteArray(Charsets.UTF_8))
+                .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+            val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
+            encryptedPrefs?.edit()
+                ?.remove("subscription_body_$cacheKey")
+                ?.remove("subscription_etag_$cacheKey")
+                ?.remove("subscription_body_$legacyCacheKey")
+                ?.remove("subscription_etag_$legacyCacheKey")
+                ?.apply()
+        }.onFailure {
+            logCollector.warn(TAG, "Could not purge retired subscription response cache: ${it.javaClass.simpleName}")
         }
     }
 
+    /** Remove all bundled feeds from existing installations while preserving user-added sources. */
+    private fun removeBundledSubscriptions(): Set<String> {
+        val current = _subscriptions.value
+        // IDs and source URLs identify bundled feeds. A matching display name alone
+        // is not sufficient: users may legitimately name their own feed the same way.
+        val removed = current.filter { sub ->
+            val hasUserGeneratedId = runCatching {
+                java.util.UUID.fromString(sub.id)
+            }.isSuccess
+            sub.id in REMOVED_BUNDLED_IDS ||
+                (sub.url in REMOVED_BUNDLED_URLS && !hasUserGeneratedId)
+        }
+        val retained = current - removed.toSet()
+        // Never purge a URL cache if a retained user subscription still references it.
+        // This protects a manually added UUID-backed source that happens to reuse a
+        // URL once shipped as a bundled feed.
+        val retainedUserUrls = retained.map { it.url }.toSet()
+        val retiredUrlsToPurge = (removed.map { it.url } + REMOVED_BUNDLED_URLS)
+            .distinct()
+            .filterNot { it in retainedUserUrls }
+        retiredUrlsToPurge.forEach(::removeSubscriptionBodyCache)
+        if (retained != current) {
+            _subscriptions.value = retained
+            saveToPrefs()
+            logCollector.info(TAG, "Removed bundled subscriptions: removed=${removed.size}; userSources=${retained.size}")
+        }
+        // Aggregate cached profiles only store providerTag. Preserve ambiguous cache
+        // when a retained user source reuses a retired bundled display name.
+        val retainedUserNames = retained.map { it.name }.toSet()
+        return (removed.map { it.name }.toSet() + REMOVED_BUNDLED_NAMES) - retainedUserNames
+    }
+
+    fun isSecureSubscriptionUrl(url: String): Boolean = runCatching {
+        val uri = URI(url.trim())
+        uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+    }.getOrDefault(false)
+
     suspend fun addSubscription(url: String, name: String, tag: String = ""): Boolean = withContext(Dispatchers.IO) {
+        if (!isSecureSubscriptionUrl(url)) {
+            logCollector.warn(TAG, "Subscription rejected: HTTPS URL required")
+            return@withContext false
+        }
         try {
             val id = java.util.UUID.randomUUID().toString()
             val sub = ProviderSubscription(
@@ -179,7 +290,7 @@ class SubscriptionRepository @Inject constructor(
             )
             _subscriptions.value = _subscriptions.value + sub
             saveToPrefs()
-            logCollector.info(TAG, "Subscription added: $name tag=${sub.tag}", mapOf("url" to url))
+            logCollector.info(TAG, "Subscription added")
             true
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to add subscription", e)
@@ -195,24 +306,41 @@ class SubscriptionRepository @Inject constructor(
     }
 
     fun removeSubscription(id: String) {
+        val removed = _subscriptions.value.firstOrNull { it.id == id } ?: return
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
         saveToPrefs()
+        // Purge the provider's cached response body/ETag so credentials do not linger
+        // encrypted on disk after the user removes the source.
+        removeSubscriptionBodyCache(removed.url)
+        // Drop the removed provider's profiles from the active pool. providerTag stores
+        // the source display name, so keep them if another subscription reuses that name.
+        if (_subscriptions.value.none { it.name == removed.name }) {
+            val remaining = _allConfigs.value.filterNot { it.providerTag == removed.name }
+            if (remaining.size != _allConfigs.value.size) {
+                _allConfigs.value = remaining
+                saveConfigsToCache(remaining)
+            }
+        }
     }
 
     suspend fun refreshAll(): Int = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
             _lastRefreshUsedCache.value = false
+            _lastImportReport.value = null
             val subs = _subscriptions.value.filter { it.enabled }
             var totalConfigs = 0
             val allConfigsList = mutableListOf<ParsedConfig>()
+            val providerReports = mutableListOf<ProviderImportSummary>()
             var anyNetworkSuccess = false
 
             for (sub in subs) {
                 try {
-                    val configs = fetchAndParse(sub)
+                    val (outcome, source) = fetchAndParseWithReport(sub)
+                    val configs = outcome.configs
                     allConfigsList.addAll(configs)
                     totalConfigs += configs.size
                     anyNetworkSuccess = true
+                    providerReports += outcome.report.toProviderSummary(sub.name, source = source)
                     val updated = sub.copy(lastUpdated = System.currentTimeMillis())
                     _subscriptions.value = _subscriptions.value.map {
                         if (it.id == sub.id) updated else it
@@ -221,17 +349,22 @@ class SubscriptionRepository @Inject constructor(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Fetch failed for ${sub.name} (id=${sub.id}): ${e.message}")
+                    logCollector.warn(TAG, "Subscription refresh failed: ${e.javaClass.simpleName}")
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
-                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
-                    val bodyCached = runCatching {
-                        encryptedPrefs.getString(bodyKey, null)
+                    val cacheKey = MessageDigest.getInstance("SHA-256")
+                        .digest(sub.url.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val legacyCacheKey = sub.url.hashCode().toUInt().toString(16)
+                    val cachedOutcome = runCatching {
+                        val cachedBody = encryptedPrefs?.getString("subscription_body_$cacheKey", null)
+                            ?: encryptedPrefs?.getString("subscription_body_$legacyCacheKey", null)
+                        cachedBody
                             ?.takeIf { it.isNotBlank() }
-                            ?.let { parser.parse(it, providerTag = sub.name) }
-                            .orEmpty()
-                    }.getOrDefault(emptyList())
+                            ?.let { parser.parseWithReport(it, providerTag = sub.name) }
+                    }.getOrNull()
+                    val bodyCached = cachedOutcome?.configs.orEmpty()
                     val aggregateCached = if (bodyCached.isEmpty()) {
                         loadConfigsFromCache().filter { it.providerTag == sub.name }.map { it.toParsedConfig() }
                     } else emptyList()
@@ -241,8 +374,33 @@ class SubscriptionRepository @Inject constructor(
                         logCollector.info(TAG, "Using per-subscription cache for ${sub.name}: count=${cached.size}; source=${if (bodyCached.isNotEmpty()) "encrypted_body" else "aggregate_cache"}")
                         allConfigsList.addAll(cached)
                         totalConfigs += cached.size
+                        val summary = cachedOutcome?.report?.toProviderSummary(sub.name, source = "encrypted_body")
+                            ?: ProviderImportSummary(
+                                providerName = sub.name,
+                                source = "aggregate_cache",
+                                format = "aggregate_cache",
+                                candidateCount = cached.size,
+                                acceptedCount = cached.size,
+                                rejectedCount = 0,
+                                duplicateCount = (cached.size - cached.distinctBy { it.connectionKey() }.size).coerceAtLeast(0),
+                                protocolCounts = cached.groupingBy { it.transport.lowercase(java.util.Locale.ROOT) }.eachCount(),
+                                rejectionReasons = emptyMap()
+                            )
+                        providerReports += summary.copy(failureCode = e.javaClass.simpleName)
                     } else {
-                        logCollector.warn(TAG, "No recoverable cache for subscription ${sub.name} (id=${sub.id})")
+                        providerReports += ProviderImportSummary(
+                            providerName = sub.name,
+                            source = "failed",
+                            format = "unknown",
+                            candidateCount = null,
+                            acceptedCount = 0,
+                            rejectedCount = null,
+                            duplicateCount = 0,
+                            protocolCounts = emptyMap(),
+                            rejectionReasons = emptyMap(),
+                            failureCode = e.javaClass.simpleName
+                        )
+                        logCollector.warn(TAG, "No recoverable subscription cache available")
                     }
                 }
             }
@@ -275,6 +433,19 @@ class SubscriptionRepository @Inject constructor(
 
             _allConfigs.value = providerUniqueConfigs
             saveToPrefs()
+            val allCandidateCountsKnown = providerReports.all { it.candidateCount != null }
+            val allRejectionCountsKnown = providerReports.all { it.rejectedCount != null }
+            _lastImportReport.value = SubscriptionImportReport(
+                providers = providerReports.toList(),
+                candidateCount = if (allCandidateCountsKnown) providerReports.sumOf { it.candidateCount ?: 0 } else null,
+                acceptedCount = totalConfigs,
+                rejectedCount = if (allRejectionCountsKnown) providerReports.sumOf { it.rejectedCount ?: 0 } else null,
+                providerDuplicates = providerDuplicates,
+                globalDuplicates = globalDuplicates,
+                globallyUniqueCount = globallyUniqueCount,
+                usedCache = providerReports.any { it.source == "encrypted_body" || it.source == "aggregate_cache" || it.source == "etag_cache" },
+                completedAt = System.currentTimeMillis()
+            )
             logCollector.info(
                 TAG,
                 "Refresh complete: raw=$totalConfigs providerUnique=${providerUniqueConfigs.size} globalUnique=$globallyUniqueCount"
@@ -283,48 +454,76 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    suspend fun fetchWithFallback(sub: ProviderSubscription): Pair<String, String> =
+    private suspend fun fetchWithFallback(sub: ProviderSubscription): SubscriptionFetchResult =
         withContext(Dispatchers.IO) {
             val sources = listOf(sub.url)
             var lastFailure: Exception? = null
             var sawTransportFailure = false
             for (sourceUrl in sources) {
                 try {
-                    val hwid = deviceIdManager.getHwid()
-                    val cacheKey = sourceUrl.hashCode().toUInt().toString(16)
+                    val sendDeviceMetadata = _deviceMetadataConsent.value
+                    val cacheKey = MessageDigest.getInstance("SHA-256")
+                        .digest(sourceUrl.toByteArray(Charsets.UTF_8))
+                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
                     val bodyKey = "subscription_body_$cacheKey"
                     val etagKey = "subscription_etag_$cacheKey"
-                    val cachedBody = encryptedPrefs.getString(bodyKey, null)
-                    val cachedEtag = encryptedPrefs.getString(etagKey, null)
+                    val legacyBodyKey = "subscription_body_$legacyCacheKey"
+                    val legacyEtagKey = "subscription_etag_$legacyCacheKey"
+                    // Read the legacy cache before retiring its keys. Otherwise the first
+                    // refresh after upgrade can erase the only per-provider fallback before
+                    // a failed network request has a chance to use it.
+                    val cachedBody = encryptedPrefs?.getString(bodyKey, null)
+                        ?: encryptedPrefs?.getString(legacyBodyKey, null)
+                    val cachedEtag = encryptedPrefs?.getString(etagKey, null)
+                        ?: encryptedPrefs?.getString(legacyEtagKey, null)
+                    if (legacyCacheKey != cacheKey && (!cachedBody.isNullOrBlank() || !cachedEtag.isNullOrBlank())) {
+                        val migrated = encryptedPrefs?.edit()
+                        if (migrated != null) {
+                            if (!cachedBody.isNullOrBlank()) migrated.putString(bodyKey, cachedBody)
+                            if (!cachedEtag.isNullOrBlank()) migrated.putString(etagKey, cachedEtag)
+                            if (migrated.commit()) {
+                                encryptedPrefs?.edit()
+                                    ?.remove(legacyBodyKey)
+                                    ?.remove(legacyEtagKey)
+                                    ?.apply()
+                            }
+                        }
+                    }
                     val requestBuilder = Request.Builder()
                         .url(sourceUrl)
                         .header("User-Agent", "v2rayNG/1.8.5")
-                        .header("x-hwid", hwid)
-                        .header("x-device-os", "Android")
-                        .header("x-ver-os", Build.VERSION.RELEASE ?: "")
-                        .header(
-                            "x-device-model",
-                            listOf(Build.MANUFACTURER, Build.MODEL)
-                                .filter { !it.isNullOrBlank() }
-                                .distinct()
-                                .joinToString(" ")
-                                .ifBlank { "Android device" }
-                        )
+                    if (sendDeviceMetadata) {
+                        requestBuilder
+                            .header("x-hwid", deviceIdManager.getHwid())
+                            .header("x-device-os", "Android")
+                            .header("x-ver-os", Build.VERSION.RELEASE ?: "")
+                            .header(
+                                "x-device-model",
+                                listOf(Build.MANUFACTURER, Build.MODEL)
+                                    .filter { !it.isNullOrBlank() }
+                                    .distinct()
+                                    .joinToString(" ")
+                                    .ifBlank { "Android device" }
+                            )
+                    }
                     if (!cachedEtag.isNullOrBlank() && !cachedBody.isNullOrBlank()) {
                         requestBuilder.header("If-None-Match", cachedEtag)
                     }
                     runInterruptible(Dispatchers.IO) {
                         httpClient.newCall(requestBuilder.build()).execute()
                     }.use { response ->
-                        if (response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
+                        if (sendDeviceMetadata && response.header("x-hwid-not-supported").equals("true", ignoreCase = true)) {
                             logCollector.error(
                                 TAG,
                                 "Subscription server rejected or ignored x-hwid; check panel HWID contract"
                             )
                             throw IOException("Subscription server rejected HWID (x-hwid-not-supported)")
                         }
-                        if (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
-                            response.header("x-hwid-limit").equals("true", ignoreCase = true)
+                        if (
+                            sendDeviceMetadata &&
+                            (response.header("x-hwid-max-devices-reached").equals("true", ignoreCase = true) ||
+                                response.header("x-hwid-limit").equals("true", ignoreCase = true))
                         ) {
                             logCollector.warn(TAG, "Subscription server reports HWID device limit reached")
                             throw IOException("HWID device limit reached; remove an old device in the subscription panel")
@@ -336,8 +535,8 @@ class SubscriptionRepository @Inject constructor(
                             if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
-                            logCollector.info(TAG, "Subscription unchanged (ETag 304): $sourceUrl")
-                            return@withContext cachedBody to sourceUrl
+                            logCollector.info(TAG, "Subscription unchanged (ETag 304)")
+                            return@withContext SubscriptionFetchResult(cachedBody, fromEtagCache = true)
                         }
                         if (!response.isSuccessful) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code}")
@@ -353,19 +552,19 @@ class SubscriptionRepository @Inject constructor(
                             throw IOException("Subscription source returned no valid server configs")
                         }
                         val newEtag = response.header("ETag")
-                        val editor = encryptedPrefs.edit().putString(bodyKey, body)
-                        if (!newEtag.isNullOrBlank()) editor.putString(etagKey, newEtag)
-                        else editor.remove(etagKey)
-                        editor.apply()
-                        logCollector.info(TAG, "Subscription source OK: $sourceUrl")
-                        return@withContext body to sourceUrl
+                        val editor = encryptedPrefs?.edit()?.putString(bodyKey, body)
+                        if (!newEtag.isNullOrBlank()) editor?.putString(etagKey, newEtag)
+                        else editor?.remove(etagKey)
+                        editor?.apply()
+                        logCollector.info(TAG, "Subscription source OK")
+                        return@withContext SubscriptionFetchResult(body, fromEtagCache = false)
                     }
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
                     lastFailure = e
                     if (isTransportFailure(e)) sawTransportFailure = true
-                    logCollector.warn(TAG, "Source failed: $sourceUrl — ${e.message}")
+                    logCollector.warn(TAG, "Subscription source failed: ${e.javaClass.simpleName}")
                 }
             }
             val vpnState = connectionCoordinator.state.value
@@ -392,12 +591,35 @@ class SubscriptionRepository @Inject constructor(
         return false
     }
 
-    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> {
-        val (body, sourceUrl) = fetchWithFallback(sub)
-        val parsed = parser.parse(body, providerTag = sub.name)
-        logCollector.info(TAG, "Fetch succeeded from $sourceUrl, bytes=${body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${parsed.size}, contentType=subscription-response")
-        return parsed
+    private suspend fun fetchAndParseWithReport(
+        sub: ProviderSubscription
+    ): Pair<SubscriptionParser.ParseOutcome, String> {
+        val fetched = fetchWithFallback(sub)
+        val outcome = parser.parseWithReport(fetched.body, providerTag = sub.name)
+        logCollector.info(
+            TAG,
+            "Fetch succeeded: provider=${sub.name}, bytes=${fetched.body.toByteArray(Charsets.UTF_8).size}, parsedConfigs=${outcome.configs.size}, contentType=subscription-response"
+        )
+        return outcome to if (fetched.fromEtagCache) "etag_cache" else "network"
     }
+
+    suspend fun fetchAndParse(sub: ProviderSubscription): List<ParsedConfig> =
+        fetchAndParseWithReport(sub).first.configs
+
+    private fun SubscriptionParser.ParseReport.toProviderSummary(
+        providerName: String,
+        source: String
+    ) = ProviderImportSummary(
+        providerName = providerName,
+        source = source,
+        format = detectedFormat,
+        candidateCount = candidateCount,
+        acceptedCount = acceptedCount,
+        rejectedCount = rejectedCount,
+        duplicateCount = duplicateCount,
+        protocolCounts = protocolCounts,
+        rejectionReasons = rejectionReasons
+    )
 
     private fun parseUserInfo(info: String, subId: String) {
         try {
@@ -423,7 +645,8 @@ class SubscriptionRepository @Inject constructor(
     fun getAllConfigs(): List<ParsedConfig> = _allConfigs.value
 
     fun getCachedConfigs(): List<ParsedConfig> =
-        loadConfigsFromCache().filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
+        loadConfigsFromCache()
+            .filterNot { it.providerTag in removedBundledProviderTags }
             .map { it.toParsedConfig() }.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
@@ -478,20 +701,64 @@ class SubscriptionRepository @Inject constructor(
         try {
             val cached = configs.map { CachedConfig.from(it) }
             val jsonStr = json.encodeToString(configsSerializer, cached)
-            File(context.filesDir, CACHE_FILE).writeText(jsonStr)
+            // Server profiles contain UUIDs, passwords and Reality credentials. Keep the
+            // complete cache inside the same encrypted preferences store as subscriptions.
+            val prefs = encryptedPrefs ?: run {
+                logCollector.warn(TAG, "Encrypted preferences unavailable; cache not persisted")
+                return
+            }
+            check(prefs.edit().putString(KEY_CONFIG_CACHE, jsonStr).commit()) {
+                "Encrypted cache commit failed"
+            }
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache save failed", e)
+            logCollector.warn(TAG, "Encrypted cache save failed: ${e.javaClass.simpleName}")
+        } finally {
+            // Never leave the legacy credential-bearing file behind after a save attempt.
+            deleteLegacyPlaintextCache()
         }
     }
 
     private fun loadConfigsFromCache(): List<CachedConfig> {
         return try {
-            val f = File(context.filesDir, CACHE_FILE)
-            if (!f.exists()) return emptyList()
-            json.decodeFromString(configsSerializer, f.readText())
+            val encrypted = encryptedPrefs?.getString(KEY_CONFIG_CACHE, null)
+            if (!encrypted.isNullOrBlank()) {
+                val decoded = json.decodeFromString(configsSerializer, encrypted)
+                deleteLegacyPlaintextCache()
+                return decoded
+            }
+
+            // One-time migration for installations that still have the old plaintext file.
+            val legacyFile = File(context.filesDir, CACHE_FILE)
+            if (!legacyFile.exists()) return emptyList()
+            val legacyJson = legacyFile.readText()
+            val decoded = try {
+                json.decodeFromString(configsSerializer, legacyJson)
+            } catch (e: Exception) {
+                logCollector.warn(TAG, "Legacy cache rejected during encrypted migration: ${e.javaClass.simpleName}")
+                emptyList()
+            }
+
+            if (decoded.isNotEmpty()) {
+                val stored = encryptedPrefs?.edit()?.putString(KEY_CONFIG_CACHE, legacyJson)?.commit() ?: false
+                if (!stored) {
+                    logCollector.warn(TAG, "Legacy cache could not be committed to encrypted preferences")
+                }
+            }
+            // Do not retain credentials in plaintext even if the old cache is malformed
+            // or the encrypted migration cannot preserve it. The subscription can refresh it.
+            deleteLegacyPlaintextCache()
+            decoded
         } catch (e: Exception) {
-            logCollector.error(TAG, "Cache load failed", e)
+            deleteLegacyPlaintextCache()
+            logCollector.warn(TAG, "Encrypted cache load failed: ${e.javaClass.simpleName}")
             emptyList()
+        }
+    }
+
+    private fun deleteLegacyPlaintextCache() {
+        val legacyFile = File(context.filesDir, CACHE_FILE)
+        if (legacyFile.exists() && !legacyFile.delete()) {
+            logCollector.warn(TAG, "Could not delete legacy plaintext server cache")
         }
     }
 }

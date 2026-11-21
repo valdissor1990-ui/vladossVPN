@@ -5,7 +5,7 @@
 ## 1. What the repository currently says
 
 - The repository contains a top-level `LICENSE` with GNU GPL version 3.
-- The application packages `libbox.aar` from `Leadaxe/sing-box-lx` v`1.14.3-lx.23`; that upstream project states that it inherits GPL-3.0 from sing-box.
+- The application packages `libbox.aar` from `Leadaxe/sing-box-lx` v`1.14.4-lx.35`; that upstream project states that it inherits GPL-3.0 from sing-box.
 - `THIRD_PARTY_NOTICES.md`, bundled license assets, the in-app **Open Source Licenses** screen, and CI license checks are already present in the current source tree.
 - The release workflow pins the libbox release and checks its SHA-256. This establishes the intended artifact identity, not the ownership of every line of source code.
 

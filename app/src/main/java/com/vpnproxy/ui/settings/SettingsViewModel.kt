@@ -9,8 +9,13 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.update.UpdateCheckWorker
 import com.vpnproxy.smartconnect.BatteryPolicy
+import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,12 +30,12 @@ private val Context.settingsDataStore by preferencesDataStore(name = "vpnproxy_s
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val dualPathStore: DualPathStore
+    private val dualPathStore: DualPathStore,
+    private val subscriptionRepository: SubscriptionRepository
 ) : ViewModel() {
 
     companion object {
         val KEY_AUTO_START = booleanPreferencesKey("auto_start")
-        val KEY_KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val KEY_CHECK_UPDATES = booleanPreferencesKey("check_updates")
     }
 
@@ -38,13 +43,22 @@ class SettingsViewModel @Inject constructor(
         .map { it[KEY_AUTO_START] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val killSwitch: StateFlow<Boolean> = context.settingsDataStore.data
-        .map { it[KEY_KILL_SWITCH] ?: true }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-
     val checkUpdates: StateFlow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_CHECK_UPDATES] ?: true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    val deviceMetadataConsent: StateFlow<Boolean> = subscriptionRepository.deviceMetadataConsent
+    private val deviceMetadataConsentMutex = Mutex()
+
+    fun setDeviceMetadataConsent(enabled: Boolean) {
+        viewModelScope.launch {
+            deviceMetadataConsentMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    subscriptionRepository.setDeviceMetadataConsent(enabled)
+                }
+            }
+        }
+    }
 
     private val _batteryEconomyMode = MutableStateFlow(BatteryPolicy.isEconomyModeEnabled(context))
     val batteryEconomyMode: StateFlow<Boolean> = _batteryEconomyMode.asStateFlow()
@@ -81,12 +95,6 @@ class SettingsViewModel @Inject constructor(
 
         viewModelScope.launch {
             context.settingsDataStore.edit { it[KEY_AUTO_START] = enabled }
-        }
-    }
-
-    fun setKillSwitch(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[KEY_KILL_SWITCH] = enabled }
         }
     }
 

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import com.vpnproxy.BuildConfig
 
 /**
  * Central place for battery-aware decisions used by AutoSwitcher and Settings UI.
@@ -80,6 +81,8 @@ object BatteryPolicy {
      */
     @SuppressLint("BatteryLife")
     fun requestIgnoreBatteryOptimizations(context: Context) {
+        // Play-distributed builds must not bypass Android's power-management policy.
+        if (!BuildConfig.ENABLE_BATTERY_EXEMPTION) return
         if (isIgnoringBatteryOptimizations(context)) return
         try {
             val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {

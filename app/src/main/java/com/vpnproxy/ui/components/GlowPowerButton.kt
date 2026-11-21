@@ -76,25 +76,38 @@ fun GlowPowerButton(
     val connected = state.hasTunnel()
     val busy = state == ConnectionUiState.CONNECTING || state == ConnectionUiState.VERIFYING
 
-    val infinite = rememberInfiniteTransition(label = "power")
-    val pulse by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse"
-    )
-    val spin by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "spin"
-    )
+    // Create infinite transitions only while their visual effect is needed.
+    // This avoids both idle frame callbacks and incompatible animation-spec branches.
+    val pulse = if (connected) {
+        val pulseTransition = rememberInfiniteTransition(label = "power-pulse")
+        val pulseValue by pulseTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1100),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulse"
+        )
+        pulseValue
+    } else {
+        0.35f
+    }
+    val spin = if (busy) {
+        val spinTransition = rememberInfiniteTransition(label = "power-spin")
+        val spinValue by spinTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1400, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "spin"
+        )
+        spinValue
+    } else {
+        0f
+    }
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(sessionStartedAt, connected) {

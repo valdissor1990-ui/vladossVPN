@@ -3,7 +3,7 @@ name: Pull Request Build Validation
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, integration/full-vpn-client-final]
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
@@ -41,7 +41,7 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Download full sing-box-lx libbox 1.14.3-lx.23
+      - name: Download full sing-box-lx libbox (version pinned and SHA-256 verified by script)
         run: |
           chmod +x scripts/download_libbox.sh
           ./scripts/download_libbox.sh
@@ -51,15 +51,57 @@ jobs:
           mkdir -p gradle/wrapper
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
             curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-              https://github.com/gradle/gradle/raw/v8.11.1/gradle/wrapper/gradle-wrapper.jar
+              https://github.com/gradle/gradle/raw/v8.14.8/gradle/wrapper/gradle-wrapper.jar
           fi
           chmod +x gradlew || true
 
       - name: Compile Direct Debug Kotlin
         run: ./gradlew :app:compileDirectDebugKotlin --stacktrace
 
+      - name: Generate Gradle dependency license report
+        run: ./gradlew :app:generateLicenseReport --no-parallel --stacktrace
+
+      - name: Upload dependency license report
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-license-report-pr
+          path: app/build/reports/dependency-license/**
+          if-no-files-found: error
+
       - name: Clean and build Direct Debug APK
         run: ./gradlew clean :app:assembleDirectDebug --stacktrace
+
+      - name: Compile Play Debug Kotlin
+        run: ./gradlew :app:compilePlayDebugKotlin --stacktrace
+
+      - name: Build Play Debug APK
+        run: ./gradlew :app:assemblePlayDebug --stacktrace
+
+      - name: Process Play Release manifest
+        run: ./gradlew :app:processPlayReleaseManifest --stacktrace
+
+      - name: Verify Play merged manifest permissions
+        shell: bash
+        run: |
+          for variant in playDebug playRelease; do
+            manifest="$(find app/build/intermediates -type f -path "*${variant}*" -name AndroidManifest.xml | head -n 1)"
+            if [ -z "$manifest" ]; then
+              echo "$variant merged manifest was not produced"
+              exit 1
+            fi
+            if grep -Eq 'android\.permission\.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"; then
+              echo "$variant merged manifest contains a prohibited or unused permission"
+              grep -E 'android\.permission\.(REQUEST_INSTALL_PACKAGES|REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|FOREGROUND_SERVICE_DATA_SYNC)' "$manifest"
+              exit 1
+            fi
+            echo "$variant merged manifest permission check passed: $manifest"
+          done
+
+      - name: Upload Play Debug APK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-play-debug
+          path: app/build/outputs/apk/play/debug/*.apk
 
       - name: Upload Direct Debug APK artifacts
         uses: actions/upload-artifact@v7

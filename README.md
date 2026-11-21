@@ -1,6 +1,6 @@
 # VPNProxy
 
-Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3** с VLESS/Reality (TCP, WS, gRPC, HTTPUpgrade, XHTTP через sing-box-lx), Hysteria2, TUIC и автоматическим выбором сервера.
+Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.4** с VLESS/Reality (TCP, WS, gRPC, HTTPUpgrade, XHTTP через sing-box-lx), Hysteria2, TUIC и автоматическим выбором сервера.
 
 ## Брендинг
 
@@ -17,7 +17,7 @@ Android VPN-клиент на едином ядре **Sing-box / libbox 1.14.3**
 ## Возможности
 
 - **Протоколы:** VLESS + Reality (включая Vision flow и поддерживаемые upstream транспорты), Hysteria2 и TUIC
-- **XHTTP:** используется sing-box-lx 1.14.3-lx.23; транспорт XHTTP работает совместно с TLS/Reality
+- **XHTTP:** используется sing-box-lx 1.14.4-lx.35; транспорт XHTTP работает совместно с TLS/Reality
 - **Единый процесс:** libbox запускается внутри процесса приложения; отдельного процесса `:singbox` нет
 - **TUN:** создаётся через `VpnService.Builder` из `PlatformInterface.openTun()`
 - **Split Tunneling:** режимы INCLUDE_SELECTED и EXCLUDE_SELECTED с исключением самого VPN-приложения
@@ -36,7 +36,7 @@ chmod +x scripts/download_libbox.sh
 ./gradlew assembleDirectRelease
 ```
 
-Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.3-lx.23`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
+Полный `libbox.aar` скачивается скриптом из релиза `Leadaxe/sing-box-lx` `v1.14.4-lx.35`; SHA-256 проверяется до сборки, Go bridge-классы не удаляются. APK: `app/build/outputs/apk/direct/release/`.
 
 ## Архитектура
 
@@ -50,8 +50,13 @@ chmod +x scripts/download_libbox.sh
 ## Документация
 
 - [Архитектура](docs/ARCHITECTURE.md)
+- [Стратегия продукта](docs/PRODUCT_STRATEGY.md)
+- [Модель угроз и логирование](docs/THREAT_MODEL.md)
+- [Контрибьютинг](docs/CONTRIBUTING.md)
+- [Выпуск релиза](docs/RELEASING.md)
 - [Протоколы](docs/PROTOCOLS.md)
 - [Диагностика](docs/TROUBLESHOOTING.md)
+- [Обновление тулчейна и зависимостей (2026-11)](docs/DEPENDENCY_UPGRADE_2026-11.md)
 - [Сторонние лицензии и уведомления](THIRD_PARTY_NOTICES.md)
 - [Аудит open-source лицензий и критерии завершения](docs/OPEN_SOURCE_COMPLIANCE.md)
 

@@ -3,8 +3,10 @@ package com.vpnproxy.core.connection
 import com.vpnproxy.core.probe.ProbeOutcome
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.logging.LogCollector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.net.ConnectException
 import java.net.HttpURLConnection
@@ -87,7 +89,7 @@ class TrafficValidator @Inject constructor(
             val startedAtNs = System.nanoTime()
             var connection: HttpURLConnection? = null
             try {
-                connection = (URL(probeUrl).openConnection(localProxy) as HttpURLConnection).apply {
+                val activeConnection = (URL(probeUrl).openConnection(localProxy) as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = CONNECT_TIMEOUT_MS
                     readTimeout = READ_TIMEOUT_MS
@@ -96,7 +98,9 @@ class TrafficValidator @Inject constructor(
                     setRequestProperty("User-Agent", "VPNProxy-TrafficValidator/1.0")
                     setRequestProperty("Cache-Control", "no-cache")
                 }
-                val status = connection.responseCode
+                connection = activeConnection
+                // HttpURLConnection is blocking. Interrupt the worker when its coroutine is cancelled.
+                val status = runInterruptible(Dispatchers.IO) { activeConnection.responseCode }
                 val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
                 val ok = status == HttpURLConnection.HTTP_OK ||
                     status == HttpURLConnection.HTTP_NO_CONTENT
@@ -131,6 +135,8 @@ class TrafficValidator @Inject constructor(
                         durationMs = elapsed
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
                 val outcome = mapException(e)
@@ -177,21 +183,19 @@ class TrafficValidator @Inject constructor(
         )
     }
 
-    private fun mapException(e: Exception): ProbeOutcome = when (e) {
-        is SocketTimeoutException -> ProbeOutcome.TIMEOUT
-        is UnknownHostException -> ProbeOutcome.DNS_ERROR
-        is ConnectException -> ProbeOutcome.REFUSED
-        else -> {
-            val msg = (e.message ?: "").lowercase()
-            when {
-                msg.contains("timeout") -> ProbeOutcome.TIMEOUT
-                msg.contains("unreachable") || msg.contains("network is unreachable") ->
-                    ProbeOutcome.UNREACHABLE
-                msg.contains("refused") -> ProbeOutcome.REFUSED
-                msg.contains("unable to resolve") || msg.contains("unknown host") ->
-                    ProbeOutcome.DNS_ERROR
-                else -> ProbeOutcome.IO_ERROR
-            }
+    /** Visible for tests: classify a probe exception into a user-facing outcome. */
+    internal fun mapException(e: Exception): ProbeOutcome {
+        val msg = (e.message ?: "").lowercase()
+        return when {
+            e is SocketTimeoutException || msg.contains("timeout") ||
+                msg.contains("timed out") -> ProbeOutcome.TIMEOUT
+            e is UnknownHostException || msg.contains("unable to resolve") ||
+                msg.contains("unknown host") -> ProbeOutcome.DNS_ERROR
+            // Check the message first: on Android ENETUNREACH can surface as a
+            // ConnectException, which must not be reported as REFUSED.
+            msg.contains("unreachable") -> ProbeOutcome.UNREACHABLE
+            e is ConnectException || msg.contains("refused") -> ProbeOutcome.REFUSED
+            else -> ProbeOutcome.IO_ERROR
         }
     }
 

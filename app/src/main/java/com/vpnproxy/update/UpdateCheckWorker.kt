@@ -13,6 +13,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.vpnproxy.BuildConfig
 import com.vpnproxy.R
 import com.vpnproxy.logging.LogCollector
 import dagger.hilt.EntryPoint
@@ -46,6 +47,10 @@ class UpdateCheckWorker(
         private const val NOTIFICATION_ID = 2001
 
         fun schedule(context: Context, intervalHours: Long = 6) {
+            if (!BuildConfig.ENABLE_SELF_UPDATE) {
+                WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+                return
+            }
             val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(
                 intervalHours, TimeUnit.HOURS
             )
@@ -63,6 +68,7 @@ class UpdateCheckWorker(
     }
 
     override suspend fun doWork(): Result {
+        if (!BuildConfig.ENABLE_SELF_UPDATE) return Result.success()
         return try {
             val deps = EntryPointAccessors.fromApplication(
                 applicationContext,
@@ -99,7 +105,7 @@ class UpdateCheckWorker(
                 )
                 deps.logCollector().debug("UpdateCheckWorker", "Cancelled by WorkManager")
             } catch (_: Exception) { /* ignore */ }
-            Result.success()
+            throw e
         } catch (t: Throwable) {
             try {
                 val deps = EntryPointAccessors.fromApplication(

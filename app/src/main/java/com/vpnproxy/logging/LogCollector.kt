@@ -42,11 +42,19 @@ class LogCollector @Inject constructor() {
 
 
     fun add(entry: LogEntry) {
+        // Sanitize at ingestion, not only during file export: the in-memory StateFlows
+        // are also rendered directly by the debug screen and used by log filters.
+        val safeEntry = entry.copy(
+            tag = SensitiveMasker.mask(entry.tag),
+            message = SensitiveMasker.mask(entry.message),
+            server = entry.server?.let { SensitiveMasker.mask("server=$it").substringAfter("server=") },
+            stackTrace = entry.stackTrace?.let(SensitiveMasker::mask)
+        )
         synchronized(persistenceLock) {
             // ConcurrentLinkedDeque.size() is O(n); maintain a count under a small lock
             // instead of traversing the whole queue on every log line.
             val entries = synchronized(bufferLock) {
-                buffer.addLast(entry)
+                buffer.addLast(safeEntry)
                 entryCount++
                 while (entryCount > MAX_ENTRIES) {
                     if (buffer.pollFirst() != null) entryCount-- else break
@@ -57,7 +65,7 @@ class LogCollector @Inject constructor() {
             _logs.value = entries
             // The default unfiltered view can reuse the same snapshot without scanning it.
             applyFilters(entries)
-            persistEntry(entry)
+            persistEntry(safeEntry)
         }
     }
 

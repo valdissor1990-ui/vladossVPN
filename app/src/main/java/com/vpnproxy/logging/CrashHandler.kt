@@ -97,7 +97,7 @@ object CrashHandler {
     fun readLastCrash(context: Context): String? {
         return try {
             val f = File(File(context.filesDir, DIR), FILE)
-            if (f.exists()) f.readText() else null
+            if (f.exists()) SensitiveMasker.mask(f.readText()) else null
         } catch (_: Throwable) {
             null
         }
