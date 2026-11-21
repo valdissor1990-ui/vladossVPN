@@ -81,7 +81,7 @@ object SingboxConfigBuilder {
                 when (options.dnsMode) {
                     "proxy_dot_8888" -> add(dnsServer("tls", "proxy-dot", "8.8.8.8", 853, detour = "proxy"))
                     "direct_udp_8888" -> add(dnsServer("udp", "direct-dns", "8.8.8.8"))
-                    "direct_udp_1111" -> add(dnsServer("udp", "direct-dns", "1.1.1.1", 1111))
+                    "direct_udp_1111" -> add(dnsServer("udp", "direct-dns", "1.1.1.1"))
                     "direct_dot_1111" -> add(dnsServer("tls", "direct-dns", "1.1.1.1", 853))
                     "proxy_dot_1111" -> add(dnsServer("tls", "proxy-dot", "1.1.1.1", 853, detour = "proxy"))
                     "system_no_hijack" -> add(dnsServer("local", "direct-dns", "127.0.0.1"))

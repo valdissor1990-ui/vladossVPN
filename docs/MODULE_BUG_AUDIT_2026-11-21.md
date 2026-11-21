@@ -150,3 +150,20 @@ health-check цикла, фонового ранжирования и вызыв
   `TrafficValidator.mapException` + юнит-тест — вошли в PR #280 (ветка
   `chore/deps-upgrade-latest-stable`).
 - `docs/DEPENDENCY_UPGRADE_2026-11.md` — обновление тулчейна/ядра.
+
+## Статус исправлений (ветка `fix/module-audit-findings-2026-11-21`)
+
+Все 10 подтверждённых находок закрыты:
+
+| № | Уровень | Правка |
+|---|---------|--------|
+| 1 | P2 | `SubscriptionRepository.encryptedPrefs` сделан `by lazy` с `runCatching` → `null`; все обращения проверяют `null` (деградация вместо падения Hilt-инъекции). |
+| 2 | P2 | `removeSubscription` чистит `__subscription_body_*` / `__subscription_etag_*` удалённого провайдера и пересобирает `_allConfigs` + кэш без его `providerTag`. |
+| 3 | P2 | Добавлен `HomeViewModel.onCleared()`: `registerSelectionCancel(null)` и сброс `vpnPermissionRequester`. |
+| 4 | P2 | Удалена мёртвая ветка `pendingRankingConfigs` (поле и три обращения). |
+| 5 | P2 | Общий `retryPrefsInitIfNeeded()` вызывается в `load()`, `remove()` и `clear()`. |
+| 6 | P2 | Убран fallback на любой `.apk` в `findApkAsset`. |
+| 7 | P2 | `direct_udp_1111` без явного порта (sing-box использует 53). |
+| 8 | P2 | `AutoSwitcher.consecutiveErrors` → `AtomicInteger`; `baselineRtt` / `previousRtt` → `@Volatile`. |
+| 9 | P3 | Исправлен IPv4-регэксп в `TrojanUriParser.isDomainName` (убраны двойные слэши). |
+| 10 | P3 | `ExtraUriParsers.isTruthy()` для `allowinsecure` / `insecure`. |

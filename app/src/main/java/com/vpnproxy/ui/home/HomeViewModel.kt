@@ -142,7 +142,6 @@ class HomeViewModel @Inject constructor(
     private var vpnPermissionRequester: (() -> Unit)? = null
     private var activeTraceId: String? = null
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
-    @Volatile private var pendingRankingConfigs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig> = emptyList()
     @Volatile private var permissionFlowInProgress: Boolean = false
     @Volatile private var userStopRequested: Boolean = false
     private var stableClearJob: Job? = null
@@ -196,10 +195,6 @@ class HomeViewModel @Inject constructor(
                             lastServerStore.save(address = server.address, port = server.port, name = server.name, uuid = server.uuid, connectionKey = server.connectionKey())
                             serverScanner.recordSuccessfulConnection(server)
                         }
-                        pendingRankingConfigs.takeIf { it.isNotEmpty() }?.let { configs ->
-                            pendingRankingConfigs = emptyList()
-                            autoSwitcher.rankInBackground(configs)
-                        }
                         VpnProxyService.clearError()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) System.currentTimeMillis() else _uiState.value.sessionStartedAt
@@ -216,7 +211,6 @@ class HomeViewModel @Inject constructor(
                         cancelSelectionJob("Error")
                         stableClearJob?.cancel()
                         permissionFlowInProgress = false
-                        pendingRankingConfigs = emptyList()
                         val prev = _uiState.value.connectionState
                         val unexpected = !userStopRequested &&
                             (prev == ConnectionUiState.CONNECTED || prev == ConnectionUiState.UNSTABLE)
@@ -692,7 +686,6 @@ class HomeViewModel @Inject constructor(
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
-                pendingRankingConfigs = emptyList()
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
@@ -997,5 +990,13 @@ class HomeViewModel @Inject constructor(
         subscriptionRepository.removeSubscription(id)
         setAutomaticSubscription(ALL_SUBSCRIPTIONS_ID)
         _uiState.value = _uiState.value.copy(notice = "Подписка удалена")
+    }
+
+    override fun onCleared() {
+        // The coordinator is a singleton; drop the callback so it cannot retain
+        // this ViewModel (and, via the requester, the Activity) after teardown.
+        connectionCoordinator.registerSelectionCancel(null)
+        vpnPermissionRequester = null
+        super.onCleared()
     }
 }

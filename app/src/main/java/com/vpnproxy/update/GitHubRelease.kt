@@ -24,7 +24,6 @@ data class GitHubRelease(
     /** Ищет APK-ассет, подходящий под flavor (direct/play). */
     fun findApkAsset(flavor: String): Asset? =
         assets.firstOrNull { it.name.contains(flavor, ignoreCase = true) && it.name.endsWith(".apk") }
-            ?: assets.firstOrNull { it.name.endsWith(".apk") }
 
     /** Находит version.json ассет, если CI его приложил. */
     fun findVersionJsonAsset(): Asset? =

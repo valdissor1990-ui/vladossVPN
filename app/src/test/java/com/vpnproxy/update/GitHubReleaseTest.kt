@@ -1,6 +1,7 @@
 package com.vpnproxy.update
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class GitHubReleaseTest {
@@ -26,4 +27,32 @@ class GitHubReleaseTest {
     }
 
     private fun release(tag: String) = GitHubRelease(tagName = tag)
+
+    @Test
+    fun findApkAssetMatchesRequestedFlavor() {
+        val release = GitHubRelease(
+            tagName = "v1.0.0",
+            assets = listOf(
+                GitHubRelease.Asset("app-play-1.0.0-release.apk", "https://example/play.apk"),
+                GitHubRelease.Asset("app-direct-1.0.0-release.apk", "https://example/direct.apk")
+            )
+        )
+        assertEquals("app-direct-1.0.0-release.apk", release.findApkAsset("direct")?.name)
+        assertEquals("app-play-1.0.0-release.apk", release.findApkAsset("play")?.name)
+    }
+
+    @Test
+    fun findApkAssetDoesNotFallBackToOtherFlavor() {
+        val playOnly = GitHubRelease(
+            tagName = "v1.0.0",
+            assets = listOf(GitHubRelease.Asset("app-play-1.0.0-release.apk", "https://example/play.apk"))
+        )
+        assertNull("direct build must not pick up the play APK", playOnly.findApkAsset("direct"))
+
+        val noApk = GitHubRelease(
+            tagName = "v1.0.0",
+            assets = listOf(GitHubRelease.Asset("version.json", "https://example/version.json"))
+        )
+        assertNull(noApk.findApkAsset("direct"))
+    }
 }

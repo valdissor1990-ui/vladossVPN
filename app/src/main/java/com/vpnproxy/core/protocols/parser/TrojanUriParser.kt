@@ -252,7 +252,7 @@ object TrojanUriParser {
 
     private fun isDomainName(host: String): Boolean =
         !host.contains(':') &&
-            !host.matches(Regex("""\\d{1,3}(\\.\\d{1,3}){3}"""))
+            !host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
 
     private class QueryParameters(private val values: Map<String, String>) {
         fun first(vararg aliases: String): String? =
