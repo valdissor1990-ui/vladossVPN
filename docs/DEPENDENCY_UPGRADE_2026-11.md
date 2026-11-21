@@ -123,11 +123,11 @@ Gradle 8.14.8. Release workflow пока извлекает проверенны
 Работа остановлена по запросу пользователя. Текущая точка:
 
 - Ветка: `chore/deps-upgrade-latest-stable`
-- Коммит: `d493af6e36850e000d380a82756743c7151b1f10`
-- PR: **#280** → база `integration/full-vpn-client-final` (не в `main`)
-- CI на момент остановки: workflow `Pull Request Build Validation` в статусе
-  **pending** (run `44824197285`, job `136592482049`). Результат нужно забрать
-  из GitHub, он не подтверждён.
+- HEAD: `409d1808` (поверх `d493af6e` — два doc-коммита от параллельного агента)
+- PR: **#280** → база `integration/full-vpn-client-final` (не в `main`); state
+  `OPEN`, `MERGEABLE` / `CLEAN`.
+- CI: workflow `Pull Request Build Validation` — **success** (run `44827518554`,
+  4m43s). Провалов нет.
 
 ### Сделано
 
@@ -144,18 +144,49 @@ Gradle 8.14.8. Release workflow пока извлекает проверенны
 
 1. Забрать и зафиксировать результат CI по PR #280; при падении — исправить в этой
    же ветке и запушить (HOME SHA обновляется).
-2. Привести `.github/workflows/*` к 1.14.4-lx.35/8.14.8 — требует scope `workflow`
-   (сейчас файлы намеренно не тронуты, чтобы push не отклонялся).
+2. Привести `.github/workflows/*` к 1.14.4-lx.35/8.14.8. Правки вынесены
+   параллельным агентом в отдельный PR **#281**
+   (`fix/ci-libbox-1.14.4-provenance`); его CI зелёный. Собственный push
+   workflow-файлов по-прежнему требует scope `workflow`.
 3. Доведение по аудитам: кодовая часть P0 (честный `Connected` + fallback
    эндпоинтов) в интеграционной ветке уже есть (`ConnectionCoordinator`
    переводит в `Connected` только после `TrafficValidationResult(success=true)`,
    fallback через `tryFallback()`); остальное — пункты P1–P5 и runtime/device-гейты.
-4. Расширенный поиск багов — начат разбор `ConnectionCoordinator.kt` и
-   `TrafficValidator.kt`; выводов пока нет.
+4. Расширенный поиск багов — см. «Находки поиска багов» ниже.
+
+### Находки поиска багов (`ConnectionCoordinator` / `TrafficValidator`)
+
+Разбор логики подключения (ветка `chore/deps-upgrade-latest-stable`, база
+интеграции `0bedb72c`). Функциональных падений не найдено; ниже — «мёртвый» код
+и мелкие классификационные неточности.
+
+1. **Мёртвый код: `ConnectionCoordinator.trafficFatalMessage()`.** Объявлена в
+   `companion object` (line 71), но нигде не вызывается (проверено по всему
+   репозиторию). Гранулярные сообщения для `proxy_port_not_ready` / `dns_error`
+   не показываются — путь идёт через `VpnFailureReason.userMessage()`.
+2. **Мёртвое поле: `ConnectionCoordinator.fallbackIndex`.** Только
+   присваивается (`= -1`), никогда не читается; логика fallback работает на
+   `fallbackCandidates` + `activeScoredServer`.
+3. **Дублирование:** `VpnFailureReason.isProfileConfigurationError()` полностью
+   повторяет `isConfigurationError()` — можно переиспользовать.
+4. **Классификация в `TrafficValidator.mapException()`:** любая
+   `ConnectException` помечается как `REFUSED`, даже если причина —
+   «Network is unreachable» (на Android `ENETUNREACH` иногда приходит именно
+   `ConnectException`). Тогда выбор `probe_targets` сообщит «соединение
+   отклонено» вместо «сеть недоступна». Проверять сообщение до маппинга по типу.
+5. **Обзор PR #282 (HTTPS-валидация подписок).** Гвард стоит централизованно в
+   `SubscriptionRepository.addSubscription`, поэтому покрыты все точки входа
+   (Home и Subscriptions), обхода нет. Замечание UX: `HomeViewModel.addSubscription`
+   по-прежнему принимает `http://` (сообщение «URL должен начинаться с http://
+   или https://») и при отклонении показывает общий текст «Не удалось сохранить
+   подписку». Стоит согласовать подсказку и добавить тест на `isSecureSubscriptionUrl`.
 
 ### Блокеры / ограничения
 
-- CI/provenance исправления вынесены в отдельный PR #281; его CI ещё должен завершиться.
+- CI/provenance исправления вынесены в отдельный PR #281 (CI зелёный).
+- Параллельный агент открыл ещё два черновика: **#282**
+  (`fix/subscription-https-validation`) и **#283** (`fix/servers-list-light-theme`),
+  оба в `integration/full-vpn-client-final`, CI зелёный.
 - AGP 9.x / compileSdk 36–37 / Compose 1.13 / Kotlin 2.4 / OkHttp 5.5 — отложены
   по причинам совместимости (CI ставит только `platforms;android-35 build-tools;35.0.0`).
 - Runtime/device-тесты не выполнялись (запрещены без отдельного разрешения).
@@ -166,6 +197,10 @@ Gradle 8.14.8. Release workflow пока извлекает проверенны
 1. Мержить ли draft PR #277 (`integration → main`; запустит `release.yml`).
 2. Какую версию/`versionCode` использовать для релиза.
 3. Нужно ли разрешение на device-тесты.
+4. Сливать ли в `integration` открытые PR: #280 (зависимости/ядро), #281 (CI),
+   #282 (HTTPS-подписки), #283 (светлая тема) — или ждать ревью.
+5. Чинить ли найденные мелочи (мёртвый `trafficFatalMessage`/`fallbackIndex`,
+   `mapException` для `ENETUNREACH`) сразу или отдельным PR.
 
 ### Как продолжить локально (Windows, кириллица в пути профиля)
 
