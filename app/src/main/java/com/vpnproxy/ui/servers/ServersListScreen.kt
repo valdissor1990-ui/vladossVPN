@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -267,14 +266,7 @@ fun ServerListContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF10183E), Color(0xFF20245B),
-                        Color(0xFF0E647B), Color(0xFF111638)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
@@ -287,23 +279,23 @@ fun ServerListContent(
                     "Серверы (${servers.size})",
                     fontSize = 30.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold,
-                    color = Color(0xFFD7C4FF)
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
                     if (scanningServers) "Проверка доступности…" else "Выберите сервер для подключения",
                     fontSize = 13.sp,
-                    color = Color(0xFFD5E6FF).copy(alpha = 0.8f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     "Пинг проверяется через VPN-профиль. Без ответа — н/д.",
                     fontSize = 11.sp,
-                    color = Color(0xFFD5E6FF).copy(alpha = 0.72f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             if (scanningServers || deepProbeRunning) {
                 CircularProgressIndicator(
                     modifier = Modifier.height(24.dp),
-                    color = Color(0xFF9DEBFF),
+                    color = MaterialTheme.colorScheme.primary,
                     strokeWidth = 2.dp
                 )
             }
@@ -315,19 +307,11 @@ fun ServerListContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
-            placeholder = { Text("Поиск сервера…", color = Color(0xFFDDE7FF).copy(alpha = 0.7f)) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Поиск", tint = Color(0xFFE4EEFF)) },
+            placeholder = { Text("Поиск сервера…") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Поиск") },
             singleLine = true,
             shape = RoundedCornerShape(24.dp),
-            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFFB9CFFF).copy(alpha = 0.85f),
-                unfocusedBorderColor = Color(0xFFB9CFFF).copy(alpha = 0.35f),
-                cursorColor = Color.White,
-                focusedContainerColor = Color(0xFFB7D9FF).copy(alpha = 0.13f),
-                unfocusedContainerColor = Color(0xFFB7D9FF).copy(alpha = 0.10f)
-            )
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors()
         )
 
         Row(
@@ -344,17 +328,12 @@ fun ServerListContent(
                     onClick = { selectedFilter = filter },
                     label = { Text(filter.uppercase()) },
                     shape = RoundedCornerShape(22.dp),
-                    colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFF9DABF5).copy(alpha = 0.85f),
-                        selectedLabelColor = Color(0xFF18204D),
-                        containerColor = Color(0xFF9CB9EE).copy(alpha = 0.13f),
-                        labelColor = Color(0xFFE5EDFF)
-                    ),
+                    colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(),
                     border = androidx.compose.material3.FilterChipDefaults.filterChipBorder(
                         enabled = true,
                         selected = selected,
-                        borderColor = Color.White.copy(alpha = 0.18f),
-                        selectedBorderColor = Color(0xFFD7C7FF)
+                        borderColor = MaterialTheme.colorScheme.outline,
+                        selectedBorderColor = MaterialTheme.colorScheme.primary
                     )
                 )
             }
@@ -368,31 +347,31 @@ fun ServerListContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextButton(onClick = { viewModel.rescanServers() }, enabled = !scanningServers) {
-                Text("↻ Сканировать", color = Color(0xFFD7F7FF))
+                Text("↻ Сканировать", color = MaterialTheme.colorScheme.primary)
             }
             TextButton(onClick = { viewModel.runDeepProbe() }, enabled = !deepProbeRunning) {
-                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ", color = Color(0xFFD7F7FF))
+                Text(if (deepProbeRunning) "Анализ…" else "Глубокий анализ", color = MaterialTheme.colorScheme.primary)
             }
         }
 
         deepProbeError?.let { error ->
             Text(
                 text = error,
-                color = Color(0xFFFFB6C1),
+                color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
         if (deepProbeResults.isNotEmpty()) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Text("Результаты глубокого анализа", color = Color.White, style = MaterialTheme.typography.titleSmall)
+                Text("Результаты глубокого анализа", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                 deepProbeResults.forEach { result ->
                     Text(
                         text = "${result.config.name}: score ${"%.3f".format(java.util.Locale.US, result.normalizedScore)} " +
                             "(lat ${"%.2f".format(java.util.Locale.US, result.latencyScore)}, speed ${"%.2f".format(java.util.Locale.US, result.speedScore)}, " +
                             "jitter ${"%.2f".format(java.util.Locale.US, result.jitterScore)}, loss ${"%.2f".format(java.util.Locale.US, result.lossScore)})",
                         fontSize = 11.sp,
-                        color = Color(0xFFD5E6FF),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 2.dp)
                     )
                 }
@@ -406,7 +385,7 @@ fun ServerListContent(
             ) {
                 Text(
                     text = if (servers.isEmpty()) "Список пуст. Добавьте подписку." else "Ничего не найдено",
-                    color = Color(0xFFDDE7FF).copy(alpha = 0.8f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         } else {
@@ -421,7 +400,7 @@ fun ServerListContent(
                 ) { scoredServer ->
                     val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "н/д"
                     val scoreValue = scoreLabel.toDoubleOrNull()
-                    val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: Color(0xFFDDE7FF).copy(alpha = 0.65f)
+                    val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant
                     GlassServerCard(
                         server = scoredServer,
                         scoreLabel = scoreLabel,
@@ -550,11 +529,9 @@ private fun GlassServerCard(
             .fillMaxWidth(0.94f)
             .clip(RoundedCornerShape(12.dp))
             .background(
-                Brush.linearGradient(
-                    listOf(Color(0xFFB7D7FF).copy(alpha = 0.20f), Color(0xFF8EDCFF).copy(alpha = 0.11f))
-                )
+                MaterialTheme.colorScheme.surface
             )
-            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -566,7 +543,7 @@ private fun GlassServerCard(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 12.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 maxLines = 2,
@@ -574,7 +551,7 @@ private fun GlassServerCard(
             )
             Text(
                 text = protocol,
-                color = Color(0xFFDDE7FF).copy(alpha = 0.82f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 9.sp,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
