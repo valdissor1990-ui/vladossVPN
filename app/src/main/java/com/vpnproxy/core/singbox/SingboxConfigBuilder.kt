@@ -183,6 +183,24 @@ object SingboxConfigBuilder {
         }.toString()
     }
 
+    /**
+     * Local inbound ports a built config actually binds, derived from its `inbounds[].listen_port`.
+     *
+     * The core lifecycle waits for these ports before starting instead of assuming the fixed
+     * proxy port. A temporary multi-profile probe core binds random loopback ports, so gating it
+     * on [PROXY_PORT] made every probe fail while the proxy port was held by another core.
+     * Returns an empty set when the config exposes no parseable inbound ports.
+     */
+    fun inboundPorts(configJson: String): Set<Int> {
+        val root = runCatching { Json.parseToJsonElement(configJson) }.getOrNull() as? JsonObject
+            ?: return emptySet()
+        val inbounds = root["inbounds"] as? JsonArray ?: return emptySet()
+        return inbounds.mapNotNull { element ->
+            val inbound = element as? JsonObject ?: return@mapNotNull null
+            (inbound["listen_port"] as? JsonPrimitive)?.intOrNull?.takeIf { it in 1..65535 }
+        }.toSet()
+    }
+
     private fun parseXhttpExtra(rawExtra: String?): JsonObject? {
         if (rawExtra.isNullOrBlank()) return null
         val element = try {
