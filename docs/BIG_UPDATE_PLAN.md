@@ -7,7 +7,7 @@ Branch: `feat/dual-path-ai-foreign` (HEAD includes dual-path service wire)
 You are hardening vladossVPN for production use on Android (Xiaomi / Android 13+).
 Priorities in order:
 
-1. **Do not break working VPN path** (libbox 1.14.3, TUN, protect, subscription parse).
+1. **Do not break working VPN path** (libbox 1.14.4, TUN, protect, subscription parse).
 2. **Reliability**: boot reconnect, network change, less flapping.
 3. **Battery**: longer intervals under saver/economy; no useless probes.
 4. **Smart Connect**: hysteresis, cooldown, ranking only when gain is real.

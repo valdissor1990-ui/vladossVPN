@@ -63,28 +63,9 @@ class ConnectionCoordinator @Inject constructor(
     companion object {
         private const val TAG = "ConnectionCoordinator"
         private const val MAX_RETRIES = 3
-        private const val FATAL_TRAFFIC_MESSAGE = "Сеть заблокирована или недоступна. Проверьте интернет."
         private const val NETWORK_FAILURE_MESSAGE =
             "Несколько разных серверов не ответили через текущую сеть. Возможно, сеть ограничивает VPN. Попробуйте Wi-Fi или другого оператора."
         const val CONNECTING_TIMEOUT_MS = 90_000L
-
-        fun trafficFatalMessage(summary: String?): String {
-            val s = summary?.lowercase().orEmpty()
-            return when {
-                s.isBlank() || s == "unknown" -> FATAL_TRAFFIC_MESSAGE
-                "proxy_port_not_ready" in s ->
-                    "Локальный прокси VPN не поднялся. Перезапустите приложение и попробуйте снова."
-                "dns_error" in s ->
-                    "Не удалось проверить трафик: ошибка DNS через VPN. Проверьте подписку или сеть."
-                "timeout" in s ->
-                    "Не удалось проверить трафик: сервер не отвечает вовремя. Попробуйте другой сервер."
-                "refused" in s ->
-                    "Не удалось проверить трафик: соединение отклонено. Сервер или сеть блокируют доступ."
-                "unreachable" in s ->
-                    "Не удалось проверить трафик: сеть недоступна. Проверьте интернет и Wi‑Fi/мобильные данные."
-                else -> FATAL_TRAFFIC_MESSAGE
-            }
-        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -96,7 +77,6 @@ class ConnectionCoordinator @Inject constructor(
     @Volatile private var hasServerSelected: Boolean = false
     @Volatile private var retryCount: Int = 0
     private var fallbackCandidates: List<ScoringEngine.ScoredServer> = emptyList()
-    private var fallbackIndex: Int = -1
     private var fallbackAttempts: Int = 0
     private data class RecentEndpointFailure(val config: ParsedConfig, val atMs: Long)
     private val recentEndpointFailures = mutableListOf<RecentEndpointFailure>()
@@ -284,7 +264,6 @@ class ConnectionCoordinator @Inject constructor(
                 providerScopeBlocked = event.blocked
                 val before = fallbackCandidates.size
                 fallbackCandidates = fallbackCandidates.filter { isWithinProviderScope(it) }
-                fallbackIndex = -1
                 val scopeLabel = if (event.blocked) "BLOCKED" else (normalized ?: "ALL")
                 logI("Provider scope changed: $scopeLabel; fallback candidates $before -> ${fallbackCandidates.size}")
             }
@@ -293,7 +272,6 @@ class ConnectionCoordinator @Inject constructor(
                 manualSelectionMode = event.enabled
                 if (event.enabled) {
                     fallbackCandidates = emptyList()
-                    fallbackIndex = -1
                     fallbackAttempts = 0
                 }
                 logI("Manual selection mode=${if (event.enabled) "ON" else "OFF"}")
@@ -306,7 +284,6 @@ class ConnectionCoordinator @Inject constructor(
                 fallbackCandidates = event.servers
                     .filter { isWithinProviderScope(it) }
                     .distinctBy { it.config.connectionKey() }
-                fallbackIndex = -1
                 fallbackAttempts = 0
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
@@ -334,7 +311,6 @@ class ConnectionCoordinator @Inject constructor(
                 val selectedKey = event.server.config.connectionKey()
                 val selectedWasFallback = fallbackCandidates.any { it.config.connectionKey() == selectedKey }
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == selectedKey }
-                fallbackIndex = -1
                 if (!selectedWasFallback) fallbackAttempts = 0
                 logI("ServerSelected: ${event.server.config.name}")
                 when (current) {
@@ -567,7 +543,6 @@ class ConnectionCoordinator @Inject constructor(
         if (failedKey != null) {
             fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == failedKey }
         }
-        fallbackIndex = -1
         var nextIndex = 0
         while (nextIndex < fallbackCandidates.size) {
             val candidate = fallbackCandidates[nextIndex]
@@ -580,7 +555,6 @@ class ConnectionCoordinator @Inject constructor(
             if (active == null || candidate.config.connectionKey() != active.connectionKey()) {
                 fallbackAttempts++
                 fallbackCandidates = fallbackCandidates.filterNot { it.config.connectionKey() == candidate.config.connectionKey() }
-                fallbackIndex = -1
                 trafficValidationGeneration++ // invalidate the failed endpoint's still-running probe
                 activeScoredServer = candidate
                 pendingServerName = candidate.config.name

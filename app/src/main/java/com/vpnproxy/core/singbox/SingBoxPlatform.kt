@@ -28,7 +28,7 @@ import java.util.Collections
 import kotlinx.coroutines.runBlocking
 
 /**
- * Android implementation of libbox 1.14.3's PlatformInterface.
+ * Android implementation of libbox 1.14.4's PlatformInterface.
  * The VPN service owns the TUN descriptor; libbox receives only its fd.
  */
 class SingBoxPlatform(
@@ -308,7 +308,6 @@ class SingBoxPlatform(
         tunDescriptor = null
     }
 
-    override fun useProcFS(): Boolean = true
     override fun underNetworkExtension(): Boolean = false
     override fun includeAllNetworks(): Boolean = false
     override fun usePlatformShell(): Boolean = unsupported("usePlatformShell", false)

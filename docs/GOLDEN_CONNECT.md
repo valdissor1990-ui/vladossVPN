@@ -64,7 +64,7 @@
 |----------|--------|-----------|
 | type | `tls` (DoT) | единственный `udp` 8.8.8.8 без пути через proxy при strict_route |
 | server | `1.1.1.1` | — |
-| detour | **`proxy`** | `direct` (ломает libbox 1.14.3) |
+| detour | **`proxy`** | `direct` (ломает libbox 1.14.4) |
 | final | `proxy-dot` | `direct-dns` как единственный путь без device-proof |
 
 ### Почему так

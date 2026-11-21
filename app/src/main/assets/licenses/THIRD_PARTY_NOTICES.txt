@@ -6,12 +6,12 @@ The software is provided without warranty to the extent permitted by applicable
 law.
 
 1. VPN core: sing-box-lx / libbox
-- Pinned release: Leadaxe/sing-box-lx v1.14.3-lx.23
-- Source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.23
+- Pinned release: Leadaxe/sing-box-lx v1.14.4-lx.35
+- Source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.4-lx.35
 - Downloaded artifact:
-  https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.3-lx.23/libbox-1.14.3-lx.23.aar
+  https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.35/libbox-1.14.4-lx.35.aar
 - SHA-256:
-  d7be8b1297f68ad8bad47e5eb766f59501100b1e9377de403d9c53cd364ecef1
+  e5cfd79364316150acd5c9ddbb5d6d8c749f1ce4a590f9a3eaa408f949b8fd7b
 - License: GPL-3.0-or-later, with the additional upstream naming/association
   condition reproduced in sing-box-lx-NOTICE.txt.
 - The full GPL-3.0-or-later text is bundled as GPL-3.0-or-later.txt.

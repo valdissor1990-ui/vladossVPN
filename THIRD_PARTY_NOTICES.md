@@ -7,12 +7,12 @@ law. The exact source commit used for each build is embedded in
 licenses/SOURCE_COMMIT.txt.
 
 1. VPN core: sing-box-lx / libbox
-- Pinned release: Leadaxe/sing-box-lx v1.14.3-lx.23
-- Source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.3-lx.23
+- Pinned release: Leadaxe/sing-box-lx v1.14.4-lx.35
+- Source: https://github.com/Leadaxe/sing-box-lx/tree/v1.14.4-lx.35
 - Downloaded artifact:
-  https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.3-lx.23/libbox-1.14.3-lx.23.aar
+  https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.35/libbox-1.14.4-lx.35.aar
 - SHA-256:
-  d7be8b1297f68ad8bad47e5eb766f59501100b1e9377de403d9c53cd364ecef1
+  e5cfd79364316150acd5c9ddbb5d6d8c749f1ce4a590f9a3eaa408f949b8fd7b
 - License: GPL-3.0-or-later, with the additional upstream naming/association
   condition reproduced in sing-box-lx-NOTICE.txt.
 - The full GPL-3.0-or-later text is bundled as GPL-3.0-or-later.txt.
@@ -38,11 +38,11 @@ licenses/SOURCE_COMMIT.txt.
 - The with_naive_outbound build tag includes libcronet.a archives from the
   SagerNet/cronet-go Android packages.
 - Pinned cronet-go wrapper source:
-  https://github.com/SagerNet/cronet-go/tree/0d28acc44093df24b2526dea3d6ffefd6b0a54f0
+  https://github.com/SagerNet/cronet-go/tree/095cb9e060468c80ca31d977c020dca82d101a8f
 - Pinned per-ABI libcronet.a package source:
-  https://github.com/SagerNet/cronet-go/tree/c10c03c318db6d47bec8705c8290bad34bc32b64
+  https://github.com/SagerNet/cronet-go/tree/3aac4ed44c5cf0af74a6051a7335c49dffd91c37
 - The pinned NaiveProxy / Chromium source revision:
-  https://github.com/SagerNet/naiveproxy/tree/72a06c9fca0e2d228588c7f3074bf7efff3ff686
+  https://github.com/SagerNet/naiveproxy/tree/7c64cae24cd7bae18d9c603fdddc73b623c04462
 - The cronet-go Go wrapper has its own GPL-3.0-or-later license. The native
   archives have a BSD-style three-clause base license plus third-party
   components with separate license and notice requirements.
