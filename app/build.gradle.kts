@@ -137,9 +137,16 @@ android {
     buildFeatures { compose = true; buildConfig = true }
 
     // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
+    // ABI-сплиты нельзя включать в том Gradle-вызове, который собирает App Bundle:
+    // AGP с R8 (shrinkResources) падает на «Multiple shrunk-resources files found»,
+    // если рядом со бандлом собираются split-APK (issuetracker.google.com/402800800).
+    // AAB и так делится по ABI на стороне Google Play, поэтому сплиты нужны только для APK.
+    val buildingAppBundle = gradle.startParameter.taskNames.any {
+        it.substringAfterLast(':').lowercase().startsWith("bundle")
+    }
     splits {
         abi {
-            isEnable = true
+            isEnable = !buildingAppBundle
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = true   // плюс универсальный APK для GitHub Releases
