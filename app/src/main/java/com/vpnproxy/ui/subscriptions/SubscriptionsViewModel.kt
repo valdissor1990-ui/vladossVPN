@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.subscription.JsonConfigRepository
+import com.vpnproxy.subscription.SubscriptionParser
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -51,8 +52,10 @@ class SubscriptionsViewModel @Inject constructor(
             return
         }
         val trimmed = url.trim()
-        // JSON config paste (sing-box outbound / array) — not a URL.
-        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        // sing-box JSON or a single config link (typed, pasted or scanned from a QR code).
+        if (trimmed.startsWith("{") || trimmed.startsWith("[") ||
+            SubscriptionParser.looksLikeConfigUri(trimmed)
+        ) {
             addFromJsonConfig(trimmed, name, tag)
             return
         }
@@ -70,16 +73,16 @@ class SubscriptionsViewModel @Inject constructor(
 
     fun addFromJsonConfig(rawJson: String, name: String, tag: String = "") {
         if (rawJson.isBlank()) {
-            _message.value = "JSON не может быть пустым"
+            _message.value = "Данные не могут быть пустыми"
             return
         }
         viewModelScope.launch {
-            val displayName = name.ifBlank { "JSON ${subscriptions.value.size + 1}" }
+            val displayName = name.ifBlank { "Импорт ${subscriptions.value.size + 1}" }
             val count = jsonConfigRepository.addFromJsonConfig(rawJson, displayName, tag)
             _message.value = when {
-                count == null -> "Не удалось разобрать JSON"
-                count == 0 -> "В JSON нет поддерживаемых серверов"
-                else -> "Добавлено серверов из JSON: $count"
+                count == null -> "Не удалось разобрать данные"
+                count == 0 -> "В данных нет поддерживаемых серверов"
+                else -> "Добавлено серверов: $count"
             }
             if (count != null && count > 0) {
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
