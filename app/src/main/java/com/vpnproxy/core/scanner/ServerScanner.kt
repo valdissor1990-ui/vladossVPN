@@ -43,6 +43,10 @@ class ServerScanner @Inject constructor(
     companion object {
         private const val TAG = "ServerScanner"
         private const val RESCAN_INTERVAL_MS = 30 * 60 * 1_000L
+        /** Base delay before retrying a queued full scan that could not complete. */
+        private const val PENDING_RESCAN_BASE_MS = 10_000L
+        /** Upper bound for the retry backoff so a transient failure cannot hammer the radio. */
+        private const val PENDING_RESCAN_MAX_MS = 5 * 60 * 1_000L
         /** Connection may reuse only a recent in-memory scan on the same network. */
         private const val CONNECTION_SCAN_REUSE_MAX_AGE_MS = 90_000L
     }
@@ -325,17 +329,23 @@ class ServerScanner @Inject constructor(
         return scope.launch {
             val initialConfigs = subscriptionRepository.getAllConfigs()
             if (initialConfigs.isNotEmpty()) scanAll(initialConfigs)
+            // Exponential backoff for a queued full scan that keeps failing. Without it a
+            // scan that can never start is retried every ~10s forever, wasting radio/battery.
+            var pendingFailureStreak = 0
             while (isActive) {
                 val pending = pendingFullScanConfigs
                 if (pending.isNotEmpty()) {
-                    // The temporary profile-probe core cannot coexist with the active VPN core.
-                    // Resume the full scan as soon as the tunnel is down instead of dropping it.
-                    delay(10_000L)
+                    val backoffMs = (PENDING_RESCAN_BASE_MS shl pendingFailureStreak.coerceAtMost(5))
+                        .coerceAtMost(PENDING_RESCAN_MAX_MS)
+                    delay(backoffMs)
                     if (!VpnProxyService.isRunning.value) {
-                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${pending.size}")
+                        logCollector.info(TAG, "Resuming queued full scan after VPN stopped: profiles=${pending.size} backoffMs=$backoffMs")
                         scanAll(pending, force = true)
+                        pendingFailureStreak =
+                            if (pendingFullScanConfigs.isEmpty()) 0 else pendingFailureStreak + 1
                     }
                 } else {
+                    pendingFailureStreak = 0
                     delay(RESCAN_INTERVAL_MS)
                     if (connectionCoordinator.state.value is ConnectionState.Connected) {
                         val configs = subscriptionRepository.getAllConfigs()
@@ -431,7 +441,8 @@ class ServerScanner @Inject constructor(
                     latencyMs = Long.MAX_VALUE,
                     speedMbps = 0f,
                     successRate = scanCache().getFloat("server_${key}_success", 0f),
-                    score = 0f
+                    score = 0f,
+                    tcpHintMs = scanCache().getLong("server_${key}_tcp", -1L).takeIf { it > 0L }
                 )
             }
         }
@@ -461,6 +472,7 @@ class ServerScanner @Inject constructor(
                 .putFloat("server_${key}_speed", server.speedMbps)
                 .putFloat("server_${key}_success", server.successRate)
                 .putFloat("server_${key}_score", server.score)
+                .putLong("server_${key}_tcp", server.tcpHintMs ?: -1L)
         }
         editor.putLong("saved_at", System.currentTimeMillis()).apply()
     }
@@ -473,7 +485,8 @@ class ServerScanner @Inject constructor(
             speedMbps = 0f,
             successRate = if (ping.success) 1f else 0f,
             score = if (ping.success) (1.0 / (1.0 + latency / 1000.0)).toFloat() else 0f,
-            evidence = ping.evidence
+            evidence = ping.evidence,
+            tcpHintMs = ping.tcpHintMs
         )
     }
 

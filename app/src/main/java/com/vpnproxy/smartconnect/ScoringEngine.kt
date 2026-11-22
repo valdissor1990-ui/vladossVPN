@@ -24,7 +24,9 @@ class ScoringEngine @Inject constructor(
         val speedMbps: Float,
         val successRate: Float,
         val score: Float,
-        val evidence: ProbeMeasurementEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null,
+        /** Direct TCP handshake hint for a profile whose proxied probe failed. */
+        val tcpHintMs: Long? = null
     ) : Comparable<ScoredServer> {
         override fun compareTo(other: ScoredServer): Int = other.score.compareTo(this.score)
     }

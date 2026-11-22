@@ -1,26 +1,36 @@
-# Protocol wiring status (1.0.775)
+# Protocol wiring status (1.0.826+)
 
 ## Production path (SubscriptionRepository → SubscriptionParser)
 
-Supported URI schemes after this release:
+| Input | Status |
+|-------|--------|
+| `vless://` | production |
+| `hysteria2://` / `hy2://` | production |
+| `tuic://` | production |
+| `ss://` | production |
+| `vmess://` | production |
+| `trojan://` | production |
+| `socks://` / `socks5://` | production |
+| Clash / Clash.Meta YAML | production — `vless`, `vmess`, `trojan`, `ss`, `socks5`, `hysteria2`, `tuic` |
+| sing-box JSON `outbounds[]` | production — same type set as Clash |
+| Legacy Xray JSON | production — `vless` and Hysteria v2 |
 
-| Scheme | Status |
-|--------|--------|
-| vless:// | production |
-| hysteria2:// / hy2:// | production |
-| tuic:// | production |
-| ss:// | production (new) |
-| vmess:// | production (new) |
-| trojan:// | production (new) |
-| socks:// / socks5:// | production (new) |
-| Clash YAML / JSON | existing (mostly vless) |
+Mapping rules live in two Android-free objects so they are unit tested on the JVM:
 
-## Parallel package `core/protocols/`
+* `subscription/ClashProxyMapper.kt` — Clash `proxies[]` entry → `ParsedConfig`
+* `subscription/SingBoxOutboundMapper.kt` — sing-box outbound object → `ParsedConfig`
 
-Model + parsers (VLESS/VMESS/SS/Trojan/SOCKS/HTTP) exist for the future migration.
-They are **not** yet the SubscriptionRepository input type (`ParsedConfig` types differ).
-Do not delete; next step is gradual migration once sing-box outbound builders map the new model.
+Both normalize the Clash stream network onto a sing-box transport name (`h2` → `http`,
+`splithttp` → `xhttp`). Unsupported networks are rejected **at import time** with the
+reason `unsupported_transport` instead of producing a profile that fails at connect time.
 
-## Out of production path for now
+`http` proxies, WireGuard, AnyTLS, ShadowTLS, Naive and SSH are not supported by the
+bundled libbox outbound builder and are reported as `unsupported_protocol`.
 
-WIREGUARD, ANYTLS, SHADOWTLS, NAIVE, SSH — only in `ProtocolKind` enum.
+## Removed: parallel `core/protocols/` package
+
+The `com.vpnproxy.core.protocols` package (14 files, ~1860 lines) was a second,
+never-wired parser model. It had zero production imports — only its own tests — and
+diverged from the live parser, so it was deleted. The live path is
+`SubscriptionRepository` → `subscription/SubscriptionParser` → `ParsedConfig` →
+`SingboxConfigBuilder.buildOutbound`.

@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.RoutingSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -144,6 +145,7 @@ class LogExporter @Inject constructor(
             appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("android_api=${Build.VERSION.SDK_INT}")
             appendLine("DIAG-SETTINGS dns_mode=${options?.dnsMode ?: "unknown"} tun_stack=${options?.tunStack ?: "unknown"} strict_route=${options?.strictRoute ?: "unknown"} route_final=${options?.routeFinal ?: "unknown"} auto_detect_interface=${options?.autoDetectInterface ?: "unknown"} use_disallow_self_package=${options?.useDisallowSelfPackage ?: "unknown"} passive_probe_enabled=${options?.passiveProbeEnabled ?: "unknown"} freeze_autoswitcher=${options?.freezeAutoSwitcherAfterConnected ?: "unknown"}")
+            appendLine("route_preset=${runCatching { RoutingSettings.load(context) }.getOrNull()?.let { "${it.preset.id}(effective=${it.effectivePreset.id})" } ?: "unknown"}")
             appendLine("last DIAG-SETTINGS entries: ${latestLines("DIAG-SETTINGS", 8)}")
             appendLine("last DIAG-EFFECTIVE entries: ${latestLines("DIAG-EFFECTIVE", 10)}")
             appendLine("last ConnectionState: ${lastContaining("ConnectionState", "setState(", "STATE:", "state changed")}")

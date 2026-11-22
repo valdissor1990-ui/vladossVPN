@@ -1,6 +1,7 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
+import com.vpnproxy.core.ping.TcpConnectProbe
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
@@ -143,6 +144,25 @@ class DeepProbeEngine @Inject constructor(
     private val cancellationGeneration = AtomicLong(0L)
 
     /**
+     * One shared OkHttp foundation for all profile probes. OkHttp clients are expensive
+     * (each owns a dispatcher and connection pool); building one per profile per scan
+     * created needless thread/alloc churn. Per-profile clients are derived with
+     * [OkHttpClient.newBuilder], which reuses the dispatcher and connection pool.
+     */
+    private val baseProbeClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
+        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+        .build()
+
+    private fun profileClient(port: Int, callTimeoutSeconds: Long): OkHttpClient =
+        baseProbeClient.newBuilder()
+            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            .callTimeout(callTimeoutSeconds, TimeUnit.SECONDS)
+            .build()
+
+    /**
      * Signal cancellation without synchronously stopping the native core from the caller.
      * The probe coroutine owns the CorePortLease and performs core teardown in its finally
      * block; SingboxProxyClient.start() also cleans up if its interruptible startup is cancelled.
@@ -161,7 +181,12 @@ class DeepProbeEngine @Inject constructor(
         val latencyMs: Long,
         val success: Boolean,
         val successfulSamples: Int,
-        val evidence: ProbeMeasurementEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null,
+        /**
+         * Direct TCP handshake time to the endpoint, measured only when the proxied probe failed.
+         * Used as a sorting/labelling hint; never treated as a working proxy.
+         */
+        val tcpHintMs: Long? = null
     )
 
     /**
@@ -205,14 +230,7 @@ class DeepProbeEngine @Inject constructor(
                         indices.map { index ->
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
-                                    val client = OkHttpClient.Builder()
-                                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
-                                        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .callTimeout(7, TimeUnit.SECONDS)
-                                        .retryOnConnectionFailure(false)
-                                        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-                                        .build()
+                                    val client = profileClient(ports[index], 7L)
                                     val startedAtEpochMs = System.currentTimeMillis()
                                     val startNetwork = networkBucketProvider.snapshot()
                                     var attemptedSamples = 0
@@ -254,11 +272,22 @@ class DeepProbeEngine @Inject constructor(
                                             successfulSamples = samples.size
                                         )
                                     )
+                                    // A failed proxied probe still gets a TCP hint, so the list can
+                                    // distinguish "endpoint answers but the proxy path is broken"
+                                    // from "endpoint is unreachable".
+                                    val withHint = if (result.success) result else result.copy(
+                                        tcpHintMs = runInterruptible(Dispatchers.IO) {
+                                            TcpConnectProbe.measure(
+                                                configs[index].address,
+                                                configs[index].port
+                                            )
+                                        }
+                                    )
                                     logCollector.info(
                                         TAG,
-                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${result.success} successfulSamples=${result.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${result.latencyMs}"
+                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${withHint.success} successfulSamples=${withHint.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${withHint.latencyMs} tcpHintMs=${withHint.tcpHintMs ?: "none"}"
                                     )
-                                    result
+                                    withHint
                                 }
                             }
                         }.awaitAll()
@@ -318,14 +347,7 @@ class DeepProbeEngine @Inject constructor(
                 val results = configs.mapIndexed { index, config ->
                     checkProbeActive(probeGeneration)
                     try {
-                        val client = OkHttpClient.Builder()
-                            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
-                            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                            .callTimeout(8, TimeUnit.SECONDS)
-                            .retryOnConnectionFailure(false)
-                            .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-                            .build()
+                        val client = profileClient(ports[index], 8L)
 
                         val startedAtEpochMs = System.currentTimeMillis()
                         val startNetwork = networkBucketProvider.snapshot()

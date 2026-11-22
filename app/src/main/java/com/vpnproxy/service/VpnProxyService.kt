@@ -27,6 +27,7 @@ import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticOptions
+import com.vpnproxy.core.singbox.RoutingSettings
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
@@ -523,11 +524,18 @@ class VpnProxyService : VpnService() {
       } else if (dualPackages.isNotEmpty()) {
           logCollector.warn(TAG, "DUAL-PATH: no foreign server in ranked list; selected apps use default proxy")
       }
+      val routing = RoutingSettings.load(this@VpnProxyService)
+      logCollector.info(
+          TAG,
+          "DIAG-SETTINGS ROUTING_PRESET=${routing.preset.id} effective=${routing.effectivePreset.id} " +
+              "ru_rule_sets_degraded=${routing.ruRuleSetsDegraded}"
+      )
       val configJson = SingboxConfigBuilder.buildVpn(
           parsed,
           diagnosticOptions,
           foreignConfig = foreignParsed,
-          foreignPackageNames = if (foreignParsed != null) dualPackages else emptyList()
+          foreignPackageNames = if (foreignParsed != null) dualPackages else emptyList(),
+          routing = routing
       )
                 runCatching {
                     val root = org.json.JSONObject(configJson)

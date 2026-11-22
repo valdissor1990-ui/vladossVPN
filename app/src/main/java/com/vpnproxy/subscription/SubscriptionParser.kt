@@ -1,9 +1,7 @@
 package com.vpnproxy.subscription
 
-import android.util.Base64
 import com.vpnproxy.logging.LogCollector
 import kotlinx.serialization.json.*
-import org.json.JSONObject
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
@@ -23,7 +21,20 @@ import javax.inject.Singleton
 class SubscriptionParser @Inject constructor(
     private val logCollector: LogCollector
 ) {
-    companion object { private const val TAG = "SubParser" }
+    companion object {
+        private const val TAG = "SubParser"
+
+        /** URI schemes this parser can turn into a [ParsedConfig]. */
+        val SUPPORTED_URI_SCHEMES: Set<String> = setOf(
+            "vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5"
+        )
+
+        /** True when [text] is a single config link this parser understands. */
+        fun looksLikeConfigUri(text: String): Boolean {
+            val scheme = text.trim().substringBefore("://", missingDelimiterValue = "").lowercase()
+            return scheme.isNotEmpty() && scheme in SUPPORTED_URI_SCHEMES
+        }
+    }
 
     data class ParsedConfig(
         val uuid: String,
@@ -164,7 +175,7 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun classifyUriRejection(line: String, scheme: String): String {
-        if (scheme !in setOf("vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5")) return "unsupported_scheme"
+        if (scheme !in SUPPORTED_URI_SCHEMES) return "unsupported_scheme"
         val uri = runCatching { URI(line.substringBefore('#')) }.getOrElse { return "malformed_uri" }
         if (uri.host.isNullOrBlank()) return "missing_server"
         if (uri.port > 65535 || uri.port == 0) return "invalid_port"
@@ -182,6 +193,7 @@ class SubscriptionParser @Inject constructor(
     private fun classifyJsonRejection(obj: JsonObject): String {
         return try {
             val type = obj["type"]?.jsonPrimitive?.contentOrNull
+            if (SingBoxOutboundMapper.supports(type)) return SingBoxOutboundMapper.classifyRejection(obj)
             if (!type.isNullOrBlank()) {
                 if (!type.equals("vless", ignoreCase = true)) return "unsupported_protocol"
                 if (obj["server"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) return "missing_server"
@@ -624,7 +636,7 @@ class SubscriptionParser @Inject constructor(
                 }?.eachCount() ?: mapOf("single_object" to candidateCount)
                 else -> emptyMap()
             }
-            logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size} schemaKinds=$schemaKinds supportedSchema=sing-box_outbound_or_legacy_xray_vless")
+            logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size} schemaKinds=$schemaKinds supportedSchema=sing-box_outbound_or_legacy_xray")
             configs
         } catch (e: Exception) {
             logCollector.warn(TAG, "JSON parse failed: ${e.javaClass.simpleName}")
@@ -674,8 +686,13 @@ class SubscriptionParser @Inject constructor(
 
     private fun extractFromJsonObject(obj: JsonObject, providerTag: String): ParsedConfig? {
         return try {
+            // Other sing-box outbound types (vmess/trojan/ss/hysteria2/tuic/socks).
+            val outboundType = obj["type"]?.jsonPrimitive?.contentOrNull
+            if (SingBoxOutboundMapper.supports(outboundType)) {
+                return SingBoxOutboundMapper.fromOutbound(obj, providerTag)
+            }
             // sing-box outbound schema: { type, server, server_port, uuid, tls, transport }
-            if (obj["type"]?.jsonPrimitive?.content == "vless") {
+            if (outboundType == "vless") {
                 val address = obj["server"]?.jsonPrimitive?.content ?: return null
                 val port = obj["server_port"]?.jsonPrimitive?.int ?: return null
                 val uuid = obj["uuid"]?.jsonPrimitive?.content ?: return null
@@ -819,85 +836,21 @@ class SubscriptionParser @Inject constructor(
             val yaml = Yaml(SafeConstructor(LoaderOptions()))
             val root = yaml.load<Map<String, Any>>(yamlText) ?: return emptyList()
             val proxies = root["proxies"] as? List<Map<String, Any>> ?: return emptyList()
-            buildList {
-                proxies.forEach { proxy ->
-                    val parsed = try {
-                        val type = proxy["type"] as? String
-                        if (!type.equals("vless", ignoreCase = true)) {
-                            null
-                        } else {
-                            val name = proxy["name"] as? String ?: "unknown"
-                            val server = proxy["server"] as? String
-                            val port = (proxy["port"] as? Number)?.toInt() ?: 443
-                            val uuid = proxy["uuid"] as? String
-                            if (server.isNullOrBlank() || uuid.isNullOrBlank()) null
-                            else {
-                                val network = proxy["network"] as? String ?: "tcp"
-                                val tls = proxy["tls"] as? Boolean ?: false
-                                val reality = proxy["reality-opts"] as? Map<String, Any>
-                                val xhttpOptions = proxy["xhttp-opts"] as? Map<String, Any>
-                                val xhttpHeaders = xhttpOptions?.get("headers") as? Map<String, Any>
-                                val wsHeaders = (proxy["ws-opts"] as? Map<String, Any>)?.get("headers") as? Map<String, Any>
-                                val security = when {
-                                    reality != null -> "reality"
-                                    tls -> "tls"
-                                    else -> "none"
-                                }
-                                ParsedConfig(
-                                    uuid = uuid, address = server, port = port,
-                                    transport = network, security = security,
-                                    sni = proxy["servername"] as? String ?: proxy["sni"] as? String,
-                                    path = if (network.equals("grpc", ignoreCase = true)) {
-                                        val grpcOptions = proxy["grpc-opts"] as? Map<String, Any>
-                                        grpcOptions?.get("grpc-service-name") as? String
-                                            ?: grpcOptions?.get("service-name") as? String
-                                    } else if (network.equals("xhttp", ignoreCase = true)) {
-                                        xhttpOptions?.get("path") as? String
-                                    } else {
-                                        (proxy["ws-opts"] as? Map<String, Any>)?.get("path") as? String
-                                    },
-                                    host = if (network.equals("xhttp", ignoreCase = true)) {
-                                        xhttpOptions?.get("host") as? String
-                                            ?: xhttpHeaders?.get("Host") as? String
-                                            ?: xhttpHeaders?.get("host") as? String
-                                    } else {
-                                        wsHeaders?.get("Host") as? String ?: wsHeaders?.get("host") as? String
-                                    },
-                                    mode = xhttpOptions?.get("mode") as? String,
-                                    // Preserve the full Clash/Mihomo XHTTP options object.
-                                    // SingboxConfigBuilder filters and normalizes supported keys.
-                                    extra = if (network.equals("xhttp", ignoreCase = true)) {
-                                        xhttpOptions?.let { JSONObject(it).toString() }
-                                    } else null,
-                                    fingerprint = proxy["client-fingerprint"] as? String,
-                                    publicKey = reality?.get("public-key") as? String,
-                                    shortId = reality?.get("short-id") as? String,
-                                    flow = proxy["flow"] as? String,
-                                    name = name, providerTag = providerTag
-                                ).takeIf { it.isValid() }
-                            }
-                        }
-                    } catch (_: Exception) { null }
-                    if (parsed != null) add(parsed)
-                    else rejectionCounts?.increment(classifyClashRejection(proxy))
-                }
+            val parsed = proxies.mapNotNull { proxy ->
+                val config = runCatching { ClashProxyMapper.toParsedConfig(proxy, providerTag) }
+                    .getOrNull()
+                if (config == null) rejectionCounts?.increment(ClashProxyMapper.classifyRejection(proxy))
+                config
             }
+            val typeCounts = proxies.groupingBy { (it["type"] as? String)?.lowercase() ?: "unknown" }.eachCount()
+            logCollector.info(
+                TAG,
+                "Clash YAML parse summary: candidates=${proxies.size} parsed=${parsed.size} skipped=${proxies.size - parsed.size} types=$typeCounts"
+            )
+            parsed
         } catch (e: Exception) {
             logCollector.warn(TAG, "Clash YAML parse failed: " + e.javaClass.simpleName)
             emptyList()
         }
-    }
-
-    private fun classifyClashRejection(proxy: Map<String, Any>): String {
-        if (!(proxy["type"] as? String).equals("vless", ignoreCase = true)) return "unsupported_protocol"
-        if ((proxy["server"] as? String).isNullOrBlank()) return "missing_server"
-        if ((proxy["uuid"] as? String).isNullOrBlank()) return "missing_credentials"
-        val port = (proxy["port"] as? Number)?.toInt() ?: 443
-        if (port !in 1..65535) return "invalid_port"
-        if (proxy["reality-opts"] is Map<*, *>) {
-            val reality = proxy["reality-opts"] as? Map<*, *>
-            if ((reality?.get("public-key") as? String).isNullOrBlank()) return "missing_reality_public_key"
-        }
-        return "invalid_or_malformed_entry"
     }
 }
