@@ -12,6 +12,7 @@ import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -55,6 +56,14 @@ class LogCollector @Inject constructor() {
     private val _filteredLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val filteredLogs: StateFlow<List<LogEntry>> = _filteredLogs.asStateFlow()
 
+    private val _stats = MutableStateFlow(LogStats())
+    val stats: StateFlow<LogStats> = _stats.asStateFlow()
+
+    /** Entries evicted from the fixed-size ring buffer because it was full. */
+    private val droppedEntries = AtomicLong(0L)
+    /** Bytes never persisted because the pending write buffer overflowed. */
+    private val droppedChars = AtomicLong(0L)
+
     @Volatile private var currentFilterLevel = LogLevel.TRACE
     @Volatile private var currentFilterTag: String? = null
     @Volatile private var currentSearchQuery: String? = null
@@ -85,7 +94,10 @@ class LogCollector @Inject constructor() {
             stackTrace = entry.stackTrace?.let(SensitiveMasker::mask)
         )
         synchronized(bufferLock) {
-            if (buffer.size >= MAX_ENTRIES) buffer.pollFirst()
+            if (buffer.size >= MAX_ENTRIES) {
+                buffer.pollFirst()
+                droppedEntries.incrementAndGet()
+            }
             buffer.addLast(safeEntry)
             publishDirty = true
         }
@@ -94,6 +106,8 @@ class LogCollector @Inject constructor() {
         synchronized(pendingLock) {
             if (pendingText.length + line.length + 1 <= MAX_PENDING_CHARS) {
                 pendingText.append(line).append('\n')
+            } else {
+                droppedChars.addAndGet(line.length.toLong() + 1L)
             }
         }
     }
@@ -135,7 +149,21 @@ class LogCollector @Inject constructor() {
         publishDirty = false
         val entries = snapshot()
         _logs.value = entries
+        publishStats(entries)
         applyFilters(entries)
+    }
+
+    private fun publishStats(entries: List<LogEntry>) {
+        val byLevel = HashMap<LogLevel, Int>(LogLevel.entries.size)
+        for (entry in entries) {
+            byLevel[entry.level] = (byLevel[entry.level] ?: 0) + 1
+        }
+        _stats.value = LogStats(
+            total = entries.size,
+            byLevel = byLevel,
+            droppedEntries = droppedEntries.get(),
+            droppedChars = droppedChars.get()
+        )
     }
 
     private fun safePublish() {
@@ -187,7 +215,9 @@ class LogCollector @Inject constructor() {
         _filteredLogs.value = entries.filter { entry ->
             entry.level.ordinal >= level.ordinal &&
                 (tag == null || entry.tag == tag) &&
-                (query.isNullOrBlank() || entry.message.contains(query, ignoreCase = true))
+                (query.isNullOrBlank() ||
+                    entry.message.contains(query, ignoreCase = true) ||
+                    entry.tag.contains(query, ignoreCase = true))
         }
     }
 
@@ -203,8 +233,11 @@ class LogCollector @Inject constructor() {
         synchronized(pendingLock) {
             pendingText.setLength(0)
         }
+        droppedEntries.set(0L)
+        droppedChars.set(0L)
         _logs.value = emptyList()
         _filteredLogs.value = emptyList()
+        _stats.value = LogStats()
 
         val logDirectory = appContext?.let { File(it.filesDir, "logs") }
         synchronized(fileLock) {

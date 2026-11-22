@@ -17,6 +17,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.logging.LogEntry
 import com.vpnproxy.logging.LogExporter
 import com.vpnproxy.logging.LogLevel
+import com.vpnproxy.logging.LogStats
 import com.vpnproxy.logging.SensitiveMasker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -48,6 +49,10 @@ class DebugViewModel @Inject constructor(
 ) : ViewModel() {
 
     val filteredLogs: StateFlow<List<LogEntry>> = logCollector.filteredLogs
+    val stats: StateFlow<LogStats> = logCollector.stats
+
+    private val _journalInfo = MutableStateFlow<String?>(null)
+    val journalInfo: StateFlow<String?> = _journalInfo.asStateFlow()
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
@@ -72,6 +77,7 @@ class DebugViewModel @Inject constructor(
 
     init {
         _lastCrash.value = CrashHandler.readLastCrash(context)
+        refreshJournalInfo()
         viewModelScope.launch {
             while (isActive) {
                 refreshBattery()
@@ -174,20 +180,29 @@ class DebugViewModel @Inject constructor(
         viewModelScope.launch {
             _message.value = runCatching { logExporter.checkExport() }
                 .getOrElse { "Проверка экспорта завершилась ошибкой: ${it.javaClass.simpleName}: ${it.message}" }
+            refreshJournalInfo()
         }
+    }
+
+    fun refreshJournalInfo() {
+        _journalInfo.value = runCatching { logExporter.journalFileInfo() }.getOrNull()
     }
 
     fun export() {
         viewModelScope.launch {
             val uri = logExporter.exportToDownloads()
             _message.value = if (uri != null) {
-                "Сохранено в Downloads/"
+                "Журнал сохранён в Downloads/"
             } else {
                 "Не удалось сохранить журнал"
             }
+            refreshJournalInfo()
         }
     }
 
-    fun clear() { logCollector.clear() }
+    fun clear() {
+        logCollector.clear()
+        refreshJournalInfo()
+    }
     fun clearMessage() { _message.value = null }
 }
