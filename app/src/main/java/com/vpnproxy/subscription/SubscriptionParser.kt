@@ -21,7 +21,20 @@ import javax.inject.Singleton
 class SubscriptionParser @Inject constructor(
     private val logCollector: LogCollector
 ) {
-    companion object { private const val TAG = "SubParser" }
+    companion object {
+        private const val TAG = "SubParser"
+
+        /** URI schemes this parser can turn into a [ParsedConfig]. */
+        val SUPPORTED_URI_SCHEMES: Set<String> = setOf(
+            "vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5"
+        )
+
+        /** True when [text] is a single config link this parser understands. */
+        fun looksLikeConfigUri(text: String): Boolean {
+            val scheme = text.trim().substringBefore("://", missingDelimiterValue = "").lowercase()
+            return scheme.isNotEmpty() && scheme in SUPPORTED_URI_SCHEMES
+        }
+    }
 
     data class ParsedConfig(
         val uuid: String,
@@ -162,7 +175,7 @@ class SubscriptionParser @Inject constructor(
     }
 
     private fun classifyUriRejection(line: String, scheme: String): String {
-        if (scheme !in setOf("vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5")) return "unsupported_scheme"
+        if (scheme !in SUPPORTED_URI_SCHEMES) return "unsupported_scheme"
         val uri = runCatching { URI(line.substringBefore('#')) }.getOrElse { return "malformed_uri" }
         if (uri.host.isNullOrBlank()) return "missing_server"
         if (uri.port > 65535 || uri.port == 0) return "invalid_port"

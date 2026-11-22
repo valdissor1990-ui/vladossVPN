@@ -245,4 +245,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.json:json:20260719")
     implementation("androidx.core:core-ktx:1.16.0")
+    // QR generation / decoding for subscription import and share. Pure Java, no Android deps,
+    // so encode and decode round-trips are unit tested on the JVM.
+    implementation("com.google.zxing:core:3.5.4")
 }

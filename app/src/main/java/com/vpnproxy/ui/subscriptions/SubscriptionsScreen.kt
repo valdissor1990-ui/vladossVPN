@@ -1,5 +1,8 @@
 package com.vpnproxy.ui.subscriptions
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,13 +12,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vpnproxy.core.qr.QrCodec
+import com.vpnproxy.subscription.SubscriptionParser
+import com.vpnproxy.ui.qr.QrPicker
 import com.vpnproxy.ui.theme.OnDark
 import com.vpnproxy.ui.theme.WarningYellow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,7 +57,33 @@ fun SubscriptionsScreen(
 
     var dismissCacheBanner by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var qrPayload by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // QR import reads a picked image, so no camera permission and no extra runtime prompt.
+    val qrImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val decoded = withContext(Dispatchers.IO) {
+                runCatching { QrPicker.decodeImage(context, uri) }.getOrNull()
+            }
+            when {
+                decoded.isNullOrBlank() ->
+                    snackbarHostState.showSnackbar("QR-код не распознан. Попробуйте более чёткое фото.")
+                decoded.startsWith("https://") ->
+                    viewModel.addSubscription(decoded, "", "")
+                decoded.startsWith("http://") ->
+                    snackbarHostState.showSnackbar("Незащищённая HTTP-ссылка не поддерживается")
+                decoded.trimStart().startsWith("{") || decoded.trimStart().startsWith("[") ||
+                    SubscriptionParser.looksLikeConfigUri(decoded) ->
+                    viewModel.addSubscription(decoded, "", "")
+                else ->
+                    snackbarHostState.showSnackbar("В QR-коде нет ссылки подписки или профиля")
+            }
+        }
+    }
 
     LaunchedEffect(message) {
         message?.let {
@@ -70,6 +107,9 @@ fun SubscriptionsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { qrImagePicker.launch("image/*") }) {
+                        Icon(Icons.Default.QrCodeScanner, "Импорт из QR-кода")
+                    }
                     IconButton(onClick = { onNavigateToServers() }) {
                         Icon(Icons.Default.List, "Все серверы")
                     }
@@ -257,7 +297,7 @@ fun SubscriptionsScreen(
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         Text(
-                            "Нет подписок.\nНажмите «Добавить», чтобы ввести URL провайдера.",
+                            "Нет подписок.\nНажмите «Добавить», чтобы ввести URL провайдера, или импортируйте QR-код (иконка вверху).",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
@@ -277,6 +317,9 @@ fun SubscriptionsScreen(
                     Column(modifier = Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(text = sub.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { qrPayload = sub.url }) {
+                                Icon(Icons.Default.QrCode, "Показать QR-код")
+                            }
                             IconButton(onClick = { viewModel.removeSubscription(sub.id) }) {
                                 Icon(Icons.Default.Delete, "Удалить")
                             }
@@ -300,7 +343,7 @@ fun SubscriptionsScreen(
             title = { Text("Добавить подписку") },
             text = {
                 Column {
-                    OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("URL подписки") }, singleLine = false, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("URL подписки или ссылка на сервер") }, singleLine = false, maxLines = 3, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Название (опционально)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
@@ -311,6 +354,44 @@ fun SubscriptionsScreen(
                 Button(onClick = { viewModel.addSubscription(url.trim(), name.trim(), tag.trim()); showAddDialog = false }, enabled = url.isNotBlank()) { Text("Добавить") }
             },
             dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Отмена") } }
+        )
+    }
+
+    qrPayload?.let { payload ->
+        val qrImage = remember(payload) { QrCodec.encode(payload) }
+        AlertDialog(
+            onDismissRequest = { qrPayload = null },
+            title = { Text("QR-код подписки") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (qrImage == null) {
+                        Text(
+                            "Ссылка слишком длинная для QR-кода. Скопируйте её вручную.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        val bitmap = remember(qrImage) { QrPicker.toBitmap(qrImage).asImageBitmap() }
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = "QR-код подписки",
+                            modifier = Modifier.size(240.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = payload,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 4
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { qrPayload = null }) { Text("Готово") }
+            }
         )
     }
 }

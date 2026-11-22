@@ -73,7 +73,7 @@
 | 3.1 | Home UX (кнопка, сервер, latency, статус) | pending |
 | 3.2 | Онбординг (sub / QR / буфер → Connect) | pending |
 | 3.3 | Multi-subscription UI | pending |
-| 3.4 | QR import / share | pending |
+| 3.4 | QR import / share | done (импорт из QR-картинки, показ QR подписки; вставка одиночной конфиг-ссылки) |
 | 3.5 | Split tunneling UI | pending |
 | 3.6 | Always-on + network reconnect | pending |
 | 3.7 | QS Tile / виджет | done (QS-плитка, PR #288) |
