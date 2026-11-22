@@ -35,8 +35,11 @@ fun DebugScreen(
     val diagnosticOptions by viewModel.diagnosticOptions.collectAsStateWithLifecycle()
     val libboxTail by viewModel.libboxTail.collectAsStateWithLifecycle()
     val probeResult by viewModel.probeResult.collectAsStateWithLifecycle()
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val journalInfo by viewModel.journalInfo.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf<LogLevel?>(null) }
+    var levelMenuExpanded by remember { mutableStateOf(false) }
     var showDiagnosticControls by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -92,6 +95,41 @@ fun DebugScreen(
                     Text("AutoDetect=${diagnosticOptions.autoDetectInterface}", fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                     Text("Probe=${diagnosticOptions.passiveProbeEnabled} Freeze=${diagnosticOptions.freezeAutoSwitcherAfterConnected}", fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
+            }
+
+            // Primary journal actions, pinned so they are always reachable: save a file and copy to clipboard.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = { viewModel.export() }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Скачать")
+                }
+                Button(onClick = { viewModel.copyAll() }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Скопировать")
+                }
+            }
+
+            Text(
+                text = "Всего: ${stats.total} · WARN: ${stats.count(LogLevel.WARN)} · ERROR: ${stats.count(LogLevel.ERROR)} · FATAL: ${stats.count(LogLevel.FATAL)} · отброшено: ${stats.droppedEntries}",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+            journalInfo?.let { info ->
+                Text(
+                    text = info,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(horizontal = 12.dp)
+                )
             }
 
             LazyColumn(
@@ -252,19 +290,31 @@ fun DebugScreen(
                                 viewModel.setSearch(it)
                             },
                             modifier = Modifier.weight(1f),
-                            placeholder = { Text("Поиск…") },
+                            placeholder = { Text("Поиск по тегу или тексту") },
                             leadingIcon = { Icon(Icons.Default.Search, null) },
                             singleLine = true
                         )
                         Spacer(Modifier.width(8.dp))
-                        FilterChip(
-                            selected = selectedLevel != null,
-                            onClick = {
-                                selectedLevel = if (selectedLevel == null) LogLevel.WARN else null
-                                viewModel.setLevelFilter(selectedLevel)
-                            },
-                            label = { Text(selectedLevel?.name ?: "ALL") }
-                        )
+                        Box {
+                            OutlinedButton(onClick = { levelMenuExpanded = true }) {
+                                Text(selectedLevel?.name ?: "ALL")
+                            }
+                            DropdownMenu(
+                                expanded = levelMenuExpanded,
+                                onDismissRequest = { levelMenuExpanded = false }
+                            ) {
+                                (listOf<LogLevel?>(null) + LogLevel.entries.toList()).forEach { level ->
+                                    DropdownMenuItem(
+                                        text = { Text(level?.name ?: "ALL") },
+                                        onClick = {
+                                            selectedLevel = level
+                                            viewModel.setLevelFilter(level)
+                                            levelMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -344,7 +394,7 @@ private fun LogEntryItem(entry: com.vpnproxy.logging.LogEntry) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = entry.level.name,
                     color = color,
@@ -359,6 +409,13 @@ private fun LogEntryItem(entry: com.vpnproxy.logging.LogEntry) {
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
                 )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = entry.timeString(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp
+                )
             }
             Text(
                 text = entry.message,
@@ -366,6 +423,14 @@ private fun LogEntryItem(entry: com.vpnproxy.logging.LogEntry) {
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface
             )
+            entry.stackTrace?.let { stack ->
+                Text(
+                    text = stack,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
     }
 }

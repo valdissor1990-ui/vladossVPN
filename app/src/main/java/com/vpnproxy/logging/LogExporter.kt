@@ -154,7 +154,19 @@ class LogExporter @Inject constructor(
             val nativeCallbackLines = sources.nativeText.lineSequence().count { it.contains("[LIBBOX]", ignoreCase = true) }
             appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} native_callback_lines=$nativeCallbackLines app_lines=${sources.appLines}")
             appendLine("native log file=${File(context.filesDir, "logs/libbox.log").absolutePath}; rotated_file=${File(context.filesDir, "logs/libbox.log.1").isFile}")
+            appendLine("log_stats app_${logCollector.stats.value.summary()}")
+            appendLine("journal_files ${journalFileInfo()}")
         }
+    }
+
+    /** Human-readable sizes of the persisted journal files, for the header and the UI. */
+    fun journalFileInfo(): String {
+        val dir = File(context.filesDir, "logs")
+        val files = listOf("app.log", "app.log.1", "libbox.log", "libbox.log.1").map { name ->
+            val file = File(dir, name)
+            "$name=${if (file.isFile) "${file.length()}B" else "absent"}"
+        }
+        return files.joinToString(" ")
     }
 
     suspend fun exportToDownloads(): Uri? = withContext(Dispatchers.IO) {

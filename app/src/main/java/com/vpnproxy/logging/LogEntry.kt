@@ -18,10 +18,22 @@ data class LogEntry(
 ) {
     companion object {
         private val nextId = AtomicLong(0L)
+
+        // SimpleDateFormat is not thread-safe and is created for every rendered line;
+        // one instance per thread avoids both the allocation churn and the races.
+        private val isoFormat = ThreadLocal.withInitial {
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+        }
+        private val timeFormat = ThreadLocal.withInitial {
+            SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        }
     }
 
+    /** Short wall-clock time for the live list; the ISO form is used in exports. */
+    fun timeString(): String = timeFormat.get()!!.format(Date(timestamp))
+
     fun toFormattedString(maskSensitive: Boolean = true): String {
-        val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
+        val iso = isoFormat.get()!!.format(Date(timestamp))
         val sb = StringBuilder("$iso | ${level.name} | $tag | $message")
         server?.let { sb.append(" | server=$it") }
         rttMs?.let { sb.append(" | rtt=${it}ms") }
