@@ -55,7 +55,7 @@
 | 2.1 | Структурированный результат probe | P0 | pending |
 | 2.2 | Fallback per-endpoint (без global trafficFailures) | P0 | pending |
 | 2.3 | Понятные fatal-сообщения | P0 | pending |
-| 2.4 | Scanner: TCP = sort hint | P0 | pending |
+| 2.4 | Scanner: TCP = sort hint | P0 | done (`tcpHintMs`: прямой TCP-handshake только для профилей с провалившейся прокси-пробой, подпись «TCP ~N мс») |
 | 2.5 | HealthChecker только через 10809 при VPN | P0 | pending |
 | 2.6 | Actor: timeout/fatal только через Channel | P0 | pending |
 | 2.7 | Persist «реально работавших» нод | P0 | pending |
@@ -177,3 +177,4 @@
 | 2026-11-21 | Обновлён тулчейн и зависимости (AGP 8.13.2, Gradle 8.14.8, Kotlin 2.3.21, Compose BOM 2026.06.01) и ядро до 1.14.4-lx.35; фаза 1.1/1.2 закрыты. См. `docs/DEPENDENCY_UPGRADE_2026-11.md` |
 | 2026-11-22 | Гигиена и производительность: горячий путь логирования переведён на O(1) append + батч-запись файла, release-сборка больше не пишет `log.level=debug`, один OkHttp-клиент на все пробы, backoff фонового скана, удалён мёртвый `core/protocols/` и `NeonConnectButton`. Полный импорт Clash/JSON для vmess/trojan/ss/socks5/hysteria2/tuic. См. `docs/PROTOCOLS_WIRING.md` |
 | 2026-11-22 | Маршрутизация: локальная сеть больше не уходит в туннель (`ip_is_private → direct`), пресеты «всё через VPN» / «обход локальной сети» (по умолчанию) / «обход РФ». Правила РФ — локальные `.srs` (`geosite-category-ru`, `geoip-ru`), скачиваются только при выборе пресета; при их отсутствии пресет деградирует до обхода локальной сети. QS-плитка добавлена (PR #288). |
+| 2026-11-22 | Пробы: для серверов с провалившейся прокси-пробой измеряется прямой TCP-handshake (`TcpConnectProbe`) и список показывает «TCP ~N мс» вместо «н/д»; подсказка не влияет на `latencyMs`, `successRate` и score, только на порядок внутри недоступной группы. |
