@@ -263,22 +263,28 @@ class SingBoxCore(
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation current=${lifecycleGeneration.current()}")
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
-        logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation")
+        // Wait only for the ports this config actually binds. A probe core uses random loopback
+        // ports and must not be blocked by an unrelated listener on the fixed proxy port.
+        val targetPorts = SingboxConfigBuilder.inboundPorts(configJson)
+        if (targetPorts.isEmpty()) {
+            logCollector?.warn(TAG, "Core lifecycle: no inbound listen_port parsed; skipping port gate generation=$generation")
+        }
+        logCollector?.info(TAG, "Core lifecycle: stop phase begin generation=$generation ports=$targetPorts")
         // Close once, then perform one authoritative wait below. Previously stopSuspended()
         // waited 12s and startSuspended() immediately waited another 12s for the same port,
         // doubling every failed attempt before any retry could happen.
         stopSuspended(waitForPort = false)
 
-        var portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+        var portFreed = waitForPortsFree(targetPorts, PORT_RELEASE_TIMEOUT_MS)
         if (!portFreed) {
-            logCollector?.warn(TAG, "Lifecycle generation=$generation port ${SingboxConfigBuilder.PROXY_PORT} still occupied; retrying close on retained CommandServer handle")
+            logCollector?.warn(TAG, "Lifecycle generation=$generation ports $targetPorts still occupied; retrying close on retained CommandServer handle")
             stopSuspended(waitForPort = false)
             // Brief extra settle time after close retry, then perform one bounded wait.
             delay(400)
-            portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
+            portFreed = waitForPortsFree(targetPorts, PORT_RELEASE_TIMEOUT_MS)
         }
         if (!portFreed) {
-            val message = "Port ${SingboxConfigBuilder.PROXY_PORT} still in use after retry; generation=$generation"
+            val message = "Ports $targetPorts still in use after retry; generation=$generation"
             logCollector?.error(TAG, message)
             throw IllegalStateException(message)
         }
@@ -288,7 +294,7 @@ class SingBoxCore(
             logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation after port wait; current=${lifecycleGeneration.current()}")
             throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
         }
-        logCollector?.info(TAG, "Core lifecycle: port ${SingboxConfigBuilder.PROXY_PORT} free=true")
+        logCollector?.info(TAG, "Core lifecycle: ports $targetPorts free=true")
 
         val sinceStop = System.currentTimeMillis() - lastStopAtMs
         if (sinceStop < MIN_STOP_START_COOLDOWN_MS) {
@@ -312,11 +318,11 @@ class SingBoxCore(
                 logCollector?.warn(TAG, "Lifecycle skip stale start generation=$generation immediately before native start; current=${lifecycleGeneration.current()}")
                 throw kotlinx.coroutines.CancellationException("Stale lifecycle start generation=$generation")
             }
-            val portFreeBeforeStart = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, 2_000L)
-            if (!portFreeBeforeStart) {
-                throw IllegalStateException("Port ${SingboxConfigBuilder.PROXY_PORT} not free before start — generation=$generation")
+            val portsFreeBeforeStart = waitForPortsFree(targetPorts, 2_000L)
+            if (!portsFreeBeforeStart) {
+                throw IllegalStateException("Ports $targetPorts not free before start — generation=$generation")
             }
-            logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} confirmed free, starting CommandServer")
+            logCollector?.info(TAG, "Ports $targetPorts confirmed free, starting CommandServer")
             val createdServer = CommandServer(handler, platform)
             server = createdServer
             val effectiveConfig = withDebugNativeLogOutput(configJson)
@@ -357,6 +363,7 @@ class SingBoxCore(
         // owns its listener after the first close request, a retry must be able to reach
         // the same CommandServer instead of logging "no active CommandServer".
         val server = currentServer
+        val portsInUse = activeConfig?.let(SingboxConfigBuilder::inboundPorts) ?: emptySet()
         activeConfig = null
         logCollector?.info(TAG, "Core lifecycle: closeService requested")
         if (server != null) {
@@ -371,12 +378,15 @@ class SingBoxCore(
         runCatching { platform.closeTun() }
             .onFailure { logCollector?.warn(TAG, "closeTun failed: ${it.message}") }
         if (waitForPort) {
-            val portFreed = waitForPortFree("127.0.0.1", SingboxConfigBuilder.PROXY_PORT, PORT_RELEASE_TIMEOUT_MS)
-            logCollector?.info(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} freed=${portFreed} after stop")
+            // Wait for the ports the stopped config owned; fall back to the proxy port only when
+            // a core handle still exists but its config ports are unknown.
+            val ports = portsInUse.ifEmpty { if (server != null) setOf(SingboxConfigBuilder.PROXY_PORT) else emptySet() }
+            val portFreed = waitForPortsFree(ports, PORT_RELEASE_TIMEOUT_MS)
+            logCollector?.info(TAG, "Ports $ports freed=$portFreed after stop")
             if (portFreed) {
                 if (currentServer === server) currentServer = null
             } else {
-                logCollector?.warn(TAG, "Port ${SingboxConfigBuilder.PROXY_PORT} still occupied after ${PORT_RELEASE_TIMEOUT_MS}ms; retaining CommandServer handle for retry")
+                logCollector?.warn(TAG, "Ports $ports still occupied after ${PORT_RELEASE_TIMEOUT_MS}ms; retaining CommandServer handle for retry")
             }
         }
         lastStopAtMs = System.currentTimeMillis()
@@ -384,27 +394,32 @@ class SingBoxCore(
     }
 
     /**
-     * Tests whether a TCP listener is still accepting connections on the proxy port.
-     * A refused/failed connect means no listener is reachable; TIME_WAIT is not directly observable
-     * by this probe, so bind failures remain guarded by the start error path.
+     * Tests whether a TCP listener is still accepting connections on each of the given ports.
+     * Returns true as soon as every port is free (or immediately for an empty set). A refused or
+     * failed connect means no listener is reachable; TIME_WAIT is not directly observable by this
+     * probe, so bind failures remain guarded by the start error path.
      */
-    private suspend fun waitForPortFree(host: String, port: Int, timeoutMs: Long): Boolean {
+    private suspend fun waitForPortsFree(ports: Set<Int>, timeoutMs: Long): Boolean {
+        if (ports.isEmpty()) return true
         val startedAtMs = System.currentTimeMillis()
         val deadline = startedAtMs + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val occupied = runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, port), 100)
-                    true
-                }
-            }.getOrDefault(false)
-            if (!occupied) {
-                logCollector?.debug(TAG, "Port $port wait completed free=true elapsedMs=${System.currentTimeMillis() - startedAtMs}")
+            val occupied = ports.filter { port -> isPortOccupied("127.0.0.1", port) }
+            if (occupied.isEmpty()) {
+                logCollector?.debug(TAG, "Ports $ports wait completed free=true elapsedMs=${System.currentTimeMillis() - startedAtMs}")
                 return true
             }
             delay(PORT_POLL_INTERVAL_MS)
         }
-        logCollector?.warn(TAG, "Port $port wait completed free=false elapsedMs=${System.currentTimeMillis() - startedAtMs} timeoutMs=$timeoutMs")
+        logCollector?.warn(TAG, "Ports $ports wait completed free=false elapsedMs=${System.currentTimeMillis() - startedAtMs} timeoutMs=$timeoutMs")
         return false
     }
+
+    private fun isPortOccupied(host: String, port: Int): Boolean =
+        runCatching {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 100)
+                true
+            }
+        }.getOrDefault(false)
 }
