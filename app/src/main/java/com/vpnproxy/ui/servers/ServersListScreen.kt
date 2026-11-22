@@ -260,7 +260,15 @@ fun ServerListContent(
 
     val uniqueItems = remember(filtered) {
         filtered.distinctBy { viewModel.configKey(it.config) }
-            .sortedWith(compareBy<ScoredServer>({ if (it.latencyMs == Long.MAX_VALUE) 1 else 0 }, { it.latencyMs }))
+            .sortedWith(
+                compareBy<ScoredServer>(
+                    { if (it.latencyMs == Long.MAX_VALUE) 1 else 0 },
+                    { it.latencyMs },
+                    // Among unreachable profiles, the ones whose endpoint answered a direct TCP
+                    // handshake come first: they are the plausible "maybe blocked" candidates.
+                    { it.tcpHintMs ?: Long.MAX_VALUE }
+                )
+            )
     }
 
     Column(
@@ -398,7 +406,11 @@ fun ServerListContent(
                     items = uniqueItems,
                     key = { viewModel.configKey(it.config) }
                 ) { scoredServer ->
-                    val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString() ?: "н/д"
+                    // Real proxied latency wins. When only the direct TCP handshake answered,
+                    // label it as a hint instead of pretending the profile works.
+                    val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString()
+                        ?: scoredServer.tcpHintMs?.let { "TCP ~$it" }
+                        ?: "н/д"
                     val scoreValue = scoreLabel.toDoubleOrNull()
                     val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant
                     GlassServerCard(

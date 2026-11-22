@@ -1,6 +1,7 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
+import com.vpnproxy.core.ping.TcpConnectProbe
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingboxProxyClient
@@ -180,7 +181,12 @@ class DeepProbeEngine @Inject constructor(
         val latencyMs: Long,
         val success: Boolean,
         val successfulSamples: Int,
-        val evidence: ProbeMeasurementEvidence? = null
+        val evidence: ProbeMeasurementEvidence? = null,
+        /**
+         * Direct TCP handshake time to the endpoint, measured only when the proxied probe failed.
+         * Used as a sorting/labelling hint; never treated as a working proxy.
+         */
+        val tcpHintMs: Long? = null
     )
 
     /**
@@ -266,11 +272,22 @@ class DeepProbeEngine @Inject constructor(
                                             successfulSamples = samples.size
                                         )
                                     )
+                                    // A failed proxied probe still gets a TCP hint, so the list can
+                                    // distinguish "endpoint answers but the proxy path is broken"
+                                    // from "endpoint is unreachable".
+                                    val withHint = if (result.success) result else result.copy(
+                                        tcpHintMs = runInterruptible(Dispatchers.IO) {
+                                            TcpConnectProbe.measure(
+                                                configs[index].address,
+                                                configs[index].port
+                                            )
+                                        }
+                                    )
                                     logCollector.info(
                                         TAG,
-                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${result.success} successfulSamples=${result.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${result.latencyMs}"
+                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${withHint.success} successfulSamples=${withHint.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${withHint.latencyMs} tcpHintMs=${withHint.tcpHintMs ?: "none"}"
                                     )
-                                    result
+                                    withHint
                                 }
                             }
                         }.awaitAll()

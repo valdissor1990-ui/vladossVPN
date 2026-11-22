@@ -441,7 +441,8 @@ class ServerScanner @Inject constructor(
                     latencyMs = Long.MAX_VALUE,
                     speedMbps = 0f,
                     successRate = scanCache().getFloat("server_${key}_success", 0f),
-                    score = 0f
+                    score = 0f,
+                    tcpHintMs = scanCache().getLong("server_${key}_tcp", -1L).takeIf { it > 0L }
                 )
             }
         }
@@ -471,6 +472,7 @@ class ServerScanner @Inject constructor(
                 .putFloat("server_${key}_speed", server.speedMbps)
                 .putFloat("server_${key}_success", server.successRate)
                 .putFloat("server_${key}_score", server.score)
+                .putLong("server_${key}_tcp", server.tcpHintMs ?: -1L)
         }
         editor.putLong("saved_at", System.currentTimeMillis()).apply()
     }
@@ -483,7 +485,8 @@ class ServerScanner @Inject constructor(
             speedMbps = 0f,
             successRate = if (ping.success) 1f else 0f,
             score = if (ping.success) (1.0 / (1.0 + latency / 1000.0)).toFloat() else 0f,
-            evidence = ping.evidence
+            evidence = ping.evidence,
+            tcpHintMs = ping.tcpHintMs
         )
     }
 
