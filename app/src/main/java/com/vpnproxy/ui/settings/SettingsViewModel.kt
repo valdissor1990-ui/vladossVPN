@@ -7,6 +7,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.dualpath.DualPathStore
+import com.vpnproxy.core.singbox.RoutingPreset
+import com.vpnproxy.core.singbox.RoutingSettings
+import com.vpnproxy.core.singbox.RuleSetStore
 import com.vpnproxy.update.UpdateCheckWorker
 import com.vpnproxy.smartconnect.BatteryPolicy
 import com.vpnproxy.subscription.SubscriptionRepository
@@ -82,8 +85,47 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setAutoStart(enabled: Boolean) {
-        val bootPrefsContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+    sealed interface RuleSetState {
+        data object Idle : RuleSetState
+        data object Downloading : RuleSetState
+        data object Ready : RuleSetState
+        data class Failed(val message: String) : RuleSetState
+    }
+
+    private val _routingPreset = MutableStateFlow(RoutingSettings.preset(context))
+    val routingPreset: StateFlow<RoutingPreset> = _routingPreset.asStateFlow()
+
+    private val _ruleSetState = MutableStateFlow<RuleSetState>(
+        if (RuleSetStore.isReady(context)) RuleSetState.Ready else RuleSetState.Idle
+    )
+    val ruleSetState: StateFlow<RuleSetState> = _ruleSetState.asStateFlow()
+
+    /**
+     * Persists the choice and, for [RoutingPreset.BYPASS_RU], fetches the local rule-sets.
+     * A failed download keeps the previous preset on disk from the core's point of view only
+     * after the next connect; the builder degrades to bypass_lan when files are missing.
+     */
+    fun setRoutingPreset(preset: RoutingPreset) {
+        RoutingSettings.setPreset(context, preset)
+        _routingPreset.value = preset
+        if (preset != RoutingPreset.BYPASS_RU) {
+            _ruleSetState.value = if (RuleSetStore.isReady(context)) RuleSetState.Ready else RuleSetState.Idle
+            return
+        }
+        refreshRuleSets(force = false)
+    }
+
+    fun refreshRuleSets(force: Boolean = true) {
+        viewModelScope.launch {
+            _ruleSetState.value = RuleSetState.Downloading
+            _ruleSetState.value = RuleSetStore.ensure(context, force = force).fold(
+                onSuccess = { RuleSetState.Ready },
+                onFailure = { RuleSetState.Failed(it.message ?: "не удалось загрузить правила") }
+            )
+        }
+    }
+
+    fun setAutoStart(enabled: Boolean) {        val bootPrefsContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             context.createDeviceProtectedStorageContext() ?: context
         } else {
             context

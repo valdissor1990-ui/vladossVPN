@@ -76,7 +76,7 @@
 | 3.4 | QR import / share | pending |
 | 3.5 | Split tunneling UI | pending |
 | 3.6 | Always-on + network reconnect | pending |
-| 3.7 | QS Tile / виджет | pending |
+| 3.7 | QS Tile / виджет | done (QS-плитка, PR #288) |
 | 3.8 | Честные статусы нод | pending |
 | 3.9 | Трафик / сессия в UI | pending |
 
@@ -89,7 +89,7 @@
 | # | Фича | Статус |
 |---|------|--------|
 | 4.1 | Правила маршрутизации UI | pending |
-| 4.2 | Пресеты (bypass RU / всё VPN / свои) | pending |
+| 4.2 | Пресеты (bypass RU / всё VPN / свои) | done (пресеты «всё через VPN», «обход локальной сети», «обход РФ»; см. Settings → Маршрутизация) |
 | 4.3 | DNS modes в UI (эталон DoT via proxy) | pending |
 | 4.4 | Remote rule-set (опционально) | pending |
 | 4.5 | Per-app + domain приоритеты | pending |
@@ -176,3 +176,4 @@
 | 2026-10-25 | Первая фиксация плана; старт фазы 0 |
 | 2026-11-21 | Обновлён тулчейн и зависимости (AGP 8.13.2, Gradle 8.14.8, Kotlin 2.3.21, Compose BOM 2026.06.01) и ядро до 1.14.4-lx.35; фаза 1.1/1.2 закрыты. См. `docs/DEPENDENCY_UPGRADE_2026-11.md` |
 | 2026-11-22 | Гигиена и производительность: горячий путь логирования переведён на O(1) append + батч-запись файла, release-сборка больше не пишет `log.level=debug`, один OkHttp-клиент на все пробы, backoff фонового скана, удалён мёртвый `core/protocols/` и `NeonConnectButton`. Полный импорт Clash/JSON для vmess/trojan/ss/socks5/hysteria2/tuic. См. `docs/PROTOCOLS_WIRING.md` |
+| 2026-11-22 | Маршрутизация: локальная сеть больше не уходит в туннель (`ip_is_private → direct`), пресеты «всё через VPN» / «обход локальной сети» (по умолчанию) / «обход РФ». Правила РФ — локальные `.srs` (`geosite-category-ru`, `geoip-ru`), скачиваются только при выборе пресета; при их отсутствии пресет деградирует до обхода локальной сети. QS-плитка добавлена (PR #288). |

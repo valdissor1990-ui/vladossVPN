@@ -18,6 +18,10 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
+    /** Rule-set tags referenced by [RoutingPreset.BYPASS_RU]. */
+    const val RU_GEOIP_RULE_SET = "geoip-ru"
+    const val RU_GEOSITE_RULE_SET = "geosite-ru"
+
     /**
      * Native Sing-box log verbosity. Debug builds keep `debug` for diagnostics; release
      * builds downgrade to `warn` because every native line is also routed through the
@@ -77,7 +81,8 @@ object SingboxConfigBuilder {
         config: ParsedConfig,
         options: DiagnosticOptions = DiagnosticOptions(),
         foreignConfig: ParsedConfig? = null,
-        foreignPackageNames: List<String> = emptyList()
+        foreignPackageNames: List<String> = emptyList(),
+        routing: RoutingRules = RoutingRules()
     ): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", nativeLogLevel)
@@ -129,11 +134,40 @@ object SingboxConfigBuilder {
         })
         put("route", buildJsonObject {
             put("auto_detect_interface", options.autoDetectInterface)
+            if (routing.bypassesRu) {
+                put("rule_set", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "local")
+                        put("tag", RU_GEOIP_RULE_SET)
+                        put("format", "binary")
+                        put("path", requireNotNull(routing.geoipRuPath))
+                    })
+                    add(buildJsonObject {
+                        put("type", "local")
+                        put("tag", RU_GEOSITE_RULE_SET)
+                        put("format", "binary")
+                        put("path", requireNotNull(routing.geositeRuPath))
+                    })
+                })
+            }
             put("rules", buildJsonArray {
                 add(buildJsonObject { put("action", "sniff") })
                 if (options.dnsMode != "system_no_hijack") add(buildJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
+                })
+                // Local network (router, printer, Chromecast) must never traverse the tunnel.
+                if (routing.bypassesLan) add(buildJsonObject {
+                    put("ip_is_private", true)
+                    put("outbound", "direct")
+                })
+                // Russian domains and addresses stay direct when the user picked bypass_ru.
+                if (routing.bypassesRu) add(buildJsonObject {
+                    put("rule_set", buildJsonArray {
+                        add(JsonPrimitive(RU_GEOSITE_RULE_SET))
+                        add(JsonPrimitive(RU_GEOIP_RULE_SET))
+                    })
+                    put("outbound", "direct")
                 })
                 if (foreignConfig != null && foreignPackageNames.isNotEmpty()) {
                     add(buildJsonObject {
