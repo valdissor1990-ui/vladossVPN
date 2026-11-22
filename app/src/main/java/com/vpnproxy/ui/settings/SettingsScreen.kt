@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.BuildConfig
+import com.vpnproxy.core.singbox.RoutingPreset
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
 
@@ -35,6 +36,8 @@ fun SettingsScreen(
     val dualPathEnabled by viewModel.dualPathEnabled.collectAsStateWithLifecycle()
     val dualPathSelectedCount by viewModel.dualPathSelectedCount.collectAsStateWithLifecycle()
     val deviceMetadataConsent by viewModel.deviceMetadataConsent.collectAsStateWithLifecycle()
+    val routingPreset by viewModel.routingPreset.collectAsStateWithLifecycle()
+    val ruleSetState by viewModel.ruleSetState.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val isCheckingUpdates by updateViewModel.isCheckingUpdates.collectAsStateWithLifecycle()
 
@@ -167,6 +170,62 @@ fun SettingsScreen(
                 TextButton(onClick = { showDualPathScreen = true }) { Text("Выбрать") }
             }
 
+            Text("МАРШРУТИЗАЦИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+            RoutingPreset.entries.forEach { preset ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.setRoutingPreset(preset) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = routingPreset == preset,
+                        onClick = { viewModel.setRoutingPreset(preset) }
+                    )
+                    Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+                        Text(routingPresetTitle(preset), style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            routingPresetDescription(preset),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+            if (routingPreset == RoutingPreset.BYPASS_RU) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val (statusText, canRetry) = when (val state = ruleSetState) {
+                        is SettingsViewModel.RuleSetState.Downloading -> "Загрузка правил для РФ…" to false
+                        is SettingsViewModel.RuleSetState.Ready -> "Правила для РФ загружены" to true
+                        is SettingsViewModel.RuleSetState.Failed -> "Ошибка: ${state.message}" to true
+                        SettingsViewModel.RuleSetState.Idle -> "Правила для РФ ещё не загружены" to true
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (ruleSetState is SettingsViewModel.RuleSetState.Downloading) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else if (canRetry) {
+                        TextButton(onClick = { viewModel.refreshRuleSets(force = true) }) {
+                            Text(if (ruleSetState is SettingsViewModel.RuleSetState.Failed) "Повторить" else "Обновить")
+                        }
+                    }
+                }
+                Text(
+                    text = "Пока правила не загружены, VPN работает в режиме «Обход локальной сети».",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
+
             Text("ПОВЕДЕНИЕ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -275,4 +334,16 @@ fun SettingsScreen(
         onInstall = { updateViewModel.install() },
         onDismiss = { updateViewModel.dismiss() }
     )
+}
+
+private fun routingPresetTitle(preset: RoutingPreset): String = when (preset) {
+    RoutingPreset.ALL_VPN -> "Всё через VPN"
+    RoutingPreset.BYPASS_LAN -> "Обход локальной сети"
+    RoutingPreset.BYPASS_RU -> "Обход локальной сети и сайтов РФ"
+}
+
+private fun routingPresetDescription(preset: RoutingPreset): String = when (preset) {
+    RoutingPreset.ALL_VPN -> "Даже роутер и принтер доступны только через туннель"
+    RoutingPreset.BYPASS_LAN -> "Рекомендуется: локальная сеть напрямую, остальное через VPN"
+    RoutingPreset.BYPASS_RU -> "Российские сайты и адреса напрямую, остальное через VPN"
 }
