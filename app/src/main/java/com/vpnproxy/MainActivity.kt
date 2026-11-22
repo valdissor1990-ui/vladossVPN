@@ -2,6 +2,7 @@ package com.vpnproxy
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
@@ -22,6 +23,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
@@ -83,6 +85,29 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Quick Settings tile handoff. `savedInstanceState == null` keeps a rotation or a
+        // process restore from replaying an old connect request.
+        if (savedInstanceState == null) handleAutoConnect(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAutoConnect(intent)
+    }
+
+    /** The QS tile cannot run the scan/preflight flow, so it asks the app to connect. */
+    private fun handleAutoConnect(source: Intent?) {
+        if (source?.getBooleanExtra(EXTRA_AUTO_CONNECT, false) != true) return
+        // Consume the extra so a later recreation of this activity cannot replay it.
+        source.removeExtra(EXTRA_AUTO_CONNECT)
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            logCollector.info(TAG, "Auto-connect ignored: tunnel already running or transitioning")
+            return
+        }
+        logCollector.info(TAG, "Auto-connect requested by Quick Settings tile")
+        homeViewModel.toggleConnection()
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -112,6 +137,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+
+        /** Set by [com.vpnproxy.service.VpnTileService] to request a connect after launch. */
+        const val EXTRA_AUTO_CONNECT = "com.vpnproxy.extra.AUTO_CONNECT"
     }
 }
 
