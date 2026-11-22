@@ -18,6 +18,13 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
+    /**
+     * Native Sing-box log verbosity. Debug builds keep `debug` for diagnostics; release
+     * builds downgrade to `warn` because every native line is also routed through the
+     * log collector, and a debug flood costs real CPU, GC and battery on-device.
+     */
+    private val nativeLogLevel: String = if (BuildConfig.DEBUG) "debug" else "warn"
+
     private fun normalizePath(path: String?): String {
         val value = path?.trim().orEmpty()
         if (value.isEmpty()) return "/"
@@ -45,7 +52,7 @@ object SingboxConfigBuilder {
 
     fun build(config: ParsedConfig): String = buildJsonObject {
         put("log", buildJsonObject {
-            put("level", "debug")
+            put("level", nativeLogLevel)
             put("timestamp", true)
         })
         put("inbounds", buildJsonArray {
@@ -73,7 +80,7 @@ object SingboxConfigBuilder {
         foreignPackageNames: List<String> = emptyList()
     ): String = buildJsonObject {
         put("log", buildJsonObject {
-            put("level", "debug")
+            put("level", nativeLogLevel)
             put("timestamp", true)
         })
         put("dns", buildJsonObject {
@@ -153,7 +160,7 @@ object SingboxConfigBuilder {
         require(ports.distinct().size == ports.size) { "Every Sing-box config must have a distinct inbound port" }
         return buildJsonObject {
             put("log", buildJsonObject {
-                put("level", "debug")
+                put("level", nativeLogLevel)
                 put("timestamp", true)
             })
             put("inbounds", buildJsonArray {

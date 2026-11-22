@@ -8,11 +8,25 @@ import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.ArrayDeque
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** In-memory ring buffer plus continuously persisted app diagnostics. */
+/**
+ * In-memory ring buffer plus continuously persisted app diagnostics.
+ *
+ * Performance contract (this used to be a hot path):
+ * - [add] is O(1) in the number of buffered entries and never touches the disk on the
+ *   caller/JNI thread. The old implementation copied the whole 10k-entry buffer and
+ *   opened+flushed the log file for every single line, which cost real CPU, GC and
+ *   battery while libbox emitted debug lines.
+ * - UI snapshots are coalesced: [logs]/[filteredLogs] update at most once per
+ *   [PUBLISH_INTERVAL_MS] instead of once per line.
+ * - File persistence is batched: one open/flush per [FLUSH_INTERVAL_MS].
+ */
 @Singleton
 class LogCollector @Inject constructor() {
     @Volatile private var appContext: Context? = null
@@ -21,25 +35,45 @@ class LogCollector @Inject constructor() {
     fun initialize(context: Context) {
         appContext = context.applicationContext
     }
+
     companion object {
         private const val TAG = "LogCollector"
         private const val MAX_ENTRIES = 10_000
         private const val MAX_FILE_BYTES = 16L * 1024L * 1024L
+        private const val PUBLISH_INTERVAL_MS = 250L
+        private const val FLUSH_INTERVAL_MS = 750L
+        /** Bound buffered-but-unwritten text during a log flood; excess lines are dropped. */
+        private const val MAX_PENDING_CHARS = 2 * 1024 * 1024
     }
 
-    private val buffer = ConcurrentLinkedDeque<LogEntry>()
     private val bufferLock = Any()
-    /** Serializes append and clear so an in-flight append cannot resurrect deleted history. */
-    private val persistenceLock = Any()
-    private var entryCount = 0
+    private val buffer = ArrayDeque<LogEntry>(1024)
+    @Volatile private var publishDirty = false
+
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
     private val _filteredLogs = MutableStateFlow<List<LogEntry>>(emptyList())
     val filteredLogs: StateFlow<List<LogEntry>> = _filteredLogs.asStateFlow()
-    private var currentFilterLevel = LogLevel.TRACE
-    private var currentFilterTag: String? = null
-    private var currentSearchQuery: String? = null
 
+    @Volatile private var currentFilterLevel = LogLevel.TRACE
+    @Volatile private var currentFilterTag: String? = null
+    @Volatile private var currentSearchQuery: String? = null
+
+    private val pendingLock = Any()
+    private val pendingText = StringBuilder()
+    private val fileLock = Any()
+
+    private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "log-writer").apply {
+            isDaemon = true
+            priority = Thread.MIN_PRIORITY
+        }
+    }
+
+    init {
+        worker.scheduleWithFixedDelay({ safePublish() }, PUBLISH_INTERVAL_MS, PUBLISH_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        worker.scheduleWithFixedDelay({ safeFlush() }, FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS)
+    }
 
     fun add(entry: LogEntry) {
         // Sanitize at ingestion, not only during file export: the in-memory StateFlows
@@ -50,44 +84,17 @@ class LogCollector @Inject constructor() {
             server = entry.server?.let { SensitiveMasker.mask("server=$it").substringAfter("server=") },
             stackTrace = entry.stackTrace?.let(SensitiveMasker::mask)
         )
-        synchronized(persistenceLock) {
-            // ConcurrentLinkedDeque.size() is O(n); maintain a count under a small lock
-            // instead of traversing the whole queue on every log line.
-            val entries = synchronized(bufferLock) {
-                buffer.addLast(safeEntry)
-                entryCount++
-                while (entryCount > MAX_ENTRIES) {
-                    if (buffer.pollFirst() != null) entryCount-- else break
-                }
-                // Reuse one snapshot for both StateFlows.
-                buffer.toList()
-            }
-            _logs.value = entries
-            // The default unfiltered view can reuse the same snapshot without scanning it.
-            applyFilters(entries)
-            persistEntry(safeEntry)
+        synchronized(bufferLock) {
+            if (buffer.size >= MAX_ENTRIES) buffer.pollFirst()
+            buffer.addLast(safeEntry)
+            publishDirty = true
         }
-    }
-
-    /** Append + flush each entry. Failures never escape into a caller/JNI callback. */
-    @Synchronized
-    private fun persistEntry(entry: LogEntry) {
-        try {
-            val baseContext = appContext ?: return
-            val file = File(baseContext.filesDir, "logs/app.log")
-            file.parentFile?.mkdirs()
-            if (file.exists() && file.length() >= MAX_FILE_BYTES) {
-                val previous = File(file.parentFile, "app.log.1")
-                if (previous.exists()) previous.delete()
-                if (!file.renameTo(previous)) Log.w(TAG, "Could not rotate app log ${file.absolutePath}")
+        // Formatting is CPU-only; the disk write happens later on the writer thread.
+        val line = safeEntry.toFormattedString(maskSensitive = true)
+        synchronized(pendingLock) {
+            if (pendingText.length + line.length + 1 <= MAX_PENDING_CHARS) {
+                pendingText.append(line).append('\n')
             }
-            FileOutputStream(File(baseContext.filesDir, "logs/app.log"), true).use { output ->
-                output.write((entry.toFormattedString(maskSensitive = true) + "\n").toByteArray(Charsets.UTF_8))
-                output.flush()
-            }
-        } catch (t: Throwable) {
-            // Do not log this through Timber: that would recurse into this persistence path.
-            Log.w(TAG, "Unable to persist app log entry: ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
@@ -110,43 +117,97 @@ class LogCollector @Inject constructor() {
         currentFilterLevel = level ?: LogLevel.TRACE
         currentFilterTag = tag
         currentSearchQuery = query
-        applyFilters(snapshot())
+        // Rare user action: publish immediately so the debug screen reacts without
+        // waiting for the next coalesced tick.
+        publishPending()
     }
 
-    private fun snapshot(): List<LogEntry> = synchronized(bufferLock) { buffer.toList() }
+    private fun snapshot(): List<LogEntry> = synchronized(bufferLock) { ArrayList(buffer) }
+
+    /**
+     * Publish the current buffer to [logs]/[filteredLogs]. Called from the coalescing
+     * timer and synchronously for explicit user actions (filter changes, clear).
+     */
+    internal fun publishPending() {
+        // Reset the flag before snapshotting: an entry added between these two steps is
+        // already part of the snapshot, and one added later re-sets the flag for the
+        // next tick, so no update can be lost.
+        publishDirty = false
+        val entries = snapshot()
+        _logs.value = entries
+        applyFilters(entries)
+    }
+
+    private fun safePublish() {
+        if (!publishDirty) return
+        publishPending()
+    }
+
+    /** Append the coalesced buffer to disk. Failures never escape into a caller/JNI callback. */
+    private fun safeFlush() {
+        val text = synchronized(pendingLock) {
+            if (pendingText.isEmpty()) return
+            val drained = pendingText.toString()
+            pendingText.setLength(0)
+            drained
+        }
+        val baseContext = appContext ?: return
+        synchronized(fileLock) {
+            try {
+                val directory = File(baseContext.filesDir, "logs")
+                if (!directory.exists() && !directory.mkdirs()) return
+                val file = File(directory, "app.log")
+                if (file.exists() && file.length() >= MAX_FILE_BYTES) {
+                    val previous = File(directory, "app.log.1")
+                    if (previous.exists()) previous.delete()
+                    if (!file.renameTo(previous)) Log.w(TAG, "Could not rotate app log ${file.absolutePath}")
+                }
+                FileOutputStream(file, true).use { output ->
+                    output.write(text.toByteArray(Charsets.UTF_8))
+                    output.flush()
+                }
+            } catch (t: Throwable) {
+                // Do not log this through Timber: that would recurse into this persistence path.
+                Log.w(TAG, "Unable to persist app log entry: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+    }
 
     private fun applyFilters(entries: List<LogEntry>) {
+        val level = currentFilterLevel
+        val tag = currentFilterTag
+        val query = currentSearchQuery
         // The default view contains every entry. Avoid a full O(n) filter pass on
-        // every log line unless the user has actually enabled a filter.
-        if (currentFilterLevel == LogLevel.TRACE &&
-            currentFilterTag == null &&
-            currentSearchQuery.isNullOrBlank()
-        ) {
+        // every publish unless the user has actually enabled a filter.
+        if (level == LogLevel.TRACE && tag == null && query.isNullOrBlank()) {
             _filteredLogs.value = entries
             return
         }
 
         _filteredLogs.value = entries.filter { entry ->
-            entry.level.ordinal >= currentFilterLevel.ordinal &&
-                (currentFilterTag == null || entry.tag == currentFilterTag) &&
-                (currentSearchQuery.isNullOrBlank() || entry.message.contains(currentSearchQuery!!, ignoreCase = true))
+            entry.level.ordinal >= level.ordinal &&
+                (tag == null || entry.tag == tag) &&
+                (query.isNullOrBlank() || entry.message.contains(query, ignoreCase = true))
         }
     }
 
     /**
-     * Clears the visible buffer and all persisted diagnostic history. Appends are serialized
-     * with this operation so an entry already being processed cannot recreate deleted files.
+     * Clears the visible buffer and all persisted diagnostic history. Appends that were
+     * queued before the clear are discarded so they cannot recreate deleted files.
      */
     fun clear() {
-        synchronized(persistenceLock) {
-            synchronized(bufferLock) {
-                buffer.clear()
-                entryCount = 0
-            }
-            _logs.value = emptyList()
-            _filteredLogs.value = emptyList()
+        synchronized(bufferLock) {
+            buffer.clear()
+            publishDirty = false
+        }
+        synchronized(pendingLock) {
+            pendingText.setLength(0)
+        }
+        _logs.value = emptyList()
+        _filteredLogs.value = emptyList()
 
-            val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+        val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+        synchronized(fileLock) {
             val undeleted = logDirectory?.listFiles()
                 ?.filter { it.isFile }
                 ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }

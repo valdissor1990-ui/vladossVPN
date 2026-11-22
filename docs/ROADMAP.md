@@ -175,3 +175,4 @@
 |------|-----------|
 | 2026-10-25 | Первая фиксация плана; старт фазы 0 |
 | 2026-11-21 | Обновлён тулчейн и зависимости (AGP 8.13.2, Gradle 8.14.8, Kotlin 2.3.21, Compose BOM 2026.06.01) и ядро до 1.14.4-lx.35; фаза 1.1/1.2 закрыты. См. `docs/DEPENDENCY_UPGRADE_2026-11.md` |
+| 2026-11-22 | Гигиена и производительность: горячий путь логирования переведён на O(1) append + батч-запись файла, release-сборка больше не пишет `log.level=debug`, один OkHttp-клиент на все пробы, backoff фонового скана, удалён мёртвый `core/protocols/` и `NeonConnectButton`. Полный импорт Clash/JSON для vmess/trojan/ss/socks5/hysteria2/tuic. См. `docs/PROTOCOLS_WIRING.md` |
