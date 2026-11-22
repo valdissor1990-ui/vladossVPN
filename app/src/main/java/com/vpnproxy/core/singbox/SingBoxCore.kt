@@ -24,9 +24,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns the libbox 1.14.3 CommandServer in the application's main process.
@@ -89,7 +93,6 @@ class SingBoxCore(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineName("SingBoxCoreLifecycle")
     )
     private val lifecycleMutex = Mutex()
-    private val nativeLogLock = Any()
     private val lifecycleGeneration = LifecycleGenerationGate()
 
     @Volatile private var currentServer: CommandServer? = null
@@ -218,19 +221,80 @@ class SingBoxCore(
 
     /** Thread-safe, bounded persistence for the native debug callback in every build. */
     private fun appendNativeLogLine(line: String) {
-        val directory = File(context.filesDir, "logs")
-        if (!directory.exists() && !directory.mkdirs()) return
-        val file = File(directory, "libbox.log")
-        synchronized(nativeLogLock) {
+        NativeLogSink.append(File(context.filesDir, "logs"), line)
+    }
+
+    /**
+     * Batched writer for the libbox debug callback.
+     *
+     * libbox can emit thousands of lines per session and the callback runs on a JNI
+     * thread, so opening + appending + closing the file per line (the previous
+     * implementation) burned CPU and battery on the tunnel's hot path. Lines are now
+     * buffered in memory and written by one shared low-priority daemon thread, which
+     * also owns log rotation. A single process-wide instance avoids leaking a thread
+     * per temporary probe core.
+     */
+    private object NativeLogSink {
+        private const val FLUSH_INTERVAL_MS = 750L
+        private const val MAX_PENDING_CHARS = 1024 * 1024
+
+        private val lock = Any()
+        private val pending = StringBuilder()
+        @Volatile private var directory: File? = null
+
+        private val writer: ScheduledExecutorService by lazy {
+            Executors.newSingleThreadScheduledExecutor { runnable ->
+                Thread(runnable, "libbox-log-writer").apply {
+                    isDaemon = true
+                    priority = Thread.MIN_PRIORITY
+                }
+            }.also { executor ->
+                executor.scheduleWithFixedDelay(
+                    { flushQuietly() }, FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS
+                )
+            }
+        }
+
+        fun append(dir: File, line: String) {
+            synchronized(lock) {
+                directory = dir
+                if (pending.length + line.length + 1 <= MAX_PENDING_CHARS) {
+                    pending.append(line).append('\n')
+                }
+            }
+            // Touching the lazy holder starts the single flush thread on first use.
+            writer
+        }
+
+        private fun flushQuietly() {
+            val text = synchronized(lock) {
+                if (pending.isEmpty()) return
+                pending.toString().also { pending.setLength(0) }
+            }
+            val dir = directory ?: return
+            try {
+                write(dir, text)
+            } catch (t: Throwable) {
+                // Never surface I/O failures back into the native callback thread.
+                Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+
+        private fun write(dir: File, text: String) {
+            if (!dir.exists() && !dir.mkdirs()) return
+            val file = File(dir, "libbox.log")
             if (file.exists() && file.length() >= MAX_NATIVE_LOG_BYTES) {
-                val previous = File(directory, "libbox.log.1")
+                val previous = File(dir, "libbox.log.1")
                 if (previous.exists()) previous.delete()
                 if (!file.renameTo(previous)) {
                     // Keep logging if rotation fails, but don't allow unbounded growth.
                     if (file.length() >= MAX_NATIVE_LOG_BYTES * 2) file.writeText("", Charsets.UTF_8)
                 }
             }
-            file.appendText(line + "\n", Charsets.UTF_8)
+            FileOutputStream(file, true).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
         }
     }
 

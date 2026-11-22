@@ -143,6 +143,25 @@ class DeepProbeEngine @Inject constructor(
     private val cancellationGeneration = AtomicLong(0L)
 
     /**
+     * One shared OkHttp foundation for all profile probes. OkHttp clients are expensive
+     * (each owns a dispatcher and connection pool); building one per profile per scan
+     * created needless thread/alloc churn. Per-profile clients are derived with
+     * [OkHttpClient.newBuilder], which reuses the dispatcher and connection pool.
+     */
+    private val baseProbeClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(false)
+        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+        .build()
+
+    private fun profileClient(port: Int, callTimeoutSeconds: Long): OkHttpClient =
+        baseProbeClient.newBuilder()
+            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            .callTimeout(callTimeoutSeconds, TimeUnit.SECONDS)
+            .build()
+
+    /**
      * Signal cancellation without synchronously stopping the native core from the caller.
      * The probe coroutine owns the CorePortLease and performs core teardown in its finally
      * block; SingboxProxyClient.start() also cleans up if its interruptible startup is cancelled.
@@ -205,14 +224,7 @@ class DeepProbeEngine @Inject constructor(
                         indices.map { index ->
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
-                                    val client = OkHttpClient.Builder()
-                                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
-                                        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                                        .callTimeout(7, TimeUnit.SECONDS)
-                                        .retryOnConnectionFailure(false)
-                                        .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-                                        .build()
+                                    val client = profileClient(ports[index], 7L)
                                     val startedAtEpochMs = System.currentTimeMillis()
                                     val startNetwork = networkBucketProvider.snapshot()
                                     var attemptedSamples = 0
@@ -318,14 +330,7 @@ class DeepProbeEngine @Inject constructor(
                 val results = configs.mapIndexed { index, config ->
                     checkProbeActive(probeGeneration)
                     try {
-                        val client = OkHttpClient.Builder()
-                            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", ports[index])))
-                            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                            .callTimeout(8, TimeUnit.SECONDS)
-                            .retryOnConnectionFailure(false)
-                            .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
-                            .build()
+                        val client = profileClient(ports[index], 8L)
 
                         val startedAtEpochMs = System.currentTimeMillis()
                         val startNetwork = networkBucketProvider.snapshot()

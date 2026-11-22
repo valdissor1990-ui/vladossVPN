@@ -13,6 +13,8 @@ class LogCollectorTest {
 
         collector.add(first)
         collector.add(second)
+        // Publication is coalesced on a timer; explicit flush makes it deterministic.
+        collector.publishPending()
 
         assertEquals(listOf(first, second), collector.logs.value)
         assertEquals(collector.logs.value, collector.filteredLogs.value)
@@ -32,6 +34,30 @@ class LogCollectorTest {
 
         assertEquals(listOf(second), collector.filteredLogs.value)
         assertEquals(3, collector.logs.value.size)
+    }
+
+    @Test
+    fun addIsVisibleToSnapshotBeforeAnyPublish() {
+        val collector = LogCollector()
+        val entry = LogEntry(level = LogLevel.INFO, tag = "VPN", message = "connected")
+
+        collector.add(entry)
+
+        // The hot path only appends; readers still see the entry without waiting.
+        assertEquals(listOf(entry), collector.getAllEntries())
+    }
+
+    @Test
+    fun ringBufferKeepsNewestEntriesWhenFull() {
+        val collector = LogCollector()
+        repeat(10_050) { index ->
+            collector.add(LogEntry(level = LogLevel.DEBUG, tag = "Flood", message = "line-$index"))
+        }
+
+        val entries = collector.getAllEntries()
+        assertEquals(10_000, entries.size)
+        assertEquals("line-10049", entries.last().message)
+        assertEquals("line-50", entries.first().message)
     }
 
     @Test
