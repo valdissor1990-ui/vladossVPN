@@ -18,6 +18,12 @@ import kotlinx.serialization.json.put
 object SingboxConfigBuilder {
     const val PROXY_PORT = 10809
 
+    /**
+     * Tag of the concrete primary outbound when it is packed into a native `urltest`
+     * group. Without durability features the primary keeps its plain `proxy` tag.
+     */
+    const val PROXY_PRIMARY_TAG = "proxy-primary"
+
     /** Rule-set tags referenced by [RoutingPreset.BYPASS_RU]. */
     const val RU_GEOIP_RULE_SET = "geoip-ru"
     const val RU_GEOSITE_RULE_SET = "geosite-ru"
@@ -76,13 +82,18 @@ object SingboxConfigBuilder {
     /**
      * @param foreignConfig optional second outbound for AI / selected apps (non-RU exit)
      * @param foreignPackageNames Android package names routed to foreign outbound
+     * @param standbys extra ranked servers packed into a native urltest group under the
+     *   `proxy` tag when [DurabilityOptions.nativeUrlTestEnabled] is set; ignored otherwise
+     * @param durability opt-in transport-durability features (defaults preserve the golden path)
      */
     fun buildVpn(
         config: ParsedConfig,
         options: DiagnosticOptions = DiagnosticOptions(),
         foreignConfig: ParsedConfig? = null,
         foreignPackageNames: List<String> = emptyList(),
-        routing: RoutingRules = RoutingRules()
+        routing: RoutingRules = RoutingRules(),
+        standbys: List<ParsedConfig> = emptyList(),
+        durability: DurabilityOptions = DurabilityOptions()
     ): String = buildJsonObject {
         put("log", buildJsonObject {
             put("level", nativeLogLevel)
@@ -125,9 +136,36 @@ object SingboxConfigBuilder {
             })
         })
         put("outbounds", buildJsonArray {
-            add(buildOutbound(config, "proxy"))
+            val packedStandbys = if (durability.nativeUrlTestEnabled) {
+                standbys.take(durability.urlTestStandbyCount.coerceIn(0, DurabilityOptions.MAX_STANDBY_COUNT))
+            } else emptyList()
+            if (packedStandbys.isEmpty()) {
+                // Golden path: the primary is the concrete `proxy` outbound.
+                add(buildOutbound(config, "proxy", durability))
+            } else {
+                // Durability path: concrete primaries plus a native urltest group that keeps
+                // the well-known `proxy` tag, so DNS detour / route.final / local-proxy-in
+                // rules keep working while the core fails over between servers by itself.
+                add(buildOutbound(config, PROXY_PRIMARY_TAG, durability))
+                packedStandbys.forEachIndexed { index, standby ->
+                    add(buildOutbound(standby, "proxy-standby-$index", durability))
+                }
+                add(buildJsonObject {
+                    put("type", "urltest")
+                    put("tag", "proxy")
+                    put("outbounds", buildJsonArray {
+                        add(JsonPrimitive(PROXY_PRIMARY_TAG))
+                        packedStandbys.forEachIndexed { index, _ -> add(JsonPrimitive("proxy-standby-$index")) }
+                    })
+                    put("url", DurabilityOptions.URL_TEST_PROBE_URL)
+                    put("interval", DurabilityOptions.URL_TEST_INTERVAL)
+                    put("tolerance", DurabilityOptions.URL_TEST_TOLERANCE_MS)
+                    put("idle_timeout", "30m")
+                    put("interrupt_exist_connections", false)
+                })
+            }
             if (foreignConfig != null && foreignPackageNames.isNotEmpty()) {
-                add(buildOutbound(foreignConfig, "proxy-foreign"))
+                add(buildOutbound(foreignConfig, "proxy-foreign", durability))
             }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
             add(buildJsonObject { put("type", "block"); put("tag", "block") })
@@ -253,7 +291,11 @@ object SingboxConfigBuilder {
         return obj
     }
 
-    fun buildOutbound(config: ParsedConfig, tag: String = "proxy"): JsonObject {
+    fun buildOutbound(
+        config: ParsedConfig,
+        tag: String = "proxy",
+        durability: DurabilityOptions = DurabilityOptions()
+    ): JsonObject {
         val transportKey = config.transport.lowercase()
         val isHy2 = transportKey == "hysteria2" || transportKey == "hy2"
         val isTuic = transportKey == "tuic"
@@ -452,6 +494,9 @@ object SingboxConfigBuilder {
                     val source = when { sni != null -> "sni"; host != null -> "host"; else -> "address" }
                     LogCollectorHolder.get()?.info("SingboxConfigBuilder", "TLS server_name=$serverName source=$source")
                     put("server_name", serverName)
+                    // Anti-DPI: split the TLS handshake so SNI / record-length fingerprinting fails.
+                    if (durability.tlsFragmentEnabled) put("fragment", true)
+                    if (durability.tlsRecordFragmentEnabled) put("record_fragment", true)
                     when {
                         isVless -> {
                             put("insecure", config.insecure)
@@ -460,7 +505,9 @@ object SingboxConfigBuilder {
                             }
                             put("utls", buildJsonObject {
                                 put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                                put("fingerprint", durability.utlsFingerprint
+                                    ?: config.fingerprint?.takeIf { it.isNotBlank() }
+                                    ?: "chrome")
                             })
                             if (config.security.equals("reality", true)) {
                                 require(!config.publicKey.isNullOrBlank()) { "VLESS Reality public key (pbk) is missing" }
@@ -474,7 +521,9 @@ object SingboxConfigBuilder {
                         isVmess -> {
                             put("utls", buildJsonObject {
                                 put("enabled", true)
-                                put("fingerprint", config.fingerprint?.takeIf { it.isNotBlank() } ?: "chrome")
+                                put("fingerprint", durability.utlsFingerprint
+                                    ?: config.fingerprint?.takeIf { it.isNotBlank() }
+                                    ?: "chrome")
                             })
                             put("insecure", config.insecure)
                         }
@@ -483,11 +532,14 @@ object SingboxConfigBuilder {
                             if (config.alpn.isNotEmpty()) {
                                 put("alpn", JsonArray(config.alpn.map { kotlinx.serialization.json.JsonPrimitive(it) }))
                             }
-                            // Hysteria 2 Xray imports may specify a TLS client fingerprint.
-                            if (isHy2 && !config.fingerprint.isNullOrBlank()) {
+                            // Hysteria 2 Xray imports may specify a TLS client fingerprint; a
+                            // durability override applies to any TLS transport.
+                            val fingerprint = durability.utlsFingerprint
+                                ?: config.fingerprint?.takeIf { it.isNotBlank() }
+                            if (fingerprint != null && (isHy2 || durability.utlsFingerprint != null)) {
                                 put("utls", buildJsonObject {
                                     put("enabled", true)
-                                    put("fingerprint", config.fingerprint)
+                                    put("fingerprint", fingerprint)
                                 })
                             }
                             config.pinSHA256?.takeIf { it.isNotBlank() }?.let { pin ->

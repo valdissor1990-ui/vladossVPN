@@ -27,6 +27,8 @@ import com.vpnproxy.core.singbox.CorePortLease
 import com.vpnproxy.core.singbox.SingBoxPlatform
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticOptions
+import com.vpnproxy.core.singbox.DurabilityOptions
+import com.vpnproxy.core.singbox.DurabilitySettings
 import com.vpnproxy.core.singbox.RoutingSettings
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.core.dualpath.ServerRegionClassifier
@@ -530,12 +532,34 @@ class VpnProxyService : VpnService() {
           "DIAG-SETTINGS ROUTING_PRESET=${routing.preset.id} effective=${routing.effectivePreset.id} " +
               "ru_rule_sets_degraded=${routing.ruRuleSetsDegraded}"
       )
+      // Opt-in durability (debug-gated): pack ranked standbys into a native urltest group and
+      // enable anti-DPI TLS options. Defaults are all-off, so a release build keeps the golden path.
+      val durability = DurabilitySettings.load(this@VpnProxyService)
+      val standbys = if (durability.nativeUrlTestEnabled) {
+          val maxStandbys = durability.urlTestStandbyCount.coerceIn(0, DurabilityOptions.MAX_STANDBY_COUNT)
+          autoSwitcher.rankedServers.value
+              .map { it.config }
+              .filter { it.connectionKey() != parsed.connectionKey() }
+              .distinctBy { it.connectionKey() }
+              .take(maxStandbys)
+      } else emptyList()
+      if (standbys.isNotEmpty()) {
+          logCollector.info(TAG, "DURABILITY native urltest enabled standbys=${standbys.size}/${durability.urlTestStandbyCount}")
+      }
+      if (durability.tlsFragmentEnabled || durability.tlsRecordFragmentEnabled || durability.utlsFingerprint != null) {
+          logCollector.info(
+              TAG,
+              "DURABILITY tls fragment=${durability.tlsFragmentEnabled} record_fragment=${durability.tlsRecordFragmentEnabled} utls=${durability.utlsFingerprint ?: "default"}"
+          )
+      }
       val configJson = SingboxConfigBuilder.buildVpn(
           parsed,
           diagnosticOptions,
           foreignConfig = foreignParsed,
           foreignPackageNames = if (foreignParsed != null) dualPackages else emptyList(),
-          routing = routing
+          routing = routing,
+          standbys = standbys,
+          durability = durability
       )
                 runCatching {
                     val root = org.json.JSONObject(configJson)

@@ -20,6 +20,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.logging.LogLevel
 import com.vpnproxy.BuildConfig
 import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.DurabilityOptions
+import com.vpnproxy.core.singbox.DurabilitySettings
 import com.vpnproxy.util.DebugFlags
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,6 +35,7 @@ fun DebugScreen(
     val lastCrash by viewModel.lastCrash.collectAsStateWithLifecycle()
     val battery by viewModel.battery.collectAsStateWithLifecycle()
     val diagnosticOptions by viewModel.diagnosticOptions.collectAsStateWithLifecycle()
+    val durabilityOptions by viewModel.durabilityOptions.collectAsStateWithLifecycle()
     val libboxTail by viewModel.libboxTail.collectAsStateWithLifecycle()
     val probeResult by viewModel.probeResult.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
@@ -272,6 +275,69 @@ fun DebugScreen(
                                     libboxTail?.let {
                                         Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                                     }
+                                }
+                            }
+                        }
+                    }
+                    item(key = "durability-controls") {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("Устойчивость соединения (следующее подключение)", style = MaterialTheme.typography.titleSmall)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = durabilityOptions.nativeUrlTestEnabled, onCheckedChange = {
+                                        viewModel.updateDurabilityOptions(durabilityOptions.copy(nativeUrlTestEnabled = it))
+                                    })
+                                    Text("NATIVE_URL_TEST_GROUP")
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Standby: ${durabilityOptions.urlTestStandbyCount}")
+                                    Spacer(Modifier.width(8.dp))
+                                    OutlinedButton(onClick = {
+                                        viewModel.updateDurabilityOptions(
+                                            durabilityOptions.copy(urlTestStandbyCount = (durabilityOptions.urlTestStandbyCount - 1).coerceAtLeast(0))
+                                        )
+                                    }) { Text("-") }
+                                    Spacer(Modifier.width(4.dp))
+                                    OutlinedButton(onClick = {
+                                        viewModel.updateDurabilityOptions(
+                                            durabilityOptions.copy(
+                                                urlTestStandbyCount = (durabilityOptions.urlTestStandbyCount + 1)
+                                                    .coerceAtMost(DurabilityOptions.MAX_STANDBY_COUNT)
+                                            )
+                                        )
+                                    }) { Text("+") }
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = durabilityOptions.tlsFragmentEnabled, onCheckedChange = {
+                                        viewModel.updateDurabilityOptions(durabilityOptions.copy(tlsFragmentEnabled = it))
+                                    })
+                                    Text("TLS_FRAGMENT")
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = durabilityOptions.tlsRecordFragmentEnabled, onCheckedChange = {
+                                        viewModel.updateDurabilityOptions(durabilityOptions.copy(tlsRecordFragmentEnabled = it))
+                                    })
+                                    Text("TLS_RECORD_FRAGMENT")
+                                }
+                                Text("UTLS_FINGERPRINT", style = MaterialTheme.typography.labelMedium)
+                                DurabilitySettings.utlsFingerprints.forEach { fingerprint ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(
+                                            selected = durabilityOptions.utlsFingerprint == fingerprint,
+                                            onClick = {
+                                                viewModel.updateDurabilityOptions(durabilityOptions.copy(utlsFingerprint = fingerprint))
+                                            }
+                                        )
+                                        Text(fingerprint, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                                TextButton(onClick = {
+                                    viewModel.updateDurabilityOptions(durabilityOptions.copy(utlsFingerprint = null))
+                                }) {
+                                    Text("UTLS: по умолчанию (профиль/провайдер)")
+                                }
+                                Button(onClick = { viewModel.resetDurabilityOptions() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Сбросить настройки устойчивости")
                                 }
                             }
                         }
