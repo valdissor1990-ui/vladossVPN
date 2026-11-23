@@ -64,7 +64,7 @@ class LogExporter @Inject constructor(
         fun accept(line: String) {
             if (line.isBlank()) return
             appLines++
-            if (isNativeCallback(line)) {
+            if (line.contains("[LIBBOX]", ignoreCase = true) || line.contains(" | LIBBOX |", ignoreCase = true)) {
                 nativeCallbackLines++
                 nativeCallbackBytes += line.toByteArray(Charsets.UTF_8).size + 1L
             }
@@ -154,12 +154,10 @@ class LogExporter @Inject constructor(
         }
 
         var nativeFileLines = 0L
-        var nativeFileBytes = 0L
         nativeFiles.forEach { file ->
             scanFile(file) { line ->
                 if (line.isNotBlank()) {
                     nativeFileLines++
-                    nativeFileBytes += line.toByteArray(Charsets.UTF_8).size + 1L
                 }
             }
         }
