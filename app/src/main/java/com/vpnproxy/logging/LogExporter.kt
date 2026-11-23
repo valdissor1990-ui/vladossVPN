@@ -84,8 +84,13 @@ class LogExporter @Inject constructor(
             target.addLast(value)
         }
 
-        private fun compact(value: String): String =
-            if (value.length <= SUMMARY_LINE_CHARS) value else value.take(SUMMARY_LINE_CHARS) + "…[line shortened]"
+        private fun compact(value: String): String {
+            // The old exporter built its header from already-masked text. Keep that
+            // guarantee while retaining only a small, bounded number of summary lines.
+            val masked = SensitiveMasker.mask(value)
+            return if (masked.length <= SUMMARY_LINE_CHARS) masked
+            else masked.take(SUMMARY_LINE_CHARS) + "…[line shortened]"
+        }
 
         private fun containsAny(line: String, vararg values: String): Boolean =
             values.any { line.contains(it, ignoreCase = true) }
