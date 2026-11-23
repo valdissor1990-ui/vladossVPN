@@ -298,7 +298,6 @@ class LogExporter @Inject constructor(
             appendLine("last ServiceReady timestamp: ${summary.lastServiceReady}")
             appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} native_callback_lines=${summary.nativeCallbackLines} app_lines=${sources.appLines}")
             appendLine("native log file=${sources.nativePath}; rotated_file=${File(context.filesDir, "logs/libbox.log.1").isFile}")
-            appendLine("log_stats app_${logCollector.stats.value.summary()}")
             appendLine("journal_files ${journalFileInfo()}")
         }
     }
