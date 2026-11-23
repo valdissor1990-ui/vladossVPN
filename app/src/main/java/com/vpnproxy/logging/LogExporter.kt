@@ -34,7 +34,6 @@ class LogExporter @Inject constructor(
         private const val TAG = "LogExporter"
         private const val MAX_CLIPBOARD_CHARS = 2 * 1024 * 1024
         private const val MAX_EXPORTED_LINE_CHARS = 256 * 1024
-        private const val SUMMARY_LINE_CHARS = 1_200
         private const val NATIVE_MEMORY_FALLBACK_LIMIT = 2_000
     }
 
@@ -52,6 +51,7 @@ class LogExporter @Inject constructor(
     )
 
     private class HeaderSummary {
+        private companion object { const val SUMMARY_LINE_CHARS = 1_200 }
         var appLines: Long = 0
         var nativeCallbackLines: Long = 0
         var nativeCallbackBytes: Long = 0
@@ -301,7 +301,7 @@ class LogExporter @Inject constructor(
             appendLine("last ConnectionState: ${summary.lastConnectionState}")
             appendLine("last SelectedServer: ${summary.lastSelectedServer}")
             appendLine("last ServiceReady timestamp: ${summary.lastServiceReady}")
-            appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} native_callback_lines=${summary.nativeCallbackLines} app_lines=${sources.appLines}")
+            appendLine("native log present=${sources.nativeBytes > 0} native_lines=${sources.nativeLines} native_callback_lines=${if (sources.nativeFiles.isNotEmpty()) sources.nativeLines else summary.nativeCallbackLines} app_lines=${sources.appLines}")
             appendLine("native log file=${sources.nativePath}; rotated_file=${File(context.filesDir, "logs/libbox.log.1").isFile}")
             appendLine("journal_files ${journalFileInfo()}")
         }
