@@ -264,12 +264,12 @@ class VpnProxyService : VpnService() {
 
         when (intent?.action) {
             ACTION_FORCE_STOP -> {
-                logCollector.error("VpnService", "FORCE_STOP — RequestDisconnect via actor then teardown")
+                logCollector.info("VpnService", "FORCE_STOP — RequestDisconnect via actor then teardown")
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
                 forceStopService("notification FORCE_STOP")
             }
             ACTION_REQUEST_DISCONNECT -> {
-                logCollector.error("VpnService", "REQUEST_DISCONNECT → ConnectionEvent.RequestDisconnect")
+                logCollector.info("VpnService", "REQUEST_DISCONNECT → ConnectionEvent.RequestDisconnect")
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
             }
             ACTION_REQUEST_RECONNECT -> {
@@ -711,7 +711,7 @@ class VpnProxyService : VpnService() {
             logCollector.debug(TAG, "stopVpnKeepAlive skipped — already stopped ($reason)")
             return
         }
-        logCollector.error("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
+        logCollector.info("VpnService", "stopVpnKeepAlive. Reason: $reason (NO stopSelf)")
         vpnJob?.cancel()
         vpnJob = scope.launch {
             lifecycleController?.withLifecycleLock {
@@ -741,7 +741,11 @@ class VpnProxyService : VpnService() {
                 lifecycleController?.stopCore()
             }
 
-            logCollector.error(TAG, "Stopping VPN. Reason: " + reason, throwable)
+            if (throwable == null) {
+                logCollector.info(TAG, "Stopping VPN. Reason: $reason")
+            } else {
+                logCollector.error(TAG, "Stopping VPN. Reason: $reason", throwable)
+            }
             _isRunning.value = false
             if (!softRestart) {
                 stopBatteryPeriodicLogging()
@@ -787,7 +791,7 @@ class VpnProxyService : VpnService() {
             return
         }
         transitionServiceState(ServiceState.Stopping)
-        logCollector.error(TAG, "forceStopService: $reason")
+        // Routine forced stop: warning severity, not an error, so the ERROR count stays meaningful.
         logCollector.warn(TAG, "forceStopService: $reason")
 
         try {
@@ -831,7 +835,7 @@ class VpnProxyService : VpnService() {
     }
 
     override fun onDestroy() {
-        logCollector.error("VpnService", "===== onDestroy called. Service is dying! =====", Exception("onDestroy trace"))
+        logCollector.warn("VpnService", "===== onDestroy called. Service is dying! =====")
         transitionServiceState(ServiceState.Stopping)
         try {
             connectionCoordinator.send(

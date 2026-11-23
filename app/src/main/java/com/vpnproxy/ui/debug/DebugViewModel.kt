@@ -22,7 +22,9 @@ import com.vpnproxy.logging.SensitiveMasker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -166,13 +168,28 @@ class DebugViewModel @Inject constructor(
     }
 
     fun copyAll() {
-        try {
-            val text = logExporter.buildExportText()
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("VPNProxy Logs", text))
-            _message.value = "Скопировано: ${text.length} символов"
-        } catch (t: Throwable) {
-            _message.value = "Ошибка копирования: ${t.message}"
+        // Building the export reads the whole journal; keep it off the main thread so a
+        // multi-megabyte journal cannot ANR the debug screen, and surface truncation.
+        viewModelScope.launch {
+            val text = try {
+                withContext(Dispatchers.IO) { logExporter.buildExportText() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                _message.value = "Ошибка копирования: ${t.javaClass.simpleName}: ${t.message}"
+                return@launch
+            }
+            try {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("VPNProxy Logs", text))
+                _message.value = if (text.contains(LogExporter.TRUNCATION_MARKER)) {
+                    "Скопировано (усечено до 2 МБ): ${text.length} символов"
+                } else {
+                    "Скопировано: ${text.length} символов"
+                }
+            } catch (t: Throwable) {
+                _message.value = "Ошибка копирования: ${t.message}"
+            }
         }
     }
 
