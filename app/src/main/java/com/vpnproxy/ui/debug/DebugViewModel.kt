@@ -9,6 +9,8 @@ import com.vpnproxy.core.diagnostics.BatteryLogger
 import com.vpnproxy.core.singbox.DiagnosticOptions
 import com.vpnproxy.core.singbox.DiagnosticSettings
 import com.vpnproxy.core.singbox.DiagnosticProbe
+import com.vpnproxy.core.singbox.DurabilityOptions
+import com.vpnproxy.core.singbox.DurabilitySettings
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.util.DebugFlags
 import com.vpnproxy.core.diagnostics.BatteryMonitor
@@ -63,6 +65,9 @@ class DebugViewModel @Inject constructor(
     private val _diagnosticOptions = MutableStateFlow(DiagnosticSettings.load(context))
     val diagnosticOptions: StateFlow<DiagnosticOptions> = _diagnosticOptions.asStateFlow()
 
+    private val _durabilityOptions = MutableStateFlow(DurabilitySettings.load(context))
+    val durabilityOptions: StateFlow<DurabilityOptions> = _durabilityOptions.asStateFlow()
+
     private val _libboxTail = MutableStateFlow<String?>(null)
     val libboxTail: StateFlow<String?> = _libboxTail.asStateFlow()
 
@@ -109,6 +114,19 @@ class DebugViewModel @Inject constructor(
         DiagnosticSettings.save(context, defaults)
         _diagnosticOptions.value = defaults
         _message.value = "Диагностические настройки сброшены; переподключитесь для применения"
+    }
+
+    fun updateDurabilityOptions(options: DurabilityOptions) {
+        DurabilitySettings.save(context, options)
+        _durabilityOptions.value = options
+        _message.value = "Настройки устойчивости сохранены; применятся при следующем подключении"
+    }
+
+    fun resetDurabilityOptions() {
+        val defaults = DurabilityOptions()
+        DurabilitySettings.save(context, defaults)
+        _durabilityOptions.value = defaults
+        _message.value = "Настройки устойчивости сброшены; переподключитесь для применения"
     }
 
     fun showLastLibboxLines() {
