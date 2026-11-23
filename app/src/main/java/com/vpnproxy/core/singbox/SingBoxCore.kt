@@ -48,7 +48,7 @@ class SingBoxCore(
         private const val PORT_RELEASE_TIMEOUT_MS = 12_000L
         private const val PORT_POLL_INTERVAL_MS = 150L
         private const val MIN_STOP_START_COOLDOWN_MS = 1_800L
-        private const val MAX_NATIVE_LOG_BYTES = 8L * 1024L * 1024L
+        private const val MAX_NATIVE_LOG_BYTES = 4L * 1024L * 1024L
         @Volatile private var setupComplete = false
 
         @Synchronized
@@ -134,8 +134,13 @@ class SingBoxCore(
             val safeLine = SensitiveMasker.mask("[LIBBOX] $line")
             runCatching { appendNativeLogLine(safeLine) }
                 .onFailure { logCollector?.error(TAG, "Could not persist native callback line", it) }
+            // Do NOT mirror every native line into the app ring buffer/file: libbox emits
+            // tens of thousands of lines per session, which duplicated the whole native
+            // stream into app.log and evicted all app-level entries from the 10k ring
+            // buffer (observed: ~96k dropped entries and ~19 MB of duplicated LIBBOX text).
+            // The full stream is already persisted to libbox.log; only actionable native
+            // events are surfaced to the app journal.
             try {
-                logCollector?.debug("LIBBOX", safeLine)
                 if (line.contains("connection upload handshake: no available network interface", ignoreCase = true)) {
                     logCollector?.error("LIBBOX", "exact handshake failure: $safeLine")
                 }

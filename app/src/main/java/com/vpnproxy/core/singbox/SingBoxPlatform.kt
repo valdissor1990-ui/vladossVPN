@@ -39,6 +39,19 @@ class SingBoxPlatform(
 ) : PlatformInterface {
     companion object { private const val TAG = "SingBoxPlatform" }
 
+    /**
+     * Methods this PlatformInterface does not implement are invoked by libbox on a hot
+     * path (tens of thousands of times per session). Log the first use per method instead
+     * of every call so one repeated warning cannot flood the app journal.
+     */
+    private val unsupportedMethodsLogged = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun logUnsupportedOnce(method: String) {
+        if (unsupportedMethodsLogged.add(method)) {
+            LogCollectorHolder.get()?.debug(TAG, "unsupported PlatformInterface method: $method")
+        }
+    }
+
     private fun logDebug(message: String) {
         LogCollectorHolder.get()?.debug(TAG, message)
     }
@@ -92,7 +105,8 @@ class SingBoxPlatform(
 
         val line = "protect(fd=$fd) for outbound=<unknown: libbox callback supplies fd only> result=$ok"
         if (ok) {
-            logInfo( line)
+            // Called once per outbound socket; keep it at debug so the journal stays useful.
+            logDebug( line)
         } else {
             logError( "$line; protect(fd) failed — socket will be routed through TUN (loop risk)")
             error("VpnService.protect($fd) failed; refusing an unprotected outbound socket")
@@ -703,18 +717,19 @@ class SingBoxPlatform(
     override fun cancelNotification(identifier: String, typeID: Int) = unsupportedUnit("cancelNotification")
 
     private fun <T> unsupported(method: String, fallback: T): T {
-        logWarn( "unsupported PlatformInterface method: $method")
+        logUnsupportedOnce(method)
         return fallback
     }
     private fun unsupportedUnit(method: String) {
-        logWarn( "unsupported PlatformInterface method: $method")
+        logUnsupportedOnce(method)
     }
     private fun <T> unsupportedNullable(method: String): T? {
-        logWarn( "unsupported PlatformInterface method: $method")
+        logUnsupportedOnce(method)
         return null
     }
     private fun unsupported(method: String): Nothing {
-        logWarn( "unsupported PlatformInterface method: $method")
+        // Throwing path: keep it visible but still de-duplicated to once per method.
+        logUnsupportedOnce(method)
         error("unsupported PlatformInterface method: $method")
     }
 
