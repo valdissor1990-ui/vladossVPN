@@ -14,7 +14,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedWriter
 import java.io.File
 import java.io.IOException
 import java.io.OutputStreamWriter
@@ -167,10 +166,14 @@ class LogExporter @Inject constructor(
 
         val nativeMemory = if (nativeFiles.isEmpty() && summary.nativeCallbackLines == 0L) {
             logCollector.getAllEntries()
-                .asSequence()
                 .filter { it.tag == "LIBBOX" || it.message.contains("[LIBBOX]", ignoreCase = true) }
                 .takeLast(NATIVE_MEMORY_FALLBACK_LIMIT)
-                .toList()
+        } else {
+            emptyList()
+        }
+        val nativeFromMemoryApp = if (nativeFiles.isEmpty() && appFiles.isEmpty() && summary.nativeCallbackLines > 0L) {
+            appMemory.filter { it.tag == "LIBBOX" || it.message.contains("[LIBBOX]", ignoreCase = true) }
+                .takeLast(NATIVE_MEMORY_FALLBACK_LIMIT)
         } else {
             emptyList()
         }
@@ -194,7 +197,7 @@ class LogExporter @Inject constructor(
             appFiles = appFiles,
             nativeFiles = nativeFiles,
             appMemoryEntries = appMemory,
-            nativeMemoryEntries = nativeMemory,
+            nativeMemoryEntries = if (nativeMemory.isNotEmpty()) nativeMemory else nativeFromMemoryApp,
             appBytes = appBytes,
             appLines = summary.appLines,
             nativeBytes = nativeBytes,
