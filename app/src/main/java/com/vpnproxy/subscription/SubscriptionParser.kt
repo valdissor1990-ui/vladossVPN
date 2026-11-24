@@ -75,6 +75,7 @@ class SubscriptionParser @Inject constructor(
 
         fun isValid(): Boolean {
             if (address.isBlank()) return false
+            if (isPlaceholderAddress(address)) return false
             if (port !in 1..65535) return false
             if (transport in setOf("hysteria2", "hy2", "tuic", "shadowsocks", "socks")) {
                 if (transport == "shadowsocks" && password.isNullOrBlank() && uuid.isBlank()) return false
@@ -166,6 +167,7 @@ class SubscriptionParser @Inject constructor(
         if (scheme !in setOf("vless", "hysteria2", "hy2", "tuic", "ss", "vmess", "trojan", "socks", "socks5")) return "unsupported_scheme"
         val uri = runCatching { URI(line.substringBefore('#')) }.getOrElse { return "malformed_uri" }
         if (uri.host.isNullOrBlank()) return "missing_server"
+        if (isPlaceholderAddress(uri.host)) return "placeholder_or_loopback_endpoint"
         if (uri.port > 65535 || uri.port == 0) return "invalid_port"
         if (scheme in setOf("vless", "hysteria2", "hy2", "tuic") && uri.rawUserInfo.isNullOrBlank()) return "missing_credentials"
         if (scheme == "vless") {
@@ -885,4 +887,21 @@ class SubscriptionParser @Inject constructor(
         }
         return "invalid_or_malformed_entry"
     }
+}
+
+/**
+ * Device-limit, "subscription expired" and similar provider stubs point every profile at a
+ * loopback address. Importing them replaces a working server list with entries that can
+ * never connect, so they are rejected before they reach the cache or the UI.
+ */
+internal fun isPlaceholderAddress(value: String): Boolean {
+    val host = value.trim().removePrefix("[").removeSuffix("]").lowercase(java.util.Locale.ROOT)
+    if (host.isEmpty()) return false
+    if (host == "localhost" || host == "::1" || host == "::" || host == "0.0.0.0") return true
+    val parts = host.split('.')
+    if (parts.size == 4 && parts.all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }) {
+        val first = parts[0].toInt()
+        if (first == 127 || first == 0) return true
+    }
+    return false
 }

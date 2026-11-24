@@ -28,6 +28,7 @@ import okhttp3.Request
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -49,10 +50,22 @@ class DeepProbeEngine @Inject constructor(
         private const val TAG = "DeepProbe"
         private const val LATENCY_URL = "https://www.gstatic.com/generate_204"
         // Independent endpoints avoid declaring every profile dead when one probe host
-        // is blocked or degraded on the current access network.
+        // is blocked or degraded on the current access network. Plain HTTP is included
+        // because Russian mobile carriers often throttle Cloudflare/Google over TLS.
         private val PROFILE_PING_URLS = listOf(
             "https://cp.cloudflare.com/generate_204",
-            "https://connectivitycheck.gstatic.com/generate_204"
+            "https://connectivitycheck.gstatic.com/generate_204",
+            "http://cp.cloudflare.com/generate_204",
+            "http://connectivitycheck.gstatic.com/generate_204"
+        )
+        // Last-resort reachability proof: a TCP handshake through the profile's own
+        // SOCKS inbound. It does not depend on DNS, TLS or a specific CDN being allowed,
+        // so a profile that carries traffic is never reported as dead.
+        private val PROFILE_TCP_FALLBACK_TARGETS = listOf(
+            "1.1.1.1" to 443,
+            "8.8.8.8" to 443,
+            "149.154.167.51" to 443,
+            "77.88.55.88" to 443
         )
         private const val SPEED_URL = "https://proof.ovh.net/files/1Mb.dat"
         private const val LATENCY_SAMPLES = 4
@@ -233,6 +246,29 @@ class DeepProbeEngine @Inject constructor(
                                                     "endpoint=${PROFILE_PING_URLS[attempt % PROFILE_PING_URLS.size]} " +
                                                     "reason=${failure.javaClass.simpleName}: ${SensitiveMasker.mask(failure.message.orEmpty())}"
                                             )
+                                        }
+                                    }
+                                    // HTTP probes can fail while the tunnel itself works
+                                    // (blocked probe host, TLS interception, slow DNS).
+                                    // Confirm reachability with a tunneled TCP handshake.
+                                    if (samples.size < 2) {
+                                        for ((tcpHost, tcpPort) in PROFILE_TCP_FALLBACK_TARGETS) {
+                                            if (samples.size >= 2) break
+                                            checkProbeActive(probeGeneration)
+                                            attemptedSamples++
+                                            val rtt = tcpProbeThroughSocks(
+                                                socksPort = ports[index],
+                                                host = tcpHost,
+                                                port = tcpPort,
+                                                timeoutMs = CONNECT_TIMEOUT_MS.toInt()
+                                            )
+                                            if (rtt != null) {
+                                                samples += rtt
+                                                logCollector.info(
+                                                    TAG,
+                                                    "Profile TCP fallback confirmed: profile=${configs[index].name} target=$tcpHost:$tcpPort rttMs=$rtt"
+                                                )
+                                            }
                                         }
                                     }
                                     val result = summarizeProfileLatency(configs[index], samples).copy(
@@ -424,6 +460,20 @@ class DeepProbeEngine @Inject constructor(
             throw CancellationException("DeepProbe cancelled")
         }
     }
+
+    /**
+     * Prove that a profile's own SOCKS inbound can open a real TCP session to the internet.
+     * Returns the measured handshake time in milliseconds, or null when the tunnel refuses.
+     */
+    private fun tcpProbeThroughSocks(socksPort: Int, host: String, port: Int, timeoutMs: Int): Long? =
+        runCatching {
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            Socket(proxy).use { socket ->
+                val startedAt = System.nanoTime()
+                socket.connect(InetSocketAddress(host, port), timeoutMs)
+                ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+            }
+        }.getOrNull()
 
     /**
      * Reserve all ephemeral ports at the same time. Closing each ServerSocket inside

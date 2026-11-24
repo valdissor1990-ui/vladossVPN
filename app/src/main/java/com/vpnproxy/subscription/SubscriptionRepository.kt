@@ -2,6 +2,7 @@ package com.vpnproxy.subscription
 
 import android.content.Context
 import android.os.Build
+import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vpnproxy.core.diagnostics.DeviceIdManager
@@ -32,6 +33,7 @@ import java.security.MessageDigest
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -189,10 +191,13 @@ private val _deviceMetadataConsent = MutableStateFlow(
         val cached = loadConfigsFromCache()
         if (cached.isNotEmpty()) {
             val retainedCached = cached.filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
-            _allConfigs.value = retainedCached.map { it.toParsedConfig() }.distinctBy {
+            val parsedCached = retainedCached.map { it.toParsedConfig() }.filter { it.isValid() }
+            _allConfigs.value = parsedCached.distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
-            if (retainedCached.size != cached.size) saveConfigsToCache(_allConfigs.value)
+            if (retainedCached.size != cached.size || parsedCached.size != retainedCached.size) {
+                saveConfigsToCache(_allConfigs.value)
+            }
             logCollector.info(TAG, "Cold start from cache: ${_allConfigs.value.size}")
         } else {
             logCollector.warn(TAG, "No cached subscription configs available at cold start")
@@ -289,11 +294,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
                 } catch (c: kotlinx.coroutines.CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    logCollector.warn(TAG, "Subscription refresh failed: ${e.javaClass.simpleName}")
+                    logCollector.warn(TAG, "Subscription refresh failed: ${e.javaClass.simpleName}: ${e.message}")
                     // Keep an independent last-known body per subscription. The aggregate
                     // cache may have been written by an older build after only one provider
                     // succeeded, so it cannot be the sole recovery source.
-                    val bodyKey = "subscription_body_${sub.url.hashCode().toUInt().toString(16)}"
+                    val bodyKey = "subscription_body_${subscriptionBodyCacheKey(sub.url)}"
                     val cachedOutcome = runCatching {
                         encryptedPrefs.getString(bodyKey, null)
                             ?.takeIf { it.isNotBlank() }
@@ -301,7 +306,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     }.getOrNull()
                     val bodyCached = cachedOutcome?.configs.orEmpty()
                     val aggregateCached = if (bodyCached.isEmpty()) {
-                        loadConfigsFromCache().filter { it.providerTag == sub.name }.map { it.toParsedConfig() }
+                        loadConfigsFromCache().filter { it.providerTag == sub.name }
+                            .map { it.toParsedConfig() }
+                            .filter { it.isValid() }
                     } else emptyList()
                     val cached = if (bodyCached.isNotEmpty()) bodyCached else aggregateCached
                     if (cached.isNotEmpty()) {
@@ -406,9 +413,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
             for (sourceUrl in sources) {
                 try {
                     val sendDeviceMetadata = _deviceMetadataConsent.value
-                    val cacheKey = MessageDigest.getInstance("SHA-256")
-                        .digest(sourceUrl.toByteArray(Charsets.UTF_8))
-                        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                    val cacheKey = subscriptionBodyCacheKey(sourceUrl)
                     val legacyCacheKey = sourceUrl.hashCode().toUInt().toString(16)
                     if (legacyCacheKey != cacheKey) {
                         encryptedPrefs.edit()
@@ -463,6 +468,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
                                 throw IOException("HTTP 304 received without a cached subscription body")
                             }
                             if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
+                                // Drop a cached placeholder/empty body so the next refresh cannot
+                                // keep returning 304 against content that can never be used.
+                                encryptedPrefs.edit().remove(bodyKey).remove(etagKey).apply()
                                 throw IOException("Cached subscription body contains no valid server configs")
                             }
                             logCollector.info(TAG, "Subscription unchanged (ETag 304)")
@@ -479,6 +487,15 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             throw IOException("Empty response body")
                         }
                         if (parser.parse(body, providerTag = sub.name).isEmpty()) {
+                            if (looksLikeDeviceLimitStub(body)) {
+                                logCollector.error(
+                                    TAG,
+                                    "Subscription panel returned a device-limit placeholder (loopback endpoints) instead of real servers; keeping the previous server list"
+                                )
+                                throw IOException(
+                                    "Subscription panel returned a device-limit placeholder; remove an old device or renew the subscription"
+                                )
+                            }
                             throw IOException("Subscription source returned no valid server configs")
                         }
                         val newEtag = response.header("ETag")
@@ -576,7 +593,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
 
     fun getCachedConfigs(): List<ParsedConfig> =
         loadConfigsFromCache().filterNot { it.providerTag in REMOVED_BUNDLED_NAMES }
-            .map { it.toParsedConfig() }.distinctBy {
+            .map { it.toParsedConfig() }
+            .filter { it.isValid() }
+            .distinctBy {
                 "${it.providerTag}\u001F${it.connectionKey()}"
             }
 
@@ -686,4 +705,34 @@ private val _deviceMetadataConsent = MutableStateFlow(
             logCollector.warn(TAG, "Could not delete legacy plaintext server cache")
         }
     }
+}
+
+/** Stable per-URL key for the encrypted per-subscription body cache. */
+private fun subscriptionBodyCacheKey(url: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(url.toByteArray(Charsets.UTF_8))
+        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
+/**
+ * Panels answer with a "device limit" stub that points every profile at a loopback address
+ * instead of returning real servers. The parser rejects such profiles; this helper turns the
+ * resulting empty import into an actionable error and prevents the stub from replacing a
+ * working cache.
+ */
+private fun looksLikeDeviceLimitStub(body: String): Boolean {
+    val decoded = runCatching {
+        val compact = body.filterNot { it.isWhitespace() }
+        if (compact.contains("://")) body
+        else String(Base64.decode(compact, Base64.DEFAULT), Charsets.UTF_8)
+    }.getOrDefault(body)
+    val lower = decoded.lowercase(java.util.Locale.ROOT)
+    if (lower.contains("лимит устройств") || lower.contains("device limit") || lower.contains("max devices")) {
+        return true
+    }
+    val hosts = decoded.lineSequence()
+        .map { it.trim() }
+        .filter { it.contains("://") }
+        .mapNotNull { line -> runCatching { URI(line.substringBefore('#')).host }.getOrNull() }
+        .toList()
+    return hosts.isNotEmpty() && hosts.all { isPlaceholderAddress(it) }
 }

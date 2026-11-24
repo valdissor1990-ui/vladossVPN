@@ -10,8 +10,16 @@ data class PhysicalNetworkSnapshot(
     val generation: Long,
     val capturedAtEpochMs: Long
 ) {
+    /**
+     * Underlay identity is the transport bucket plus the hashed network handle.
+     *
+     * [generation] is intentionally excluded: it also advances when *another* physical
+     * network (a second SIM, a hotspot, Wi-Fi appearing next to cellular) reports a
+     * capability change. On cellular that happens constantly, which used to invalidate
+     * every just-measured profile and leave the user with a single "reachable" server.
+     */
     fun sameNetwork(other: PhysicalNetworkSnapshot): Boolean =
-        bucket == other.bucket && networkId == other.networkId && generation == other.generation
+        bucket == other.bucket && networkId == other.networkId
 }
 
 enum class ProbeMethod {

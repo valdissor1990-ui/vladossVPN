@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
@@ -540,46 +541,71 @@ private fun SelectionModeRow(
     onSelect: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val title = when (mode) {
-        "automatic" -> "Автоматический выбор"
-        "manual" -> "Ручной выбор"
-        else -> "Рекомендация сервера"
-    }
-    val description = when (mode) {
-        "automatic" -> "Приложение выбирает сервер самостоятельно"
-        "manual" -> "Вы подключаетесь к выбранному серверу"
-        else -> "Сначала проверка, затем ваше подтверждение"
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Режим выбора сервера", color = HappInk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-            Text("$title · $description", color = HappMuted, fontSize = 12.sp)
-        }
-        Box {
-            TextButton(onClick = { expanded = true }, enabled = !busy) {
-                Text("Изменить", color = HappSelected)
-                Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = HappSelected)
+    // value, short label for the button, full title and explanation for the menu.
+    val modes = listOf(
+        SelectionModeOption("recommend", "Рекомендация", "Рекомендовать сервер", "Проверка, затем ваше подтверждение"),
+        SelectionModeOption("automatic", "Авто", "Автоматический выбор", "Приложение выбирает сервер самостоятельно"),
+        SelectionModeOption("manual", "Вручную", "Ручной выбор", "Вы подключаетесь к выбранному серверу")
+    )
+    val current = modes.firstOrNull { it.value == mode } ?: modes.first()
+    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Режим выбора сервера",
+                modifier = Modifier.weight(1f),
+                color = HappInk,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp
+            )
+            Box {
+                TextButton(onClick = { expanded = true }, enabled = !busy) {
+                    Text(current.shortLabel, color = HappSelected, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Icon(Icons.Filled.ExpandMore, contentDescription = "Сменить режим выбора", tint = HappSelected)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    modes.forEach { option ->
+                        val selected = option.value == current.value
+                        DropdownMenuItem(
+                            leadingIcon = {
+                                if (selected) {
+                                    Icon(Icons.Filled.Check, contentDescription = null, tint = HappSelected)
+                                } else {
+                                    Spacer(Modifier.size(24.dp))
+                                }
+                            },
+                            text = {
+                                Column {
+                                    Text(
+                                        option.title,
+                                        color = if (selected) HappSelected else HappInk,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                    Text(option.description, color = HappMuted, fontSize = 11.sp)
+                                }
+                            },
+                            onClick = {
+                                onSelect(option.value)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(
-                    text = { Text("Рекомендовать сервер") },
-                    onClick = { onSelect("recommend"); expanded = false }
-                )
-                DropdownMenuItem(
-                    text = { Text("Автоматический выбор") },
-                    onClick = { onSelect("automatic"); expanded = false }
-                )
-                DropdownMenuItem(
-                    text = { Text("Ручной выбор") },
-                    onClick = { onSelect("manual"); expanded = false }
-                )
-            }
         }
+        Text(
+            "Сейчас: ${current.title.lowercase().replaceFirstChar { it.titlecase() }} · ${current.description}",
+            color = HappMuted,
+            fontSize = 12.sp
+        )
     }
 }
+
+private data class SelectionModeOption(
+    val value: String,
+    val shortLabel: String,
+    val title: String,
+    val description: String
+)
 
 @Composable
 private fun ServerRow(

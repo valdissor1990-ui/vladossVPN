@@ -465,8 +465,27 @@ class HomeViewModel @Inject constructor(
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
                     .sortedBy { it.latencyMs }
-                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
-                logCollector.info(TAG, "Fallback candidates refreshed from individual server scan: verified=${candidates.size}; totalProfiles=${configs.size}")
+                // Probes can confirm only a few profiles on a lossy mobile network while
+                // other endpoints are still usable. Keep unverified profiles as a last-resort
+                // tail so a single dead endpoint cannot exhaust automatic fallback.
+                val verifiedKeys = candidates.map { it.config.connectionKey() }.toSet()
+                val unverifiedTail = configs
+                    .filterNot { it.connectionKey() in verifiedKeys }
+                    .filterNot { autoSwitcher.isBlacklisted(it) }
+                    .map { config ->
+                        ScoringEngine.ScoredServer(
+                            config = config,
+                            latencyMs = Long.MAX_VALUE,
+                            speedMbps = 0f,
+                            successRate = 0f,
+                            score = 0f
+                        )
+                    }
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates + unverifiedTail))
+                logCollector.info(
+                    TAG,
+                    "Fallback candidates refreshed from individual server scan: verified=${candidates.size}; unverifiedTail=${unverifiedTail.size}; totalProfiles=${configs.size}"
+                )
                 // Do not re-probe every profile through the already active VPN tunnel.
             } catch (c: CancellationException) {
                 throw c
@@ -683,7 +702,24 @@ class HomeViewModel @Inject constructor(
                     logCollector.info(TAG, tmsg("Server recommendation is ready; waiting for explicit user confirmation"))
                     return@launch
                 }
-                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
+                val verifiedKeys = verifiedConfigs.map { it.connectionKey() }.toSet()
+                val unverifiedTail = configs
+                    .filterNot { it.connectionKey() in verifiedKeys }
+                    .filterNot { autoSwitcher.isBlacklisted(it) }
+                    .map { config ->
+                        ScoringEngine.ScoredServer(
+                            config = config,
+                            latencyMs = Long.MAX_VALUE,
+                            speedMbps = 0f,
+                            successRate = 0f,
+                            score = 0f
+                        )
+                    }
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers + unverifiedTail))
+                logCollector.info(
+                    TAG,
+                    tmsg("Fallback pool: verified=${verifiedServers.size}; unverifiedTail=${unverifiedTail.size}; totalProfiles=${configs.size}")
+                )
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 pendingRankingConfigs = emptyList()
