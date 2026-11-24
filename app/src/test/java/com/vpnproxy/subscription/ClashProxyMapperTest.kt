@@ -145,7 +145,7 @@ class ClashProxyMapperTest {
     fun socks5MapsUsernameAndPassword() {
         val proxy = map(
             "type" to "socks5",
-            "server" to "127.0.0.1",
+            "server" to "203.0.113.10",
             "port" to 1080,
             "username" to "user",
             "password" to "pass"

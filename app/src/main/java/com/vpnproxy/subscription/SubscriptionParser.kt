@@ -87,6 +87,9 @@ class SubscriptionParser @Inject constructor(
 
         fun isValid(): Boolean {
             if (address.isBlank()) return false
+            if (isPlaceholderAddress(address)) return false
+            if (!host.isNullOrBlank() && isPlaceholderAddress(host)) return false
+            if (!sni.isNullOrBlank() && isPlaceholderAddress(sni)) return false
             if (port !in 1..65535) return false
             if (transport in setOf("hysteria2", "hy2", "tuic", "shadowsocks", "socks")) {
                 if (transport == "shadowsocks" && password.isNullOrBlank() && uuid.isBlank()) return false
@@ -178,6 +181,7 @@ class SubscriptionParser @Inject constructor(
         if (scheme !in SUPPORTED_URI_SCHEMES) return "unsupported_scheme"
         val uri = runCatching { URI(line.substringBefore('#')) }.getOrElse { return "malformed_uri" }
         if (uri.host.isNullOrBlank()) return "missing_server"
+        if (isPlaceholderAddress(uri.host)) return "placeholder_or_loopback_endpoint"
         if (uri.port > 65535 || uri.port == 0) return "invalid_port"
         if (scheme in setOf("vless", "hysteria2", "hy2", "tuic") && uri.rawUserInfo.isNullOrBlank()) return "missing_credentials"
         if (scheme == "vless") {
