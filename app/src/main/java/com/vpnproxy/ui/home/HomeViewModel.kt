@@ -64,6 +64,12 @@ class HomeViewModel @Inject constructor(
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
         private const val SERVER_SELECTION_TIMEOUT_MS = 80_000L
+        // Stop the preflight scan after this many measured profiles. Checking every profile
+        // in a 20+ list on a lossy mobile network exceeded the timeout and returned nothing.
+        private const val PREFLIGHT_TARGET_SERVERS = 5
+        // Unverified profiles are a last-resort fallback tail; an unbounded tail made
+        // reconnects spend minutes walking dead endpoints.
+        private const val FALLBACK_UNVERIFIED_TAIL_LIMIT = 3
         private const val KEY_AUTOMATIC_MODE = "automatic_server_selection"
         private const val KEY_SELECTION_MODE = "server_selection_mode"
         private const val MODE_RECOMMEND = "recommend"
@@ -465,8 +471,9 @@ class HomeViewModel @Inject constructor(
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .filterNot { autoSwitcher.isBlacklisted(it.config) }
                     .sortedBy { it.latencyMs }
-                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(candidates))
-                logCollector.info(TAG, "Fallback candidates refreshed from individual server scan: verified=${candidates.size}; totalProfiles=${configs.size}")
+                val fallbackPool = candidates + unverifiedFallbackTail(configs, candidates.map { it.config })
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(fallbackPool))
+                logCollector.info(TAG, "Fallback candidates refreshed from individual server scan: verified=${candidates.size}; tail=${fallbackPool.size - candidates.size}; totalProfiles=${configs.size}")
                 // Do not re-probe every profile through the already active VPN tunnel.
             } catch (c: CancellationException) {
                 throw c
@@ -475,6 +482,32 @@ class HomeViewModel @Inject constructor(
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(emptyList()))
             }
         }
+    }
+
+    /**
+     * Keep a small tail of valid but unverified profiles at the end of the fallback pool.
+     * A probe failure on a mobile network is not proof that the endpoint is dead, but an
+     * unbounded tail makes reconnects walk dozens of dead endpoints before giving up.
+     */
+    private fun unverifiedFallbackTail(
+        configs: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>,
+        verified: List<com.vpnproxy.subscription.SubscriptionParser.ParsedConfig>
+    ): List<ScoringEngine.ScoredServer> {
+        val verifiedKeys = verified.map { it.connectionKey() }.toSet()
+        return configs.asSequence()
+            .filterNot { it.connectionKey() in verifiedKeys }
+            .filterNot { autoSwitcher.isBlacklisted(it) }
+            .take(FALLBACK_UNVERIFIED_TAIL_LIMIT)
+            .map { config ->
+                ScoringEngine.ScoredServer(
+                    config = config,
+                    latencyMs = Long.MAX_VALUE,
+                    speedMbps = 0f,
+                    successRate = 0f,
+                    score = 0f
+                )
+            }
+            .toList()
     }
 
     fun setAutomaticMode(enabled: Boolean) {
@@ -620,17 +653,28 @@ class HomeViewModel @Inject constructor(
                 val reachable = withTimeoutOrNull(SERVER_SELECTION_TIMEOUT_MS) {
                     serverScanner.scanForConnection(
                         configs = configs,
-                        targetAvailableCount = configs.size + 1,
+                        targetAvailableCount = configs.size.coerceAtMost(PREFLIGHT_TARGET_SERVERS),
                         preferredConfig = manuallySelectedServer?.config,
                         forceFresh = false
                     )
                 }
-                if (reachable == null) {
-                    endConnectFlow()
-                    connectionCoordinator.send(ConnectionEvent.ShowError("Проверка серверов заняла слишком много времени. Повторите подключение."))
-                    return@launch
+                val reachableResults = if (reachable == null) {
+                    // A timeout does not mean every profile is dead: the scanner publishes
+                    // each measured batch, so reuse the partially verified profiles.
+                    val partial = serverScanner.availableServers()
+                        .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
+                        .sorted()
+                    if (partial.isEmpty()) {
+                        endConnectFlow()
+                        connectionCoordinator.send(ConnectionEvent.ShowError("Проверка серверов заняла слишком много времени. Повторите подключение."))
+                        return@launch
+                    }
+                    logCollector.warn(TAG, tmsg("Preflight timed out; using ${partial.size} partially verified profiles"))
+                    partial
+                } else {
+                    reachable
                 }
-                val verifiedServers = reachable
+                val verifiedServers = reachableResults
                     .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                     .sorted()
                 val verifiedConfigs = verifiedServers.map { it.config }
@@ -683,7 +727,8 @@ class HomeViewModel @Inject constructor(
                     logCollector.info(TAG, tmsg("Server recommendation is ready; waiting for explicit user confirmation"))
                     return@launch
                 }
-                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(verifiedServers))
+                val fallbackPool = verifiedServers + unverifiedFallbackTail(configs, verifiedConfigs)
+                connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(fallbackPool))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 ensureServiceRunning()

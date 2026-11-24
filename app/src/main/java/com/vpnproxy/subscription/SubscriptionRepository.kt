@@ -49,6 +49,9 @@ class SubscriptionRepository @Inject constructor(
 ) {
     companion object {
         private const val TAG = "SubRepo"
+        // A provider that legitimately shrinks from many profiles to a couple is far more
+        // likely to return a partial device-limit stub than a real server-list change.
+        private const val PROVIDER_SHRINK_GUARD_MIN_PROFILES = 5
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
         private const val KEY_DEVICE_METADATA_CONSENT = "device_metadata_consent_v1"
@@ -532,8 +535,16 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
                             }
-                            if (parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
-                                throw IOException("Cached subscription body contains no valid server configs")
+                            if (looksLikeDeviceLimitStub(cachedBody) || parser.parse(cachedBody, providerTag = sub.name).isEmpty()) {
+                                // Drop a cached placeholder/empty body on every alias so a later
+                                // 304 cannot keep serving content that can never connect.
+                                encryptedPrefs?.edit()
+                                    ?.remove(bodyKey)
+                                    ?.remove(etagKey)
+                                    ?.remove(legacyBodyKey)
+                                    ?.remove(legacyEtagKey)
+                                    ?.apply()
+                                throw IOException("Cached subscription body is a placeholder or contains no valid server configs")
                             }
                             logCollector.info(TAG, "Subscription unchanged (ETag 304)")
                             return@withContext SubscriptionFetchResult(cachedBody, fromEtagCache = true)
@@ -548,8 +559,30 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
                             throw IOException("Empty response body")
                         }
-                        if (parser.parse(body, providerTag = sub.name).isEmpty()) {
+                        val parsedFromBody = parser.parse(body, providerTag = sub.name)
+                        if (parsedFromBody.isEmpty()) {
+                            if (looksLikeDeviceLimitStub(body)) {
+                                logCollector.error(
+                                    TAG,
+                                    "Subscription panel returned a device-limit placeholder (loopback endpoints); keeping the previous server list"
+                                )
+                                throw IOException(
+                                    "Subscription panel returned a device-limit placeholder; remove an old device or renew the subscription"
+                                )
+                            }
                             throw IOException("Subscription source returned no valid server configs")
+                        }
+                        val previousProviderCount = loadConfigsFromCache().count { it.providerTag == sub.name }
+                        if (previousProviderCount >= PROVIDER_SHRINK_GUARD_MIN_PROFILES &&
+                            parsedFromBody.size * 2 < previousProviderCount
+                        ) {
+                            logCollector.error(
+                                TAG,
+                                "Subscription ${sub.name} shrank from $previousProviderCount to ${parsedFromBody.size} profiles; keeping the previous server list"
+                            )
+                            throw IOException(
+                                "Subscription source returned ${parsedFromBody.size} of $previousProviderCount profiles; check the provider panel"
+                            )
                         }
                         val newEtag = response.header("ETag")
                         val editor = encryptedPrefs?.edit()?.putString(bodyKey, body)
