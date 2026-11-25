@@ -22,12 +22,15 @@ import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
+import com.vpnproxy.ui.durability.DurabilityScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
 import com.vpnproxy.ui.servers.ServersListScreen
+import com.vpnproxy.ui.services.ServicesScreen
 import com.vpnproxy.ui.settings.SettingsScreen
 import com.vpnproxy.ui.subscriptions.SubscriptionsScreen
 import com.vpnproxy.ui.theme.VPNProxyTheme
@@ -160,7 +163,11 @@ private fun VPNProxyNavHost(
                 viewModel = homeViewModel,
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
                 onNavigateToDebug = { navController.navigate(Route.Debug.path) },
-                onNavigateToSettings = { navController.navigate(Route.Settings.path) }
+                onNavigateToSettings = { navController.navigate(Route.Settings.path) },
+                onNavigateToServices = {
+                    if (FeatureFlags.SERVICE_CHECK_ENABLED) navController.navigate(Route.Services.path)
+                },
+                showServicesEntry = FeatureFlags.SERVICE_CHECK_ENABLED
             )
         }
 
@@ -185,11 +192,24 @@ private fun VPNProxyNavHost(
         }
 
         composable(Route.Settings.path) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToDurability = { navController.navigate(Route.Durability.path) }
+            )
+        }
+
+        composable(Route.Durability.path) {
+            DurabilityScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Route.Debug.path) {
             DebugScreen(onBack = { navController.popBackStack() })
+        }
+
+        if (FeatureFlags.SERVICE_CHECK_ENABLED) {
+            composable(Route.Services.path) {
+                ServicesScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }
@@ -200,4 +220,6 @@ sealed class Route(val path: String) {
     data object Servers : Route("servers")
     data object Settings : Route("settings")
     data object Debug : Route("debug")
+    data object Services : Route("services")
+    data object Durability : Route("durability")
 }

@@ -1,14 +1,28 @@
 package com.vpnproxy.di
 
+import com.vpnproxy.core.services.HttpServiceProbe
+import com.vpnproxy.core.services.ServiceProbe
 import dagger.Module
+import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
 
 /**
  * Hilt-модуль приложения.
- * Все зависимости используют @Inject constructor и не требуют явных провайдеров.
- * Модуль оставлен как точка расширения (например, для будущих кастомных биндингов).
+ * Почти все зависимости используют @Inject constructor; здесь — только биндинги
+ * интерфейсов, которым нужна явная реализация.
  */
 @Module
 @InstallIn(SingletonComponent::class)
-object AppModule
+object AppModule {
+
+    /**
+     * Боевая проба: ходит только через локальный mixed inbound запущенного ядра.
+     * Вынесена в провайдер, чтобы в тестах подменять её интерфейсом [ServiceProbe],
+     * а не мутабельным полем синглтона.
+     */
+    @Provides
+    @Singleton
+    fun provideServiceProbe(): ServiceProbe = HttpServiceProbe()
+}
