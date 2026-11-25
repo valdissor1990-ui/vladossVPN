@@ -73,7 +73,25 @@ fun DurabilityScreen(
             )
             Spacer(Modifier.height(16.dp))
 
-            BypassProfile.entries.forEach { profile ->
+            if (state.profile == BypassProfile.CUSTOM) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                    )
+                ) {
+                    Text(
+                        "Сейчас включены нестандартные параметры маскировки. Выберите профиль ниже, чтобы заменить их готовым набором.",
+                        color = HappMuted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            BypassProfile.entries.filter { it.selectable }.forEach { profile ->
                 ProfileCard(
                     profile = profile,
                     selected = state.profile == profile,
@@ -100,8 +118,8 @@ fun DurabilityScreen(
             if (FeatureFlags.BYPASS_AUTOPILOT_ENABLED) {
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Автопилот включён: при неудачном подключении приложение само переберёт до " +
-                        "${com.vpnproxy.core.durability.BypassOrchestrator.MAX_ATTEMPTS} профилей и остановится.",
+                    "Автопилот включён: при неудачном подключении приложение само сменит профиль до " +
+                        "${com.vpnproxy.core.durability.BypassOrchestrator.MAX_ATTEMPTS} раз и остановится.",
                     color = HappMuted,
                     fontSize = 12.sp
                 )
@@ -139,7 +157,7 @@ private fun ProfileCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            RadioButton(selected = selected, onClick = onClick)
+            RadioButton(selected = selected, onClick = null)
             Column {
                 Text(
                     profile.title,

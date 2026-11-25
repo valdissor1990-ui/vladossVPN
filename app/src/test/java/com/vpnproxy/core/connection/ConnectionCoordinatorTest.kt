@@ -5,6 +5,7 @@ import com.vpnproxy.smartconnect.ScoringEngine
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -80,6 +81,45 @@ class ConnectionCoordinatorTest {
         coordinator.send(ConnectionEvent.ServiceStopped)
         Thread.sleep(150)
         assertEquals("preflight failed", (coordinator.state.value as ConnectionState.Error).message)
+    }
+
+    @Test
+    fun showError_replacesChangedErrorAndIgnoresIdenticalOne() {
+        sendAndWait(ConnectionEvent.ShowError("first failure", retryable = true)) {
+            (coordinator.state.value as? ConnectionState.Error)?.message == "first failure"
+        }
+
+        sendAndWait(ConnectionEvent.ShowError("second failure", retryable = false)) {
+            (coordinator.state.value as? ConnectionState.Error)?.let {
+                it.message == "second failure" && !it.retryable
+            } == true
+        }
+
+        // An identical error must not produce a new state object: re-emitting it would let
+        // the autopilot react to the same failure twice.
+        val before = coordinator.state.value
+        coordinator.send(ConnectionEvent.ShowError("second failure", retryable = false))
+        Thread.sleep(150)
+        assertSame(before, coordinator.state.value)
+    }
+
+    @Test
+    fun fatalLock_rejectsServerSelectedWithoutManualConnect() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+
+        coordinator.send(ConnectionEvent.ServerSelected(sampleServer()))
+        Thread.sleep(150)
+
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
     }
 
     @Test

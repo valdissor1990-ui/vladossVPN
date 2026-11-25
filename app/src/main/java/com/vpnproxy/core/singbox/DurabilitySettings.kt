@@ -42,12 +42,12 @@ data class DurabilityOptions(
  * start, because [com.vpnproxy.service.VpnProxyService] reads these options once at launch.
  */
 object DurabilitySettings {
-    private const val PREFS = "durability_settings"
+    internal const val PREFS_NAME = "durability_settings"
 
     val utlsFingerprints = listOf("chrome", "firefox", "edge", "safari", "ios", "android", "random", "randomized")
 
     fun load(context: Context): DurabilityOptions {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val fingerprint = prefs.getString("utls_fingerprint", null)?.takeIf { it in utlsFingerprints }
         return DurabilityOptions(
             nativeUrlTestEnabled = prefs.getBoolean("native_url_test", false),
@@ -61,7 +61,7 @@ object DurabilitySettings {
 
     fun save(context: Context, options: DurabilityOptions) {
         val fingerprint = options.utlsFingerprint?.takeIf { it in utlsFingerprints }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putBoolean("native_url_test", options.nativeUrlTestEnabled)
             .putInt("url_test_standby_count", options.urlTestStandbyCount.coerceIn(0, DurabilityOptions.MAX_STANDBY_COUNT))
             .putBoolean("tls_fragment", options.tlsFragmentEnabled)

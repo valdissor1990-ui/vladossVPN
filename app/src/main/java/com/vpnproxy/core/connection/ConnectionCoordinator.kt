@@ -23,7 +23,12 @@ sealed class ConnectionState {
     data class Verifying(val serverName: String) : ConnectionState()
     data object Disconnecting : ConnectionState()
     data object Reconnecting : ConnectionState()
-    data class Error(val message: String) : ConnectionState()
+    /**
+     * @param retryable whether an automatic attempt may help. Fatal reasons such as a missing
+     * VPN permission or another active VPN set this to false, so the bypass autopilot stays
+     * out of situations a TLS preset cannot fix.
+     */
+    data class Error(val message: String, val retryable: Boolean = true) : ConnectionState()
 }
 
 sealed class ConnectionEvent {
@@ -49,7 +54,7 @@ sealed class ConnectionEvent {
         val validationId: Long = -1L
     ) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
-    data class ShowError(val message: String) : ConnectionEvent()
+    data class ShowError(val message: String, val retryable: Boolean = true) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
     data class ForceDisconnected(val reason: String = "") : ConnectionEvent()
 }
@@ -155,6 +160,9 @@ class ConnectionCoordinator @Inject constructor(
     fun hasSelectedServer(): Boolean = hasServerSelected
     fun currentRetryCount(): Int = retryCount
 
+    /** True while a fatal failure blocks automatic attempts; only a manual Connect clears it. */
+    fun isFatalLocked(): Boolean = isFatalErrorLocked
+
     private fun logI(message: String) = logCollector.info(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
     private fun logD(message: String) = logCollector.debug(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
     private fun logW(message: String) = logCollector.warn(TAG, TraceId.format(TAG, message, activeTraceId).removePrefix("$TAG | "))
@@ -195,7 +203,7 @@ class ConnectionCoordinator @Inject constructor(
         retryCount = 0
         isFatalErrorLocked = true
         cancelSelectionJob()
-        setState(ConnectionState.Error(reason.userMessage()), reason = reason.toString())
+        setState(ConnectionState.Error(reason.userMessage(), reason.isRetryable()), reason = reason.toString())
     }
 
     private fun cancelSelectionJob() {
@@ -298,6 +306,10 @@ class ConnectionCoordinator @Inject constructor(
                         return
                     }
                 }
+                if (isFatalErrorLocked) {
+                    logW("ServerSelected ignored — fatal lock is active; waiting for manual action")
+                    return
+                }
                 if (!isWithinProviderScope(event.server)) {
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
@@ -385,12 +397,16 @@ class ConnectionCoordinator @Inject constructor(
                 }
             }
             is ConnectionEvent.ShowError -> {
-                if (current is ConnectionState.Error) {
-                    logD("ShowError ignored — already in Error: ${current.message}")
+                val next = ConnectionState.Error(event.message, event.retryable)
+                // A preflight retry can fail while the coordinator still holds the previous
+                // Error. Replacing it keeps the message current; an identical error is left
+                // alone so it cannot re-trigger the autopilot for the same failure.
+                if (current == next) {
+                    logD("ShowError ignored — same error is already shown: ${next.message}")
                     return
                 }
                 retryCount = 0
-                setState(ConnectionState.Error(event.message), reason = "ShowError")
+                setState(next, reason = "ShowError")
             }
             is ConnectionEvent.ResetRetryCount -> {
                 retryCount = 0
@@ -492,7 +508,7 @@ class ConnectionCoordinator @Inject constructor(
                             retryCount = 0
                             isFatalErrorLocked = true
                             cancelSelectionJob()
-                            setState(ConnectionState.Error(NETWORK_FAILURE_MESSAGE), reason = "networkWideFailureSuspected")
+                            setState(ConnectionState.Error(NETWORK_FAILURE_MESSAGE, retryable = false), reason = "networkWideFailureSuspected")
                             return
                         }
 

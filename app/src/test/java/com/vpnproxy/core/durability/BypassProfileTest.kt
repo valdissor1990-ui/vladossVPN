@@ -10,7 +10,7 @@ import org.junit.Test
 class BypassProfileTest {
 
     @Test
-    fun normalIsTheGoldenPath() {
+    fun normalIsTheGoldenTransportPath() {
         val options = BypassProfile.NORMAL.applyTo(DurabilityOptions(nativeUrlTestEnabled = true))
 
         assertFalse(options.tlsFragmentEnabled)
@@ -35,21 +35,57 @@ class BypassProfileTest {
 
         assertTrue(options.tlsFragmentEnabled)
         assertTrue(options.tlsRecordFragmentEnabled)
-        assertEquals("chrome", options.utlsFingerprint)
+        assertEquals(BypassProfile.STEALTH_FINGERPRINT, options.utlsFingerprint)
     }
 
     @Test
-    fun detectMatchesAppliedPreset() {
-        BypassProfile.entries.forEach { profile ->
+    fun detectMatchesEverySelectablePreset() {
+        BypassProfile.entries.filter { it.selectable }.forEach { profile ->
             val options = profile.applyTo(DurabilityOptions())
             assertEquals(profile, BypassProfile.detect(options))
         }
     }
 
     @Test
-    fun detectTreatsRecordFragmentOnlyAsHardNetwork() {
+    fun recordFragmentOnlyIsCustom() {
         val options = DurabilityOptions(tlsRecordFragmentEnabled = true)
 
-        assertEquals(BypassProfile.HARD_NETWORK, BypassProfile.detect(options))
+        assertEquals(BypassProfile.CUSTOM, BypassProfile.detect(options))
+    }
+
+    @Test
+    fun fingerprintWithoutFragmentationIsCustom() {
+        val options = DurabilityOptions(utlsFingerprint = "chrome")
+
+        assertEquals(BypassProfile.CUSTOM, BypassProfile.detect(options))
+    }
+
+    @Test
+    fun unexpectedFingerprintIsCustom() {
+        val options = DurabilityOptions(
+            tlsFragmentEnabled = true,
+            tlsRecordFragmentEnabled = true,
+            utlsFingerprint = "safari"
+        )
+
+        assertEquals(BypassProfile.CUSTOM, BypassProfile.detect(options))
+    }
+
+    @Test
+    fun customPresetDoesNotRewriteOptions() {
+        val options = DurabilityOptions(utlsFingerprint = "safari")
+
+        assertEquals(options, BypassProfile.CUSTOM.applyTo(options))
+        assertFalse(BypassProfile.CUSTOM.selectable)
+    }
+
+    @Test
+    fun normalClearsFingerprintLeftByCustomSetup() {
+        val custom = DurabilityOptions(tlsFragmentEnabled = true, utlsFingerprint = "safari")
+
+        val normal = BypassProfile.NORMAL.applyTo(custom)
+
+        assertFalse(normal.tlsFragmentEnabled)
+        assertNull(normal.utlsFingerprint)
     }
 }
