@@ -23,32 +23,31 @@ import javax.inject.Singleton
  * the remaining targets instead of reporting a misleading verdict.
  */
 @Singleton
-class ServiceChecker @Inject constructor() {
-
-    internal constructor(probe: ServiceProbe) : this() {
-        this.testProbe = probe
-    }
+class ServiceChecker @Inject constructor(
+    private val probe: ServiceProbe
+) {
 
     companion object {
-        private const val MAX_CONCURRENCY = 3
+        /**
+         * 7 targets in 2 waves at a 3 s per-attempt timeout: worst case ~12 s, which fits
+         * inside the ViewModel's 20 s deadline. Three permits would allow ~24 s and turn a
+         * dead upstream into an empty result table.
+         */
+        private const val MAX_CONCURRENCY = 4
     }
-
-    private var testProbe: ServiceProbe? = null
-
-    private val defaultProbe by lazy { HttpServiceProbe() }
-
-    private val probe: ServiceProbe
-        get() = testProbe ?: defaultProbe
 
     private val runMutex = Mutex()
 
     /**
+     * @param onResult called as soon as each target finishes, so the caller can keep partial
+     * results if the sweep is cancelled or hits its deadline.
      * @return results, or null when a sweep is already running.
      */
     suspend fun checkAll(
         targets: List<ServiceTarget> = ServiceCatalog.defaultTargets,
         vpnActive: () -> Boolean,
-        coreTransitioning: () -> Boolean = { false }
+        coreTransitioning: () -> Boolean = { false },
+        onResult: ((ServiceCheckResult) -> Unit)? = null
     ): List<ServiceCheckResult>? {
         if (!runMutex.tryLock()) return null
         try {
@@ -62,7 +61,11 @@ class ServiceChecker @Inject constructor() {
                 val semaphore = Semaphore(MAX_CONCURRENCY)
                 targets.map { target ->
                     async(Dispatchers.IO) {
-                        semaphore.withPermit { probeOne(target, vpnActive, coreTransitioning) }
+                        val result = semaphore.withPermit {
+                            probeOne(target, vpnActive, coreTransitioning)
+                        }
+                        onResult?.invoke(result)
+                        result
                     }
                 }.awaitAll()
             }

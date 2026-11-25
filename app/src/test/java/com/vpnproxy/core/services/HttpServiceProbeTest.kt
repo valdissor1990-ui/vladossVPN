@@ -20,6 +20,10 @@ import kotlin.concurrent.thread
  */
 class HttpServiceProbeTest {
 
+    private companion object {
+        const val HEAD_DELAY_MS = 300L
+    }
+
     private lateinit var server: ServerSocket
     private var port: Int = 0
 
@@ -53,7 +57,12 @@ class HttpServiceProbeTest {
         val method = parts.getOrNull(0).orEmpty()
         val path = parts.getOrNull(1).orEmpty()
         val response = when {
-            path == "/head-rejected" && method == "HEAD" -> status(405, "Method Not Allowed")
+            path == "/head-rejected" && method == "HEAD" -> {
+                // Slow rejection: a latency that sums HEAD+GET would exceed the threshold
+                // asserted in latencyComesFromTheSuccessfulAttemptOnly.
+                Thread.sleep(HEAD_DELAY_MS)
+                status(405, "Method Not Allowed")
+            }
             path == "/head-rejected" && method == "GET" -> ok("OK")
             path == "/redirect" -> status(302, "Found", extraHeaders = "Location: http://example.invalid/\r\n")
             path == "/forbidden" -> status(403, "Forbidden")
@@ -109,7 +118,7 @@ class HttpServiceProbeTest {
     fun latencyComesFromTheSuccessfulAttemptOnly() = runBlocking {
         val result = probe().probe(target("/head-rejected"))
 
-        // Both attempts hit a local server; the value must stay small instead of doubling.
-        assertTrue("latency=${result.latencyMs}", result.latencyMs < 2_000L)
+        // HEAD is slowed down by HEAD_DELAY_MS; summing both attempts would exceed it.
+        assertTrue("latency=${result.latencyMs}", result.latencyMs < HEAD_DELAY_MS)
     }
 }

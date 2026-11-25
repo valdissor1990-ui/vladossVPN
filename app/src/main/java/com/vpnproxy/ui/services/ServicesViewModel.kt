@@ -44,10 +44,20 @@ class ServicesViewModel @Inject constructor(
         private const val RUN_TIMEOUT_MS = 20_000L
     }
 
-    private val _state = MutableStateFlow(ServicesUiState())
+    private val _state = MutableStateFlow(
+        // Seed with the current tunnel state so the first frame does not claim "VPN off"
+        // while it is actually running; the live subscription then keeps it fresh.
+        ServicesUiState(
+            vpnActive = VpnProxyService.isRunning.value,
+            coreTransitioning = VpnProxyService.isCoreTransitioning.value
+        )
+    )
     val state: StateFlow<ServicesUiState> = _state.asStateFlow()
 
     private var runJob: Job? = null
+
+    /** Guards against an old coroutine's `finally` clearing the flag of a newer run. */
+    private var runGeneration = 0
 
     init {
         // Live tunnel state: the screen must never claim "VPN is off" while it is on.
@@ -67,13 +77,17 @@ class ServicesViewModel @Inject constructor(
             _state.update { it.copy(message = BUSY_TEXT) }
             return
         }
+        val generation = ++runGeneration
+        // Collected as targets finish: if the deadline hits, the user still sees partial data.
+        val partial = java.util.concurrent.ConcurrentHashMap<String, ServiceCheckResult>()
         runJob = viewModelScope.launch {
             try {
                 val results = withTimeout(RUN_TIMEOUT_MS) {
                     checker.checkAll(
                         targets = ServiceCatalog.defaultTargets,
                         vpnActive = { VpnProxyService.isRunning.value },
-                        coreTransitioning = { VpnProxyService.isCoreTransitioning.value }
+                        coreTransitioning = { VpnProxyService.isCoreTransitioning.value },
+                        onResult = { result -> partial[result.serviceId] = result }
                     )
                 }
                 if (results == null) {
@@ -98,17 +112,33 @@ class ServicesViewModel @Inject constructor(
                     )
                 }
             } catch (timeout: TimeoutCancellationException) {
-                _state.update { it.copy(message = TIMEOUT_TEXT) }
+                // Keep what already arrived: a dead upstream must not produce an empty table.
+                _state.update {
+                    it.copy(
+                        results = partial.toMap(),
+                        lastCheckedAt = if (partial.isEmpty()) it.lastCheckedAt
+                        else System.currentTimeMillis(),
+                        message = TIMEOUT_TEXT
+                    )
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 // Technical details belong in the journal, not in the UI.
                 logCollector.warn(TAG, "SERVICE-CHECK failed error=${error.javaClass.simpleName}")
-                _state.update { it.copy(message = ERROR_TEXT) }
+                _state.update {
+                    it.copy(
+                        results = partial.toMap().ifEmpty { it.results },
+                        message = ERROR_TEXT
+                    )
+                }
             } finally {
                 // Runs on success, failure and cancellation: without it a cancelled sweep
-                // would leave the button stuck on "already running" forever.
-                _state.update { it.copy(isChecking = false) }
+                // would leave the button stuck on "already running" forever. The generation
+                // check keeps a late `finally` from clearing the flag of a newer run.
+                if (generation == runGeneration) {
+                    _state.update { it.copy(isChecking = false) }
+                }
             }
         }
     }
@@ -117,8 +147,9 @@ class ServicesViewModel @Inject constructor(
     fun cancel() {
         runJob?.cancel()
         runJob = null
-        // A cancel that arrives before the coroutine starts never reaches its `finally`,
-        // so the flag is released here as well.
+        // Invalidate the cancelled coroutine's `finally`, then release the flag here:
+        // a cancel that lands before the coroutine starts never reaches its `finally`.
+        runGeneration++
         _state.update { it.copy(isChecking = false) }
     }
 

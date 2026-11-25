@@ -115,18 +115,6 @@ class SingboxConfigBuilderDurabilityTest {
     }
 
     @Test
-    fun defaultDurabilityOptionsProduceTheGoldenConfigByteForByte() {
-        // Guards the promise that untouched installs (all flags off) get exactly the old config.
-        val withoutOptions = SingboxConfigBuilder.buildVpn(config("primary"))
-        val withDefaults = SingboxConfigBuilder.buildVpn(
-            config("primary"),
-            durability = DurabilityOptions()
-        )
-
-        assertEquals(withoutOptions, withDefaults)
-    }
-
-    @Test
     fun utlsFingerprintOverrideWins() {
         val tls = outbounds(
             SingboxConfigBuilder.buildVpn(

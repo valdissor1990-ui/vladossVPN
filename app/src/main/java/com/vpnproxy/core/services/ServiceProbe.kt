@@ -39,7 +39,11 @@ class HttpServiceProbe(
 ) : ServiceProbe {
 
     companion object {
-        private const val TIMEOUT_MS = 4_000
+        /**
+         * Per-attempt timeout. Kept below the sweep deadline budget: 7 targets in 2 waves
+         * with HEAD+GET fallback must fit inside the ViewModel's 20 s limit.
+         */
+        private const val TIMEOUT_MS = 3_000
         private const val USER_AGENT = "vladossVPN/1.0"
 
         /** Bodies are drained with a cap so a huge page cannot stall the sweep. */

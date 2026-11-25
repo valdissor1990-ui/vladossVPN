@@ -1,5 +1,7 @@
 package com.vpnproxy.ui.services
 
+import com.vpnproxy.core.services.ServiceCatalog
+import com.vpnproxy.core.services.ServiceCheckStatus
 import com.vpnproxy.core.services.ServiceChecker
 import com.vpnproxy.core.services.ServiceProbe
 import com.vpnproxy.core.services.ServiceProbeResult
@@ -52,8 +54,8 @@ class ServicesViewModelTest {
         val state = vm.state.value
         assertFalse("isChecking must be cleared after the sweep", state.isChecking)
         // No VPN in the unit test: every service is reported as VPN_OFF.
-        assertEquals(7, state.results.size)
-        assertTrue(state.results.values.all { it.status.name == "VPN_OFF" })
+        assertEquals(ServiceCatalog.defaultTargets.size, state.results.size)
+        assertTrue(state.results.values.all { it.status == ServiceCheckStatus.VPN_OFF })
     }
 
     @Test
