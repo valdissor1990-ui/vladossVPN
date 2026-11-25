@@ -31,7 +31,10 @@ sealed class VpnFailureReason {
      */
     fun isPresetRetryable(): Boolean = when (this) {
         is NetworkTimeout -> true
-        is CoreError -> !isFatalCoreMessage(message)
+        // A local core start failure is retried and may fall back to another server, but a
+        // TLS preset cannot fix it. Keep this check here instead of isFatalCoreMessage():
+        // that predicate also disables coordinator retries and server fallback.
+        is CoreError -> !isFatalCoreMessage(message) && !isLocalCoreStartFailure(message)
         // A blank or unknown failure carries no evidence that TLS hardening can help.
         else -> false
     }
@@ -76,10 +79,18 @@ sealed class VpnFailureReason {
         private fun isProfileConfigurationError(message: String): Boolean =
             isConfigurationError(message)
 
+        /**
+         * A local libbox start failure: the coordinator should retry and fall back to the next
+         * server, but the bypass autopilot must not rewrite TLS settings for it.
+         */
+        private fun isLocalCoreStartFailure(message: String): Boolean {
+            val m = message.lowercase()
+            return m.contains("unable to start libbox") || m.contains("failed to start libbox")
+        }
+
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()
             return isConfigurationError(message) ||
-                m.contains("unable to start libbox") ||
                 m.contains("another vpn") ||
                 m.contains("permission denied") ||
                 m.contains("permission is missing") ||

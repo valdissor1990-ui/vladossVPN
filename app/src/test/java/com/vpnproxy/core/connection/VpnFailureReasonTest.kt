@@ -57,6 +57,17 @@ class VpnFailureReasonTest {
     }
 
     @Test
+    fun localLibboxStartFailureStaysRetryableAndFallsBackWithoutPresetChange() {
+        val reason = VpnFailureReason.CoreError("Unable to start libbox 1.14.3: native init failed")
+
+        // Coordinator retries and may try the next server: a local start failure is not a
+        // reason to lock the actor. The autopilot, however, must not rewrite TLS settings.
+        assertTrue(reason.isRetryable())
+        assertTrue(reason.canFallbackToNextServer())
+        assertFalse(reason.isPresetRetryable())
+    }
+
+    @Test
     fun decodeConfigSchemaErrorsAllowFallback() {
         val reason = VpnFailureReason.fromMessage(
             "libbox failed to parse config: configuration schema mismatch"
