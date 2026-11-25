@@ -24,9 +24,10 @@ sealed class ConnectionState {
     data object Disconnecting : ConnectionState()
     data object Reconnecting : ConnectionState()
     /**
-     * @param retryable whether an automatic attempt may help. Fatal reasons such as a missing
-     * VPN permission or another active VPN set this to false, so the bypass autopilot stays
-     * out of situations a TLS preset cannot fix.
+     * @param retryable whether changing the transport durability preset may help. It is not a
+     * generic "retry the coordinator" flag: local port collisions and malformed profiles are
+     * retried by the coordinator itself but must not consume an autopilot step. Fatal reasons
+     * always set this to false.
      */
     data class Error(val message: String, val retryable: Boolean = true) : ConnectionState()
 }
@@ -54,6 +55,7 @@ sealed class ConnectionEvent {
         val validationId: Long = -1L
     ) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
+    /** @param retryable whether the bypass autopilot may react to this failure. */
     data class ShowError(val message: String, val retryable: Boolean = true) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
     data class ForceDisconnected(val reason: String = "") : ConnectionEvent()
@@ -203,7 +205,7 @@ class ConnectionCoordinator @Inject constructor(
         retryCount = 0
         isFatalErrorLocked = true
         cancelSelectionJob()
-        setState(ConnectionState.Error(reason.userMessage(), reason.isPresetRetryable()), reason = reason.toString())
+        setState(ConnectionState.Error(reason.userMessage(), retryable = false), reason = reason.toString())
     }
 
     private fun cancelSelectionJob() {

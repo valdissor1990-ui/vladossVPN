@@ -31,8 +31,8 @@ sealed class VpnFailureReason {
      */
     fun isPresetRetryable(): Boolean = when (this) {
         is NetworkTimeout -> true
-        is CoreError -> !isFatalCoreMessage(message) && !isConfigurationError(message)
-        is Unknown -> true
+        is CoreError -> !isFatalCoreMessage(message)
+        // A blank or unknown failure carries no evidence that TLS hardening can help.
         else -> false
     }
 
@@ -79,6 +79,7 @@ sealed class VpnFailureReason {
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()
             return isConfigurationError(message) ||
+                m.contains("unable to start libbox") ||
                 m.contains("another vpn") ||
                 m.contains("permission denied") ||
                 m.contains("permission is missing") ||
