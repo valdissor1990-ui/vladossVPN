@@ -313,6 +313,47 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun staleOutOfScopeSelectionDoesNotCancelAnInFlightAttempt() {
+        // A stale event from an older selection must be dropped in Verifying: otherwise it
+        // clears the live attempt and shows a non-retryable error to the user.
+        assertTrue(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
+        // While still waiting for any server, the rejection must be reported instead of
+        // silently timing out.
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Connecting,
+                hasServerSelected = false,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
+        // No trace id or the current trace id: the event is current, so the scope verdict wins.
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = null,
+                activeTraceId = "current"
+            )
+        )
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = "current",
+                activeTraceId = "current"
+            )
+        )
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()

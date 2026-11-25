@@ -94,6 +94,17 @@ class FailureBanPolicyTest {
     }
 
     @Test
+    fun localCommandServerEofDoesNotBanTheServer() {
+        // "read EOF" from the control socket is a local lifecycle failure, not a dead remote
+        // endpoint. Banning here would blacklist a healthy profile and skip it on fallback.
+        val message = "CommandServer read EOF while waiting for status"
+        assertEquals(
+            FailureBanPolicy.Action.NO_BAN,
+            FailureBanPolicy.action(VpnFailureReason.CoreError(message), message)
+        )
+    }
+
+    @Test
     fun localLibboxStartFailureDoesNotBan() {
         val message = "Unable to start libbox 1.14.3: native init failed"
         assertEquals(

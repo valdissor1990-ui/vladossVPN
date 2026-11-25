@@ -89,7 +89,12 @@ sealed class VpnFailureReason {
             val m = message.lowercase()
             return m.contains("unable to start libbox") ||
                 m.contains("failed to start libbox") ||
-                m.contains("opentun failed")
+                m.contains("opentun failed") ||
+                // CommandServer and libbox lifecycle errors are local: a bare "read EOF" from
+                // the control socket must not blacklist a healthy endpoint.
+                m.contains("commandserver") ||
+                m.contains("command server") ||
+                m.contains("libbox")
         }
 
         /**

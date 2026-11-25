@@ -36,6 +36,7 @@ import com.vpnproxy.core.dualpath.ServerRegionClassifier
 import com.vpnproxy.core.singbox.DiagnosticProbe
 import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.logging.LogCollector
+import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import com.vpnproxy.smartconnect.AutoSwitcher
 import com.vpnproxy.smartconnect.NetworkBucketProvider
 import com.vpnproxy.smartconnect.DeepProbeEngine
@@ -106,6 +107,11 @@ class VpnProxyService : VpnService() {
     private var vpnJob: Job? = null
     @Volatile private var restartRequestGeneration: Long = 0L
     @Volatile private var restartCompletedGeneration: Long = 0L
+    /**
+     * Profile the core was actually asked to start. A late error callback must ban this
+     * profile, not whichever candidate the coordinator has already selected next.
+     */
+    @Volatile private var startedConfig: ParsedConfig? = null
     private var stateCollectorJob: Job? = null
     private var idleStopJob: Job? = null
     private var networkReconnector: NetworkAwareReconnector? = null
@@ -484,6 +490,7 @@ class VpnProxyService : VpnService() {
             }
 
             logCollector.info(TAG, "Starting Sing-box for ${parsed.name} (${parsed.transport}/${parsed.security})")
+            startedConfig = parsed
             val controller = lifecycleController ?: error("VPN lifecycle controller was not initialized")
             try {
                 val diagnosticEnabled = com.vpnproxy.util.DebugFlags.diagnosticEnabled()
@@ -674,9 +681,10 @@ class VpnProxyService : VpnService() {
             return
         }
 
-        // The profile that actually failed is the selected one; the auto-switcher handle can
-        // already be cleared by a scope rejection, and then the ban would be silently lost.
-        val failedConfig = connectionCoordinator.currentSelectedServer()?.config
+        // The core was started for a specific profile: a late error must not be blamed on the
+        // candidate the coordinator selected while fallback was already running.
+        val failedConfig = startedConfig
+            ?: connectionCoordinator.currentSelectedServer()?.config
             ?: autoSwitcher.currentServer.value?.config
 
         when (FailureBanPolicy.action(reason, errorMessage)) {

@@ -80,6 +80,24 @@ class ConnectionCoordinator @Inject constructor(
          */
         internal fun keepsLiveSelectionOnOutOfScope(state: ConnectionState): Boolean =
             state is ConnectionState.Connected
+
+        /**
+         * A stale out-of-scope selection must be dropped, except while the coordinator is
+         * still waiting for a server: there, reporting the rejection is the only way to avoid
+         * a silent 90-second timeout.
+         */
+        internal fun shouldIgnoreStaleOutOfScope(
+            state: ConnectionState,
+            hasServerSelected: Boolean,
+            eventTraceId: String?,
+            activeTraceId: String?
+        ): Boolean {
+            if (eventTraceId == null || eventTraceId == activeTraceId) return false
+            val waitingForServer =
+                (state is ConnectionState.Connecting || state is ConnectionState.Reconnecting) &&
+                    !hasServerSelected
+            return !waitingForServer
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -316,6 +334,12 @@ class ConnectionCoordinator @Inject constructor(
                         logW("Live session kept; out-of-scope selection ignored")
                         return
                     }
+                    // A stale out-of-scope event must not cancel an attempt that is already in
+                    // flight: the user may be waiting for a legitimate selection to finish.
+                    if (shouldIgnoreStaleOutOfScope(current, hasServerSelected, event.traceId, activeTraceId)) {
+                        logW("Ignoring stale out-of-scope ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        return
+                    }
                     // Do not leave a stale selection behind: NetworkChanged would otherwise
                     // reconnect the core to the server that was just rejected.
                     pendingServerName = null
@@ -525,8 +549,10 @@ class ConnectionCoordinator @Inject constructor(
                     // unreliable free-pool nodes rank lower on the next selection.
                     val failedConfig = activeScoredServer?.config
                     val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
-                        detail.contains("unreachable", ignoreCase = true) ||
-                        detail.contains("DNS_ERROR", ignoreCase = true)
+                        // `detail` is built from `ProbeOutcome.name`: keep the link explicit
+                        // instead of duplicating enum strings that could drift.
+                        detail.contains(com.vpnproxy.core.probe.ProbeOutcome.UNREACHABLE.name, ignoreCase = true) ||
+                        detail.contains(com.vpnproxy.core.probe.ProbeOutcome.DNS_ERROR.name, ignoreCase = true)
                     if (failureLooksLocalOrDns) recentEndpointFailures.clear()
                     if (failedConfig != null && !failureLooksLocalOrDns) {
                         val networkWideProfiles = if (
