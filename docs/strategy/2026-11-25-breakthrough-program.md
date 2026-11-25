@@ -64,20 +64,24 @@
 
 **Архитектура:**
 
-- `core/diagnostics/DiagnosticStep.kt` — enum шагов и статусов (`OK`, `WARN`, `FAIL`, `SKIP`).
-- `core/diagnostics/DiagnosticResult.kt` — результат шага: статус, безопасное описание, длительность, `Remedy`.
-- `core/diagnostics/Remedy.kt` — sealed-класс действий: `RefreshSubscription`, `ReimportProfile`, `SwitchServer`, `ChangeDns`, `EnableTlsFragment`, `ChangeFingerprint`, `RestartCore`, `OpenSystemSettings`.
-- `core/diagnostics/ConnectionDoctor.kt` — оркестратор: последовательные шаги, таймауты, отмена, повторный запуск.
-- `core/diagnostics/RemedyExecutor.kt` — выполняет лечение через существующие репозитории и координатор.
-- `core/diagnostics/DoctorReport.kt` — безопасный отчёт для экспорта.
-- `ui/diagnostics/DoctorScreen.kt`, `DoctorViewModel.kt`.
+- `core/doctor/DiagnosticStep.kt` — enum шагов и статусов (`OK`, `WARN`, `FAIL`, `SKIP`).
+- `core/doctor/DiagnosticResult.kt` — результат шага: статус, безопасное описание, длительность, `Remedy`.
+- `core/doctor/Remedy.kt` — sealed-класс действий и их класс безопасности: `SAFE_AUTO` (`Recheck`, `OpenSettings`, `RefreshSubscription`) и `REQUIRES_CONFIRM` (`SwitchServer`, `ReimportProfile`, `RestartCore`, `ChangeDns`, `EnableTlsFragment`).
+- `core/doctor/ConnectionDoctor.kt` — оркестратор: последовательные шаги, таймауты, отмена, повторный запуск.
+- `core/doctor/RemedyExecutor.kt` — выполняет лечение через существующие репозитории и координатор.
+- `core/doctor/DoctorReport.kt` — безопасный отчёт для экспорта.
+- `ui/doctor/DoctorScreen.kt`, `DoctorViewModel.kt`.
+
+Существующий пакет `core/diagnostics` (`BatteryLogger`, `BatteryMonitor`, `DeviceIdManager`) не трогаем и не смешиваем с Доктором.
 
 **Контракты:**
 
 - Doctor не запускается автоматически при каждом коннекте. Только по кнопке «Проверить» или после fail.
-- Doctor не меняет активный сервер без подтверждения, кроме безопасных действий (DNS, фрагментация) с явным тостом.
+- Doctor не меняет активный сервер, DNS и параметры фрагментации автоматически. DNS — только показ состояния и переход в настройки; фрагментация/uTLS — только через раздел «Устойчивость» по явному действию пользователя.
+- `SAFE_AUTO`-лечения выполняются по кнопке; `REQUIRES_CONFIRM` — только после явного согласия.
 - Doctor не хранит секреты; отчёт проходит sanitizer.
 - Общий таймаут — 45 с; шаги 3–5 могут идти параллельно.
+- Доктор не блокирует первичный Connect и не запускается до первой ошибки, если пользователь не нажал кнопку.
 
 **Тесты:** pure-логика статусов и приоритета лечения; fake-репозитории для шагов; проверка, что отчёт не содержит секретов.
 
@@ -92,7 +96,7 @@
 **Архитектура:**
 
 - `core/services/ServiceCatalog.kt` — список сервисов: id, название, категория, endpoint, метод, иконка. Endpoint'ы нейтральные, без авторизации.
-- `core/services/ServiceChecker.kt` — проверка через локальный mixed inbound (`127.0.0.1:10809`), последовательно или с ограниченным параллелизмом (3).
+- `core/services/ServiceChecker.kt` — проверка через локальный mixed inbound (`127.0.0.1:10809`), последовательно или с ограниченным параллелизмом (3). Один и тот же чекер используется экраном «Проверка сервисов» и шагом 9 Доктора.
 - `core/services/ServiceCheckResult.kt` — `serviceId`, `reachable`, `latencyMs`, `httpCode`, `checkedAt`, `reason`.
 - `ui/services/ServicesScreen.kt`, `ServicesViewModel.kt` — сетка, статусы, «проверить всё», объяснение.
 
@@ -155,6 +159,7 @@
 - Не читать чужие данные без явного выбора пользователя.
 - Не сохранять исходные файлы дольше операции.
 - Не логировать содержимое.
+- Импортированные профили сохраняются только через `EncryptedSharedPreferences` + Android Keystore, как обычные.
 - Поддерживать частичный импорт: если 3 из 20 не распознаны — импортировать 17 и показать отчёт.
 
 **Тесты:** fixtures без реальных ключей; определение источника; дедуп; отчёт.
@@ -181,7 +186,7 @@
 - Все утверждения проверяемы по коду.
 - Телеметрия и crash reporting — только opt-in, по умолчанию off.
 
-**Тесты:** sanitizer, состав отчёта, отсутствие секретов.
+**Тесты:** sanitizer, состав отчёта, отсутствие секретов, unit-тест соответствия отчёта реальным флагам и настройкам.
 
 **Риски:** обещания расходятся с кодом. Смягчение: отчёт генерируется из тех же флагов, что и поведение.
 
@@ -195,7 +200,7 @@
 
 **Что делаем:**
 
-- `core/network/RoamingPolicy.kt` — pure-логика: когда reconnect, когда ждать, когда переключить сервер.
+- `core/network/RoamingPolicy.kt` — pure-логика поверх существующего `NetworkAwareReconnector`, а не второй механизм reconnect. Единая точка решения: когда reconnect, когда ждать, когда переключить сервер.
 - Профили питания: «Скорость», «Баланс», «Батарея» — влияют на интервалы и глубину проб.
 - Уведомление о деградации: «Сеть ухудшилась, переключаюсь на резервный сервер» с возможностью отменить.
 - Always-on/kill switch: проверка конфигурации и понятный статус.
@@ -218,7 +223,7 @@
 
 **Архитектура:**
 
-- `core/gateway/LocalGateway.kt` — HTTP/SOCKS прокси на локальном интерфейсе, привязка к Wi-Fi/hotspot.
+- `core/gateway/LocalGateway.kt` — HTTP/SOCKS прокси на локальном интерфейсе, привязка к Wi-Fi/hotspot. Отдельный порт, не `10809` (он занят mixed inbound); при старте проверять конфликт.
 - `core/gateway/GatewayConfig.kt` — порт, логин/пароль, разрешённые подсети.
 - `ui/gateway/GatewayScreen.kt` — включение, QR, инструкция, предупреждение.
 - `core/gateway/GatewayQr.kt` — QR с настройками.
@@ -261,9 +266,13 @@
 
 ### Волна 1 — быстрые видимые победы (0–2 недели)
 
-1. **Проверка сервисов** (3.2) — самая быстрая и заметная.
-2. **Автопилот обхода** (3.3) — код есть, вывести и оркестрировать.
-3. **Каркас Доктора** (3.1): модель, 4 шага (подписка, профиль, TCP, трафик), экран.
+Волна разбита на три независимых шага, каждый — отдельный коммит и проверка.
+
+**1a. Проверка сервисов (3.2)** — самая быстрая и заметная. Только активный mixed inbound, статус `VPN_OFF` без VPN, два attempt'а, без URL в журнале.
+
+**1b. Автопилот обхода (3.3)** — снять debug-гейт, вывести пресеты, добавить `BypassOrchestrator` с лимитом попыток и перезапуском core.
+
+**1c. Каркас Доктора (3.1)** — модель шагов, 4 безопасных шага (подписка, профиль, TCP, трафик), экран и вход из меню «Ещё».
 
 **DoD:** фичи доступны, тесты зелёные, CI зелёный, Golden path не изменён, документация обновлена.
 
@@ -303,9 +312,10 @@ core/<feature>          use cases, pure logic
 
 **Новые пакеты:**
 
-- `core/diagnostics`
-- `core/services`
-- `core/durability` (расширение существующего)
+- `core/feature` — `FeatureFlags` с дефолтами `false`
+- `core/doctor` — диагностика (не путать с существующим `core/diagnostics`)
+- `core/services` — каталог и проверка сервисов
+- `core/durability` — расширение существующего `DurabilitySettings`
 - `core/migration`
 - `core/privacy`
 - `core/gateway`
@@ -328,7 +338,7 @@ core/<feature>          use cases, pure logic
 | JVM unit | политики, статусы, парсеры, отчёты, дедуп, веса |
 | Fake-интеграция | Doctor с fake-шагами, Services с fake-клиентом, Migration с fixtures |
 | Instrumentation | TUN, split tunneling, VPN lifecycle — по возможности |
-| Device | Wi-Fi↔LTE, Doze, батарея, реальные сервисы — вручную, с фиксацией |
+| Device | Wi-Fi↔LTE, Doze, батарея, реальные сервисы — вручную, с фиксацией; минимум 2 устройства, включая Xiaomi/MIUI |
 | CI | build, unit tests, CodeQL, SBOM, dependency graph |
 
 **Запрещено:** заявлять runtime-проверку без факта; добавлять реальные ключи в fixtures.
