@@ -11,13 +11,16 @@ import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.core.connection.TraceId
+import com.vpnproxy.core.durability.BypassOrchestrator
 import com.vpnproxy.core.dualpath.DualPathStore
+import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.core.ping.LatencyBreakdown
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingService
 import com.vpnproxy.core.ping.PingTargets
 import com.vpnproxy.core.scanner.ServerScanner
 import com.vpnproxy.core.singbox.DiagnosticSettings
+import com.vpnproxy.core.singbox.DurabilitySettings
 import com.vpnproxy.core.tunnel.TrafficStatsCollector
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
@@ -57,7 +60,8 @@ class HomeViewModel @Inject constructor(
     private val connectionCoordinator: ConnectionCoordinator,
     private val lastServerStore: LastServerStore,
     private val jsonConfigRepository: JsonConfigRepository,
-    private val dualPathStore: DualPathStore
+    private val dualPathStore: DualPathStore,
+    private val bypassOrchestrator: BypassOrchestrator
 ) : ViewModel() {
 
     companion object {
@@ -202,6 +206,7 @@ class HomeViewModel @Inject constructor(
                             serverScanner.recordSuccessfulConnection(server)
                         }
                         VpnProxyService.clearError()
+                        if (FeatureFlags.BYPASS_AUTOPILOT_ENABLED) bypassOrchestrator.onConnected()
                         val prev = _uiState.value.connectionState
                         val sessionStart = if (prev != ConnectionUiState.CONNECTED) System.currentTimeMillis() else _uiState.value.sessionStartedAt
                         _uiState.value = _uiState.value.copy(
@@ -231,6 +236,7 @@ class HomeViewModel @Inject constructor(
                             flapping = if (unexpected) drops >= 3 else _uiState.value.flapping
                         )
                         logCollector.warn(TAG, tmsg("Actor Error: ${state.message}"))
+                        if (FeatureFlags.BYPASS_AUTOPILOT_ENABLED) scheduleBypassAutopilot()
                     }
                 }
             }
@@ -550,6 +556,38 @@ class HomeViewModel @Inject constructor(
         lastConnectClickMs = 0L
         logCollector.info(TAG, tmsg("User confirmed recommended server: ${server.config.name}; starting normal permission and preflight flow"))
         connect()
+    }
+
+    private var bypassJob: Job? = null
+
+    /**
+     * One step of the bypass autopilot per failed connect.
+     *
+     * It only advances the durability preset and asks for a single normal reconnect after a
+     * short pause. Retries, the fatal lock and fallback stay with [ConnectionCoordinator];
+     * [BypassOrchestrator] caps the number of preset changes, so a dead network cannot loop.
+     */
+    private fun scheduleBypassAutopilot() {
+        if (bypassJob?.isActive == true) return
+        val current = DurabilitySettings.load(context)
+        val next = bypassOrchestrator.nextProfile(current) ?: run {
+            logCollector.info(
+                TAG,
+                "BYPASS-AUTOPILOT exhausted attempts=${bypassOrchestrator.attemptsUsed()}"
+            )
+            return
+        }
+        DurabilitySettings.save(context, next.applyTo(current))
+        logCollector.info(
+            TAG,
+            "BYPASS-AUTOPILOT profile=${next.name} attempt=${bypassOrchestrator.attemptsUsed()}"
+        )
+        bypassJob = viewModelScope.launch {
+            delay(1_500)
+            if (_uiState.value.connectionState == ConnectionUiState.ERROR) {
+                connect(fromManualReconnect = true)
+            }
+        }
     }
 
     private fun connect(fromManualReconnect: Boolean = false) {

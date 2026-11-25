@@ -26,6 +26,7 @@ import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
+import com.vpnproxy.ui.durability.DurabilityScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
 import com.vpnproxy.ui.servers.ServersListScreen
@@ -191,7 +192,14 @@ private fun VPNProxyNavHost(
         }
 
         composable(Route.Settings.path) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToDurability = { navController.navigate(Route.Durability.path) }
+            )
+        }
+
+        composable(Route.Durability.path) {
+            DurabilityScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Route.Debug.path) {
@@ -213,4 +221,5 @@ sealed class Route(val path: String) {
     data object Settings : Route("settings")
     data object Debug : Route("debug")
     data object Services : Route("services")
+    data object Durability : Route("durability")
 }

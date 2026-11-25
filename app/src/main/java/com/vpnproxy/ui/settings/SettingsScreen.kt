@@ -27,6 +27,7 @@ import com.vpnproxy.ui.update.UpdateViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onNavigateToDurability: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel()
 ) {
@@ -240,6 +241,15 @@ fun SettingsScreen(
                     Text("Реже проверять серверы и отключить переключения по рейтингу", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 Switch(checked = batteryEconomyMode, onCheckedChange = { viewModel.setBatteryEconomyMode(it) })
+            }
+
+            Text("УСТОЙЧИВОСТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Профиль обхода блокировок", style = MaterialTheme.typography.bodyLarge)
+                    Text("Дробление TLS и отпечаток браузера для сложных сетей", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                TextButton(onClick = onNavigateToDurability) { Text("Настроить") }
             }
 
             Text("ОБНОВЛЕНИЯ ПРИЛОЖЕНИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))

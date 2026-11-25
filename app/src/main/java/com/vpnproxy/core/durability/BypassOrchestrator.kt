@@ -1,9 +1,6 @@
 package com.vpnproxy.core.durability
 
-import android.content.Context
 import com.vpnproxy.core.singbox.DurabilityOptions
-import com.vpnproxy.core.singbox.DurabilitySettings
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -11,17 +8,15 @@ import javax.inject.Singleton
 /**
  * Moves the durability preset forward after a failed connect.
  *
- * It deliberately owns no retry loop and no timers: the caller (HomeViewModel) asks for the
- * next preset once per failure, and the actual reconnect stays with `ConnectionCoordinator`,
- * which already owns retries and the fatal lock. The budget is [MAX_ATTEMPTS] preset changes
- * per connection attempt, so a dead network cannot spin forever.
+ * It deliberately owns no retry loop, no timers and no storage: the caller asks for the next
+ * preset once per failure, persists it and reconnects through `ConnectionCoordinator`, which
+ * already owns retries and the fatal lock. The budget is [MAX_ATTEMPTS] preset changes per
+ * connection attempt, so a dead network cannot spin forever.
  *
  * [onConnected] resets the budget; call it from the Connected branch.
  */
 @Singleton
-class BypassOrchestrator @Inject constructor(
-    @ApplicationContext private val context: Context
-) {
+class BypassOrchestrator @Inject constructor() {
 
     companion object {
         const val MAX_ATTEMPTS = 4
@@ -30,8 +25,8 @@ class BypassOrchestrator @Inject constructor(
     private val attempts = AtomicInteger(0)
 
     /**
-     * @return the preset that was saved, or null when there is nothing stronger to try or the
-     * budget is exhausted.
+     * @return the preset to persist next, or null when there is nothing stronger to try or
+     * the budget is exhausted.
      */
     fun nextProfile(current: DurabilityOptions): BypassProfile? {
         if (attempts.get() >= MAX_ATTEMPTS) return null
@@ -41,7 +36,6 @@ class BypassOrchestrator @Inject constructor(
             BypassProfile.MAXIMUM_STEALTH -> return null
         }
         attempts.incrementAndGet()
-        DurabilitySettings.save(context, next.applyTo(current))
         return next
     }
 
