@@ -386,7 +386,7 @@ class HomeViewModel @Inject constructor(
             // The watchdog is armed after ServerSelected only, so a timeout here means the core
             // did not come up. That is a local, app-side timeout: do not spend an autopilot
             // preset on it, because the previous failure may have been app slowness, not DPI.
-            failConnect("Превышено время подключения. Проверьте сеть.", retryable = false)
+            failConnect("Превышено время подключения. Проверьте сеть.")
         }
     }
 
@@ -682,19 +682,18 @@ class HomeViewModel @Inject constructor(
      * The UI state is set directly: the coordinator may already be in Error and would
      * otherwise drop the duplicate message, leaving the screen on "Подключение…".
      */
-    private fun failConnect(message: String, retryable: Boolean) {
+    private fun failConnect(message: String) {
         endConnectFlow()
         // The service cancels scanner background work on every ConnectionState.Error, and the
         // UI flag below hides the scan controls. Do not cancel the shared scanner here: it
         // would also kill a user-started full scan and invalidate its fresh results.
-        connectionCoordinator.send(ConnectionEvent.ShowError(message, retryable))
+        connectionCoordinator.send(ConnectionEvent.ShowError(message, retryable = false))
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.ERROR,
             isBusy = false,
             isScanningServers = false,
             lastErrorMessage = message
         )
-        if (retryable) scheduleBypassAutopilot()
     }
 
     /**
@@ -704,10 +703,10 @@ class HomeViewModel @Inject constructor(
      * traceId) failConnect(...)` from the IO preflight is check-then-act: a new Connect can
      * start between the two and lose its `permissionFlowInProgress` to a stale coroutine.
      */
-    private suspend fun failConnectIfCurrent(traceId: String, message: String, retryable: Boolean) {
+    private suspend fun failConnectIfCurrent(traceId: String, message: String) {
         withContext(Dispatchers.Main.immediate) {
             if (activeTraceId == traceId) {
-                failConnect(message, retryable)
+                failConnect(message)
             }
         }
     }
@@ -766,7 +765,7 @@ class HomeViewModel @Inject constructor(
                 onVpnPermissionGranted()
             }
         } catch (e: Exception) {
-            failConnect(e.message ?: "Не удалось начать подключение", retryable = false)
+            failConnect(e.message ?: "Не удалось начать подключение")
         }
     }
 
@@ -815,7 +814,7 @@ class HomeViewModel @Inject constructor(
                 if (configs.isEmpty()) configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                 configs = filterConfigsForSelectedSubscription(configs)
                 if (configs.isEmpty()) {
-                    failConnectIfCurrent(traceId, "Нет доступных серверов", retryable = false)
+                    failConnectIfCurrent(traceId, "Нет доступных серверов")
                     return@launch
                 }
                 // ConnectRequested intentionally does not start the VPN service. If a previous
@@ -830,8 +829,7 @@ class HomeViewModel @Inject constructor(
                 if (!coreStopped) {
                     failConnectIfCurrent(
                         traceId,
-                        "Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд.",
-                        retryable = false
+                        "Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд."
                     )
                     return@launch
                 }
@@ -853,8 +851,7 @@ class HomeViewModel @Inject constructor(
                     if (partial.isEmpty()) {
                         failConnectIfCurrent(
                             traceId,
-                            "Проверка серверов заняла слишком много времени. Повторите подключение.",
-                            retryable = false
+                            "Проверка серверов заняла слишком много времени. Повторите подключение."
                         )
                         return@launch
                     }
@@ -875,8 +872,7 @@ class HomeViewModel @Inject constructor(
                 if (verifiedConfigs.isEmpty() && manualFallback == null) {
                     failConnectIfCurrent(
                         traceId,
-                        "Не найдено серверов с подтверждённой доступностью",
-                        retryable = false
+                        "Не найдено серверов с подтверждённой доступностью"
                     )
                     logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}; manualFallback=false"))
                     return@launch
@@ -904,8 +900,7 @@ class HomeViewModel @Inject constructor(
                 if (selected == null) {
                     failConnectIfCurrent(
                         traceId,
-                        "Не удалось выбрать проверенный сервер",
-                        retryable = false
+                        "Не удалось выбрать проверенный сервер"
                     )
                     return@launch
                 }
@@ -930,25 +925,32 @@ class HomeViewModel @Inject constructor(
                     // Keep the real cause visible instead of replacing it with a generic text.
                     val reason = (connectionCoordinator.state.value as? ConnectionState.Error)?.message
                         ?: "Подключение отменено: сначала нажмите «Подключить»."
-                    failConnectIfCurrent(traceId, reason, retryable = false)
+                    failConnectIfCurrent(traceId, reason)
                     return@launch
                 }
-                // The coordinator moves to Connecting after ServerSelected, and the state
-                // collector arms the watchdog on Main. Do not arm it from this IO coroutine:
-                // two threads doing cancel+assign on the same job can lose one of them.
+                // The coordinator moves to Connecting after ServerSelected, and the collector
+                // normally arms the watchdog. Arm it here as a safety net: the coordinator can
+                // silently drop ServerSelected when the provider scope changed during preflight,
+                // and then no Connecting transition ever happens. Both arm and cancel run on
+                // Main, so there is no cross-thread cancel+assign race.
+                withContext(Dispatchers.Main.immediate) {
+                    if (activeTraceId == traceId) {
+                        armConnectingWatchdog()
+                    }
+                }
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                failConnectIfCurrent(traceId, e.message ?: "Ошибка выбора сервера", retryable = false)
+                failConnectIfCurrent(traceId, e.message ?: "Ошибка выбора сервера")
             }
         }
     }
 
     fun onVpnPermissionDenied() {
-        failConnect("Нет разрешения VPN. Выдайте доступ в настройках.", retryable = false)
+        failConnect("Нет разрешения VPN. Выдайте доступ в настройках.")
     }
 
     fun disconnect() {
@@ -1107,8 +1109,7 @@ class HomeViewModel @Inject constructor(
                 if (!stopped) {
                     failConnectIfCurrent(
                         traceId,
-                        "Не удалось остановить прежнее подключение. Повторите попытку.",
-                        retryable = false
+                        "Не удалось остановить прежнее подключение. Повторите попытку."
                     )
                     return@launch
                 }
@@ -1131,8 +1132,7 @@ class HomeViewModel @Inject constructor(
                 logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
                 failConnectIfCurrent(
                     traceId,
-                    failure.message ?: "Не удалось переключить сервер",
-                    retryable = false
+                    failure.message ?: "Не удалось переключить сервер"
                 )
             }
         }
