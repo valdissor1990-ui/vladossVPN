@@ -693,9 +693,9 @@ class VpnProxyService : VpnService() {
                     ttlMs = 1_000L
                 )
             }
-            FailureBanPolicy.Action.BAN_NETWORK -> {
-                // Сетевая ошибка, даже если она пришла в обёртке запуска ядра.
-                logCollector.warn(TAG, "Network failure detected — banning server")
+            FailureBanPolicy.Action.BAN -> {
+                // Сетевая ошибка или неизвестный сбой ядра — обычный бан сервера.
+                logCollector.warn(TAG, "Banning server after core failure")
                 autoSwitcher.markServerFailed(failedConfig)
             }
             FailureBanPolicy.Action.NO_BAN -> {
@@ -703,10 +703,6 @@ class VpnProxyService : VpnService() {
                 // tunnel or permission is missing. The profile is not at fault; banning it
                 // would turn a device-side problem into a fake "all servers are dead" verdict.
                 logCollector.warn(TAG, "Local VPN failure detected — NOT banning server")
-            }
-            FailureBanPolicy.Action.BAN_OTHER -> {
-                // Прочие ошибки ядра — обычный бан ~10 мин.
-                autoSwitcher.markServerFailed(failedConfig)
             }
         }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))

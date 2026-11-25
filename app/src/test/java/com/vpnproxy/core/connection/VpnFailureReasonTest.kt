@@ -35,9 +35,9 @@ class VpnFailureReasonTest {
     @Test
     fun wrappedTunConflictKeepsFatalLockAndBlocksFallback() {
         // Sing-box prefixes every startup failure with "Unable to start libbox …", including
-        // a real TUN conflict. The typed reason must still be TunConflict.
+        // a real TUN ownership conflict. The typed reason must still be TunConflict.
         val reason = VpnFailureReason.fromMessage(
-            "Unable to start libbox 1.14.3: Не удалось создать TUN. Закройте другое VPN и повторите."
+            "Unable to start libbox 1.14.3: tun conflict detected while establishing interface"
         )
 
         assertTrue(reason is VpnFailureReason.TunConflict)
@@ -66,7 +66,8 @@ class VpnFailureReasonTest {
         // another VPN, so it must not take the fatal lock or block server fallback.
         listOf(
             "Unable to start libbox 1.14.3: start inbound/tun[tun-in]: configure tun interface: operation not permitted",
-            "Unable to start libbox 1.14.3: set tun address: operation not permitted"
+            "Unable to start libbox 1.14.3: set tun address: operation not permitted",
+            "Unable to start libbox 1.14.3: failed to create tun interface: operation not permitted"
         ).forEach { message ->
             val reason = VpnFailureReason.fromMessage(message)
             assertTrue(message, reason is VpnFailureReason.CoreError)
