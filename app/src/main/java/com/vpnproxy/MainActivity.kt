@@ -28,6 +28,7 @@ import com.vpnproxy.ui.debug.DebugScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
 import com.vpnproxy.ui.servers.ServersListScreen
+import com.vpnproxy.ui.services.ServicesScreen
 import com.vpnproxy.ui.settings.SettingsScreen
 import com.vpnproxy.ui.subscriptions.SubscriptionsScreen
 import com.vpnproxy.ui.theme.VPNProxyTheme
@@ -160,7 +161,8 @@ private fun VPNProxyNavHost(
                 viewModel = homeViewModel,
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
                 onNavigateToDebug = { navController.navigate(Route.Debug.path) },
-                onNavigateToSettings = { navController.navigate(Route.Settings.path) }
+                onNavigateToSettings = { navController.navigate(Route.Settings.path) },
+                onNavigateToServices = { navController.navigate(Route.Services.path) }
             )
         }
 
@@ -191,6 +193,10 @@ private fun VPNProxyNavHost(
         composable(Route.Debug.path) {
             DebugScreen(onBack = { navController.popBackStack() })
         }
+
+        composable(Route.Services.path) {
+            ServicesScreen(onBack = { navController.popBackStack() })
+        }
     }
 }
 
@@ -200,4 +206,5 @@ sealed class Route(val path: String) {
     data object Servers : Route("servers")
     data object Settings : Route("settings")
     data object Debug : Route("debug")
+    data object Services : Route("services")
 }

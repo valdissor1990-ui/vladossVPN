@@ -88,7 +88,8 @@ fun HomeScreen(
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToDebug: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") showDebug: Boolean = true,
-    onNavigateToSettings: () -> Unit = {}
+    onNavigateToSettings: () -> Unit = {},
+    onNavigateToServices: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
@@ -254,6 +255,7 @@ fun HomeScreen(
                         onOpenLogs = onNavigateToDebug,
                         onOpenSettings = onNavigateToSettings,
                         onOpenSubscriptions = onNavigateToSubscriptions,
+                        onOpenServices = onNavigateToServices,
                         onDelete = { viewModel.removeSelectedSubscription() },
                         onOpenLink = {
                             val url = selected?.url ?: return@SubscriptionHeader
@@ -400,6 +402,7 @@ private fun SubscriptionHeader(
     onOpenLogs: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSubscriptions: () -> Unit,
+    onOpenServices: () -> Unit,
     onDelete: () -> Unit,
     onOpenLink: () -> Unit
 ) {
@@ -464,6 +467,7 @@ private fun SubscriptionHeader(
                     Icon(Icons.Filled.MoreVert, contentDescription = "Ещё", tint = HappMuted)
                 }
                 DropdownMenu(expanded = moreExpanded, onDismissRequest = { onMoreExpanded(false) }) {
+                    DropdownMenuItem(text = { Text("Проверка сервисов") }, onClick = { onMoreExpanded(false); onOpenServices() })
                     DropdownMenuItem(text = { Text("Журнал логов") }, onClick = { onMoreExpanded(false); onOpenLogs() })
                     DropdownMenuItem(text = { Text("Настройки") }, onClick = { onMoreExpanded(false); onOpenSettings() })
                     DropdownMenuItem(text = { Text("Все подписки") }, onClick = { onMoreExpanded(false); onOpenSubscriptions() })
