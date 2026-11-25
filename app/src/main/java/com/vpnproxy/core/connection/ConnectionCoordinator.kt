@@ -73,6 +73,13 @@ class ConnectionCoordinator @Inject constructor(
         private const val NETWORK_FAILURE_MESSAGE =
             "Несколько разных серверов не ответили через текущую сеть. Возможно, сеть ограничивает VPN. Попробуйте Wi-Fi или другого оператора."
         const val CONNECTING_TIMEOUT_MS = 90_000L
+
+        /**
+         * A rejected selection must not destroy a session that is already up. Pure so the
+         * rule is covered without driving a real traffic validation.
+         */
+        internal fun keepsLiveSelectionOnOutOfScope(state: ConnectionState): Boolean =
+            state is ConnectionState.Connected
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -298,23 +305,11 @@ class ConnectionCoordinator @Inject constructor(
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
             is ConnectionEvent.ServerSelected -> {
-                if (event.traceId != null && event.traceId != activeTraceId) {
-                    val isWaitingForServer = (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting) && !hasServerSelected
-                    if (isWaitingForServer) {
-                        logW("Accepting ServerSelected with stale traceId to prevent timeout: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
-                        activeTraceId = event.traceId
-                    } else {
-                        logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
-                        return
-                    }
-                }
-                if (isFatalErrorLocked) {
-                    logW("ServerSelected ignored — fatal lock is active; waiting for manual action")
-                    return
-                }
+                // Scope is checked before the trace id: a rejected selection must not rewrite
+                // activeTraceId of a live tunnel that stays connected.
                 if (!isWithinProviderScope(event.server)) {
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
-                    if (current is ConnectionState.Connected) {
+                    if (keepsLiveSelectionOnOutOfScope(current)) {
                         // A live tunnel keeps its selection handle. Clearing it here would make
                         // currentServerName()/hasSelectedServer() report nothing for a session
                         // that is still up, and ShowError would tear it down for no reason.
@@ -336,6 +331,20 @@ class ConnectionCoordinator @Inject constructor(
                             retryable = false
                         )
                     )
+                    return
+                }
+                if (event.traceId != null && event.traceId != activeTraceId) {
+                    val isWaitingForServer = (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting) && !hasServerSelected
+                    if (isWaitingForServer) {
+                        logW("Accepting ServerSelected with stale traceId to prevent timeout: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        activeTraceId = event.traceId
+                    } else {
+                        logW("Ignoring stale ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        return
+                    }
+                }
+                if (isFatalErrorLocked) {
+                    logW("ServerSelected ignored — fatal lock is active; waiting for manual action")
                     return
                 }
                 activeNetworkBucket = scoringEngine.currentNetworkBucket()

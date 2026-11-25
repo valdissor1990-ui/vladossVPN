@@ -92,6 +92,17 @@ sealed class VpnFailureReason {
                 m.contains("opentun failed")
         }
 
+        /**
+         * Wording that really means another VPN owns the tunnel. Setup errors ("create tun",
+         * "configure tun … not permitted") are device-side, not a conflict, and must stay
+         * retryable: the app config always contains a tun inbound, so "tun" alone proves nothing.
+         */
+        private val TUN_CONFLICT_MARKERS = listOf(
+            "tun conflict",
+            "another vpn owns",
+            "establish() returned null"
+        )
+
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()
             return isConfigurationError(message) ||
@@ -99,8 +110,7 @@ sealed class VpnFailureReason {
                 m.contains("permission denied") ||
                 m.contains("permission is missing") ||
                 m.contains("permission revoked") ||
-                m.contains("establish failed") ||
-                m.contains("tun conflict")
+                TUN_CONFLICT_MARKERS.any { m.contains(it) }
         }
 
         /** Best-effort parse of legacy string errors into typed reasons. */
@@ -118,15 +128,10 @@ sealed class VpnFailureReason {
                 // A malformed profile is checked before any TUN wording: the app always has a
                 // tun inbound, so a config error mentions "tun" without being a conflict.
                 isConfigurationError(raw) -> CoreError(raw)
-                // TUN ownership/creation markers come before the generic libbox wrapper:
-                // SingBoxCore prefixes every startup failure with "Unable to start libbox …",
-                // including a real TUN conflict, which must keep the fatal lock. Only conflict
-                // wording is listed here: a bare "tun" match turned setup errors into a lock.
-                m.contains("establish failed") ||
-                    m.contains("establish() returned null") ||
-                    m.contains("tun conflict") ||
-                    m.contains("создать tun") ||
-                    m.contains("create tun") -> TunConflict
+                // Real ownership conflicts only. TUN *creation/setup* failures are device-side:
+                // they fall through to isLocalCoreStartFailure() and stay retryable with
+                // fallback, instead of taking the fatal lock.
+                TUN_CONFLICT_MARKERS.any { m.contains(it) } -> TunConflict
                 isLocalCoreStartFailure(raw) -> CoreError(raw)
                 m.contains("timeout") || m.contains("превышено время") ->
                     NetworkTimeout(raw)

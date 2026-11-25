@@ -289,6 +289,30 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun outOfScopeSelectionKeepsLiveConnectedSession() {
+        // A rejected selection must not tear down a working tunnel. The rule is pure so it is
+        // covered without driving a real traffic validation.
+        assertTrue(
+            ConnectionCoordinator.keepsLiveSelectionOnOutOfScope(
+                ConnectionState.Connected("test-server")
+            )
+        )
+        listOf(
+            ConnectionState.Disconnected,
+            ConnectionState.Connecting,
+            ConnectionState.Reconnecting,
+            ConnectionState.Disconnecting,
+            ConnectionState.Verifying("test-server"),
+            ConnectionState.Error("boom", retryable = true)
+        ).forEach { state ->
+            assertFalse(
+                "$state must not keep a live selection",
+                ConnectionCoordinator.keepsLiveSelectionOnOutOfScope(state)
+            )
+        }
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
