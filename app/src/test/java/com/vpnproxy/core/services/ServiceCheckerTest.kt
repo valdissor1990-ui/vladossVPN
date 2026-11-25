@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.URI
 
 class ServiceCheckerTest {
 
@@ -34,7 +35,7 @@ class ServiceCheckerTest {
         val probe = FakeProbe(emptyMap())
         val checker = ServiceChecker(probe)
 
-        val results = checker.checkAll(targets, vpnActive = false)
+        val results = checker.checkAll(targets, vpnActive = { false })
 
         assertEquals(2, results?.size)
         assertTrue(results!!.all { it.status == ServiceCheckStatus.VPN_OFF })
@@ -46,28 +47,65 @@ class ServiceCheckerTest {
         val probe = FakeProbe(emptyMap())
         val checker = ServiceChecker(probe)
 
-        val results = checker.checkAll(targets, vpnActive = true, coreTransitioning = true)
+        val results = checker.checkAll(targets, vpnActive = { true }, coreTransitioning = { true })
 
         assertTrue(results!!.all { it.status == ServiceCheckStatus.TRANSITION })
         assertEquals(0, probe.calls)
     }
 
     @Test
-    fun httpErrorIsUnreachableAndNetworkErrorIsUnknown() = runBlocking {
+    fun tunnelDyingMidSweepStopsRemainingTargets() = runBlocking {
+        // First call (sweep start) sees an active tunnel; every later check sees it gone.
+        var checks = 0
+        val probe = FakeProbe(mapOf("a" to ServiceProbeResult(reachable = true, latencyMs = 5L, httpCode = 200)))
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = { checks++ == 0 })!!
+
+        assertTrue(results.all { it.status == ServiceCheckStatus.VPN_OFF })
+    }
+
+    @Test
+    fun httpErrorMeansTunnelWorksSoItIsAnsweredNotFailed() = runBlocking {
         val probe = FakeProbe(
             mapOf(
                 "a" to ServiceProbeResult(reachable = false, latencyMs = 12L, httpCode = 403, reason = "HTTP_403"),
-                "b" to ServiceProbeResult(reachable = false, latencyMs = 30L, reason = "SocketTimeoutException")
+                "b" to ServiceProbeResult(reachable = false, latencyMs = 30L, httpCode = 503, reason = "HTTP_503")
             )
         )
         val checker = ServiceChecker(probe)
 
-        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
+        val results = checker.checkAll(targets, vpnActive = { true })!!.associateBy { it.serviceId }
 
-        assertEquals(ServiceCheckStatus.UNREACHABLE, results.getValue("a").status)
+        assertEquals(ServiceCheckStatus.ANSWERED, results.getValue("a").status)
         assertEquals(403, results.getValue("a").httpCode)
+        assertEquals(ServiceCheckStatus.ANSWERED, results.getValue("b").status)
+    }
+
+    @Test
+    fun networkFailureIsUnknownNotBlocked() = runBlocking {
+        val probe = FakeProbe(
+            mapOf("b" to ServiceProbeResult(reachable = false, latencyMs = 30L, reason = "SocketTimeoutException"))
+        )
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = { true })!!.associateBy { it.serviceId }
+
         assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("b").status)
         assertNull(results.getValue("b").httpCode)
+    }
+
+    @Test
+    fun redirectIsUnknownNotReachable() = runBlocking {
+        val probe = FakeProbe(
+            mapOf("a" to ServiceProbeResult(reachable = false, latencyMs = 8L, httpCode = 302, reason = "HTTP_302"))
+        )
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = { true })!!.associateBy { it.serviceId }
+
+        assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("a").status)
+        assertEquals(302, results.getValue("a").httpCode)
     }
 
     @Test
@@ -80,37 +118,11 @@ class ServiceCheckerTest {
         )
         val checker = ServiceChecker(probe)
 
-        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
+        val results = checker.checkAll(targets, vpnActive = { true })!!.associateBy { it.serviceId }
 
         assertEquals(145L, results.getValue("a").latencyMs)
         assertNull(results.getValue("b").latencyMs)
         assertTrue(results.values.all { it.status == ServiceCheckStatus.REACHABLE })
-    }
-
-    @Test
-    fun resultNeverCarriesEndpointUrl() = runBlocking {
-        val probe = FakeProbe(mapOf("a" to ServiceProbeResult(reachable = true, latencyMs = 10L, httpCode = 200)))
-        val checker = ServiceChecker(probe)
-
-        val results = checker.checkAll(targets, vpnActive = true)!!
-
-        results.forEach { result ->
-            assertTrue(!result.serviceId.contains("http"))
-            assertTrue(result.reason?.contains("example") != true)
-        }
-    }
-
-    @Test
-    fun redirectIsUnknownNotReachable() = runBlocking {
-        val probe = FakeProbe(
-            mapOf("a" to ServiceProbeResult(reachable = false, latencyMs = 8L, httpCode = 302, reason = "HTTP_302"))
-        )
-        val checker = ServiceChecker(probe)
-
-        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
-
-        assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("a").status)
-        assertEquals(302, results.getValue("a").httpCode)
     }
 
     @Test
@@ -121,10 +133,23 @@ class ServiceCheckerTest {
         )
         val checker = ServiceChecker(probe)
 
-        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
+        val results = checker.checkAll(targets, vpnActive = { true })!!.associateBy { it.serviceId }
 
         assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("a").status)
         assertEquals(ServiceCheckStatus.REACHABLE, results.getValue("b").status)
+    }
+
+    @Test
+    fun resultNeverCarriesEndpointUrl() = runBlocking {
+        val probe = FakeProbe(mapOf("a" to ServiceProbeResult(reachable = true, latencyMs = 10L, httpCode = 200)))
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = { true })!!
+
+        results.forEach { result ->
+            assertTrue(!result.serviceId.contains("http"))
+            assertTrue(result.reason?.contains("example") != true)
+        }
     }
 
     @Test
@@ -140,14 +165,14 @@ class ServiceCheckerTest {
             }
         }
         val checker = ServiceChecker(probe)
-        val job = launch { checker.checkAll(targets, vpnActive = true) }
+        val job = launch { checker.checkAll(targets, vpnActive = { true }) }
         delay(50)
         job.cancel()
         job.join()
         assertTrue(job.isCancelled)
 
         // The same checker must accept a new sweep: the lock was released in `finally`.
-        val results = checker.checkAll(targets, vpnActive = true)
+        val results = checker.checkAll(targets, vpnActive = { true })
         assertEquals(2, results?.size)
     }
 
@@ -155,6 +180,7 @@ class ServiceCheckerTest {
     fun catalogueHasNoRussianEndpointsAndNoDuplicates() {
         val targets = ServiceCatalog.defaultTargets
         assertEquals(targets.size, targets.map { it.id }.distinct().size)
-        assertTrue(targets.none { it.url.contains(".ru/") })
+        val hosts = targets.map { URI(it.url).host }
+        assertTrue(hosts.none { it.endsWith(".ru") || it == "ru" })
     }
 }

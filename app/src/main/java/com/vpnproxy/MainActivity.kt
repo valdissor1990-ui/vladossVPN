@@ -198,8 +198,8 @@ private fun VPNProxyNavHost(
             DebugScreen(onBack = { navController.popBackStack() })
         }
 
-        composable(Route.Services.path) {
-            if (FeatureFlags.SERVICE_CHECK_ENABLED) {
+        if (FeatureFlags.SERVICE_CHECK_ENABLED) {
+            composable(Route.Services.path) {
                 ServicesScreen(onBack = { navController.popBackStack() })
             }
         }

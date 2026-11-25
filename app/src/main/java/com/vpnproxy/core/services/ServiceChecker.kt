@@ -6,25 +6,39 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Runs control requests for a list of services through the active VPN.
  *
- * The checker is deliberately side-effect free: it does not start a core, does
- * not change settings and does not write to the diagnostic journal. The caller
- * passes the tunnel state so the class stays testable on the JVM.
+ * The checker is deliberately side-effect free: it does not start a core, does not change
+ * settings and does not write to the diagnostic journal.
  *
- * Only one run happens at a time: a second call returns null instead of
- * queueing, so the UI cannot fire overlapping sweeps over the same proxy port.
+ * It is a process-wide singleton so "one sweep at a time" holds across screens: leaving and
+ * re-entering the screen must not start a second sweep over the same proxy port.
+ *
+ * Tunnel state is passed as lambdas, not snapshots, so a tunnel that dies mid-sweep stops
+ * the remaining targets instead of reporting a misleading verdict.
  */
-class ServiceChecker(
-    private val probe: ServiceProbe = HttpServiceProbe()
-) {
+@Singleton
+class ServiceChecker @Inject constructor() {
+
+    internal constructor(probe: ServiceProbe) : this() {
+        this.testProbe = probe
+    }
+
     companion object {
         private const val MAX_CONCURRENCY = 3
     }
+
+    private var testProbe: ServiceProbe? = null
+
+    private val defaultProbe by lazy { HttpServiceProbe() }
+
+    private val probe: ServiceProbe
+        get() = testProbe ?: defaultProbe
 
     private val runMutex = Mutex()
 
@@ -33,22 +47,22 @@ class ServiceChecker(
      */
     suspend fun checkAll(
         targets: List<ServiceTarget> = ServiceCatalog.defaultTargets,
-        vpnActive: Boolean,
-        coreTransitioning: Boolean = false
+        vpnActive: () -> Boolean,
+        coreTransitioning: () -> Boolean = { false }
     ): List<ServiceCheckResult>? {
         if (!runMutex.tryLock()) return null
         try {
-            if (coreTransitioning) {
+            if (coreTransitioning()) {
                 return targets.map { ServiceCheckResult(it.id, ServiceCheckStatus.TRANSITION) }
             }
-            if (!vpnActive) {
+            if (!vpnActive()) {
                 return targets.map { ServiceCheckResult(it.id, ServiceCheckStatus.VPN_OFF) }
             }
             return coroutineScope {
                 val semaphore = Semaphore(MAX_CONCURRENCY)
                 targets.map { target ->
                     async(Dispatchers.IO) {
-                        semaphore.withPermit { probeOne(target) }
+                        semaphore.withPermit { probeOne(target, vpnActive, coreTransitioning) }
                     }
                 }.awaitAll()
             }
@@ -57,7 +71,17 @@ class ServiceChecker(
         }
     }
 
-    private suspend fun probeOne(target: ServiceTarget): ServiceCheckResult {
+    private suspend fun probeOne(
+        target: ServiceTarget,
+        vpnActive: () -> Boolean,
+        coreTransitioning: () -> Boolean
+    ): ServiceCheckResult {
+        if (coreTransitioning()) {
+            return ServiceCheckResult(target.id, ServiceCheckStatus.TRANSITION)
+        }
+        if (!vpnActive()) {
+            return ServiceCheckResult(target.id, ServiceCheckStatus.VPN_OFF)
+        }
         val result = try {
             probe.probe(target)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -69,10 +93,11 @@ class ServiceChecker(
             serviceId = target.id,
             status = when {
                 result.reachable -> ServiceCheckStatus.REACHABLE
-                // A redirect does not prove the target answered: it may be a captive portal
-                // or a geo bounce. Treat it as "could not verify", not as "blocked".
+                // 4xx/5xx: the request reached the server, so the tunnel works. A 403 from
+                // Cloudflare is not a blocked VPN, and painting it red would be a lie.
+                result.httpCode in 400..599 -> ServiceCheckStatus.ANSWERED
+                // 3xx may be a captive portal or a geo bounce: no verdict either way.
                 result.httpCode in 300..399 -> ServiceCheckStatus.UNKNOWN
-                result.httpCode != null -> ServiceCheckStatus.UNREACHABLE
                 else -> ServiceCheckStatus.UNKNOWN
             },
             latencyMs = result.latencyMs.takeIf { it > 0 },

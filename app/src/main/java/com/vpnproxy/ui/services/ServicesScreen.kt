@@ -28,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,18 +78,18 @@ fun ServicesScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Text(
-                "Контрольные запросы идут через активный VPN. Результат показывает доступность контрольного адреса, а не полную работу сервиса.",
+                "Контрольные запросы идут через активный VPN к сторонним адресам: сайты видят ваш текущий exit-IP. Результат показывает доступность контрольного адреса, а не полную работу сервиса.",
                 color = HappMuted,
                 fontSize = 13.sp
             )
             Spacer(Modifier.height(12.dp))
 
-            if (!state.vpnActive && state.lastCheckedAt == null && !state.isChecking) {
+            if (!state.vpnActive && !state.isChecking) {
                 NoticeCard("VPN не подключён. Подключите VPN и повторите проверку.")
                 Spacer(Modifier.height(12.dp))
             }
 
-            if (state.isChecking && state.coreTransitioning) {
+            if (state.coreTransitioning) {
                 NoticeCard("VPN сейчас переподключается. Проверка может быть неточной.")
                 Spacer(Modifier.height(12.dp))
             }
@@ -108,6 +109,13 @@ fun ServicesScreen(
                     Text("Проверяю...")
                 } else {
                     Text(if (state.lastCheckedAt == null) "Проверить всё" else "Проверить снова")
+                }
+            }
+
+            if (state.isChecking) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { viewModel.cancel() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Отменить")
                 }
             }
 
@@ -157,9 +165,9 @@ private fun ServiceRow(
             label = "Контрольный запрос прошёл"
             color = Color(0xFF2E7D32)
         }
-        status == ServiceCheckStatus.UNREACHABLE -> {
-            label = "Контрольный запрос не прошёл"
-            color = Color(0xFFC62828)
+        status == ServiceCheckStatus.ANSWERED -> {
+            label = result?.httpCode?.let { "Сервер ответил $it — туннель работает" } ?: "Сервер ответил отказом"
+            color = Color(0xFFF9A825)
         }
         status == ServiceCheckStatus.UNKNOWN -> {
             label = "Не удалось проверить"

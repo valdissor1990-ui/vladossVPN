@@ -10,11 +10,15 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
 
 data class ServicesUiState(
@@ -28,64 +32,94 @@ data class ServicesUiState(
 
 @HiltViewModel
 class ServicesViewModel @Inject constructor(
-    private val logCollector: LogCollector
+    private val logCollector: LogCollector,
+    private val checker: ServiceChecker
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "ServicesViewModel"
         private const val ERROR_TEXT = "Не удалось проверить сервисы. Попробуйте позже."
         private const val BUSY_TEXT = "Проверка уже идёт."
+        private const val TIMEOUT_TEXT = "Проверка заняла слишком долго. Попробуйте ещё раз."
+        private const val RUN_TIMEOUT_MS = 20_000L
     }
-
-    private val checker = ServiceChecker()
 
     private val _state = MutableStateFlow(ServicesUiState())
     val state: StateFlow<ServicesUiState> = _state.asStateFlow()
 
+    private var runJob: Job? = null
+
+    init {
+        // Live tunnel state: the screen must never claim "VPN is off" while it is on.
+        viewModelScope.launch {
+            combine(
+                VpnProxyService.isRunning,
+                VpnProxyService.isCoreTransitioning
+            ) { running, transitioning -> running to transitioning }
+                .collect { (running, transitioning) ->
+                    _state.update { it.copy(vpnActive = running, coreTransitioning = transitioning) }
+                }
+        }
+    }
+
     fun checkAll() {
-        val claimed = tryClaimRun()
-        if (claimed == null) {
+        if (tryClaimRun() == null) {
             _state.update { it.copy(message = BUSY_TEXT) }
             return
         }
-
-        viewModelScope.launch {
-            val results = runCatching {
-                checker.checkAll(
-                    targets = ServiceCatalog.defaultTargets,
-                    vpnActive = claimed.vpnActive,
-                    coreTransitioning = claimed.coreTransitioning
+        runJob = viewModelScope.launch {
+            try {
+                val results = withTimeout(RUN_TIMEOUT_MS) {
+                    checker.checkAll(
+                        targets = ServiceCatalog.defaultTargets,
+                        vpnActive = { VpnProxyService.isRunning.value },
+                        coreTransitioning = { VpnProxyService.isCoreTransitioning.value }
+                    )
+                }
+                if (results == null) {
+                    _state.update { it.copy(message = BUSY_TEXT) }
+                    return@launch
+                }
+                // Journal only the aggregate: service hosts must never appear in logs.
+                logCollector.info(
+                    TAG,
+                    "SERVICE-CHECK checked=${results.size} " +
+                        "reachable=${results.count { it.status == ServiceCheckStatus.REACHABLE }} " +
+                        "answered=${results.count { it.status == ServiceCheckStatus.ANSWERED }} " +
+                        "unknown=${results.count { it.status == ServiceCheckStatus.UNKNOWN }} " +
+                        "vpn_off=${results.count { it.status == ServiceCheckStatus.VPN_OFF }} " +
+                        "transition=${results.count { it.status == ServiceCheckStatus.TRANSITION }}"
                 )
-            }.getOrElse { error ->
-                if (error is CancellationException) throw error
+                _state.update {
+                    it.copy(
+                        results = results.associateBy { result -> result.serviceId },
+                        lastCheckedAt = System.currentTimeMillis(),
+                        message = null
+                    )
+                }
+            } catch (timeout: TimeoutCancellationException) {
+                _state.update { it.copy(message = TIMEOUT_TEXT) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 // Technical details belong in the journal, not in the UI.
                 logCollector.warn(TAG, "SERVICE-CHECK failed error=${error.javaClass.simpleName}")
-                _state.update { it.copy(isChecking = false, message = ERROR_TEXT) }
-                return@launch
-            }
-            if (results == null) {
-                _state.update { it.copy(isChecking = false, message = BUSY_TEXT) }
-                return@launch
-            }
-            // Journal only the aggregate: service hosts must never appear in logs.
-            logCollector.info(
-                TAG,
-                "SERVICE-CHECK checked=${results.size} " +
-                    "reachable=${results.count { it.status == ServiceCheckStatus.REACHABLE }} " +
-                    "unreachable=${results.count { it.status == ServiceCheckStatus.UNREACHABLE }} " +
-                    "unknown=${results.count { it.status == ServiceCheckStatus.UNKNOWN }} " +
-                    "vpn_off=${results.count { it.status == ServiceCheckStatus.VPN_OFF }} " +
-                    "transition=${results.count { it.status == ServiceCheckStatus.TRANSITION }}"
-            )
-            _state.update {
-                it.copy(
-                    isChecking = false,
-                    results = results.associateBy { result -> result.serviceId },
-                    lastCheckedAt = System.currentTimeMillis(),
-                    message = null
-                )
+                _state.update { it.copy(message = ERROR_TEXT) }
+            } finally {
+                // Runs on success, failure and cancellation: without it a cancelled sweep
+                // would leave the button stuck on "already running" forever.
+                _state.update { it.copy(isChecking = false) }
             }
         }
+    }
+
+    /** Cancels the running sweep; [checkAll] can be called again immediately. */
+    fun cancel() {
+        runJob?.cancel()
+        runJob = null
+        // A cancel that arrives before the coroutine starts never reaches its `finally`,
+        // so the flag is released here as well.
+        _state.update { it.copy(isChecking = false) }
     }
 
     /**
@@ -98,8 +132,6 @@ class ServicesViewModel @Inject constructor(
             if (current.isChecking) return null
             val next = current.copy(
                 isChecking = true,
-                vpnActive = VpnProxyService.isRunning.value,
-                coreTransitioning = VpnProxyService.isCoreTransitioning.value,
                 results = emptyMap(),
                 message = null
             )

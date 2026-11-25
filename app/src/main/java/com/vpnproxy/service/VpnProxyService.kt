@@ -532,8 +532,9 @@ class VpnProxyService : VpnService() {
           "DIAG-SETTINGS ROUTING_PRESET=${routing.preset.id} effective=${routing.effectivePreset.id} " +
               "ru_rule_sets_degraded=${routing.ruRuleSetsDegraded}"
       )
-      // Opt-in durability (debug-gated): pack ranked standbys into a native urltest group and
-      // enable anti-DPI TLS options. Defaults are all-off, so a release build keeps the golden path.
+      // Opt-in durability: pack ranked standbys into a native urltest group and enable
+      // anti-DPI TLS options. Defaults are all-off, so an untouched install keeps the golden
+      // path byte for byte. Values are read once here, so a change applies on the next connect.
       val durability = DurabilitySettings.load(this@VpnProxyService)
       val standbys = if (durability.nativeUrlTestEnabled) {
           val maxStandbys = durability.urlTestStandbyCount.coerceIn(0, DurabilityOptions.MAX_STANDBY_COUNT)
