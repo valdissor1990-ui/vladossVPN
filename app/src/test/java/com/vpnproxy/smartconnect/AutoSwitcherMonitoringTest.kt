@@ -1,0 +1,43 @@
+package com.vpnproxy.smartconnect
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Test
+
+/**
+ * The monitoring loop must re-read the screen-dependent interval often enough that unlocking
+ * the phone does not leave the tunnel unchecked for the whole screen-off interval.
+ */
+class AutoSwitcherMonitoringTest {
+
+    @Test
+    fun slicesLongIntervalSoScreenOnIsSeenQuickly() {
+        val screenOffInterval = AutoSwitcherConfig.healthCheckIntervalMs *
+            AutoSwitcherConfig.screenOffIntervalMultiplier
+        val first = AutoSwitcher.monitoringSliceMs(screenOffInterval, elapsedMs = 0L)
+        assertEquals(AutoSwitcher.MAX_MONITORING_SLICE_MS, first)
+    }
+
+    @Test
+    fun zeroSliceWhenIntervalAlreadyElapsed() {
+        // Bounded loops on millis, not on wall clock: unlocking shortens the interval and the
+        // next iteration must run the check immediately.
+        assertEquals(0L, AutoSwitcher.monitoringSliceMs(intervalMs = 180_000L, elapsedMs = 180_000L))
+        assertEquals(0L, AutoSwitcher.monitoringSliceMs(intervalMs = 180_000L, elapsedMs = 240_000L))
+    }
+
+    @Test
+    fun neverSleepsPastTheInterval() {
+        assertEquals(5_000L, AutoSwitcher.monitoringSliceMs(intervalMs = 30_000L, elapsedMs = 25_000L))
+    }
+
+    @Test
+    fun rejectsNonPositiveInputs() {
+        assertThrows(IllegalArgumentException::class.java) {
+            AutoSwitcher.monitoringSliceMs(intervalMs = 0L, elapsedMs = 0L)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AutoSwitcher.monitoringSliceMs(intervalMs = 1_000L, elapsedMs = 0L, maxSliceMs = 0L)
+        }
+    }
+}

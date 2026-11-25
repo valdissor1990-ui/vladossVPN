@@ -44,7 +44,10 @@ class BatteryPolicyTest {
             AutoSwitcherConfig.batterySaverHealthCheckIntervalMs * AutoSwitcherConfig.screenOffIntervalMultiplier,
             BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = true, economyMode = false, screenOff = true)
         )
-        assertTrue(AutoSwitcherConfig.screenOffIntervalMultiplier >= 2L)
+        assertTrue(
+            "screen-off normal interval must stay capped",
+            BatteryPolicy.healthCheckIntervalMs(systemBatterySaver = false, economyMode = false, screenOff = true) <= 900_000L
+        )
     }
 
     @Test

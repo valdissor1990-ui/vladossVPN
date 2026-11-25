@@ -1,4 +1,4 @@
-﻿package com.vpnproxy.core.connection
+package com.vpnproxy.core.connection
 
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.smartconnect.ScoringEngine

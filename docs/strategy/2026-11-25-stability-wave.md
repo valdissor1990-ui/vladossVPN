@@ -23,9 +23,12 @@
 - `AutoSwitcherConfig.screenOffIntervalMultiplier = 2`.
 - `BatteryPolicy.isScreenOff()` читает `PowerManager.isInteractive`.
 - `BatteryPolicy.healthCheckIntervalMs(context)` учитывает режим: системная экономия > режим экономии > обычный, затем множитель за выключенный экран.
-- Проверки: `BatteryPolicyTest.screenOff_stretchesEveryModeButKeepsPrecedence`, `screenOn_keepsConfiguredCadence`.
+- `AutoSwitcher` спит не одним `delay`, а срезами не длиннее 60 с (`MAX_MONITORING_SLICE_MS`) и пересчитывает интервал перед каждым срезом. Поэтому после разблокировки проверки возобновляются не позже чем через минуту, а не через 20 минут.
+- Проверки: `BatteryPolicyTest.screenOff_stretchesEveryModeButKeepsPrecedence`, `screenOn_keepsConfiguredCadence`, `AutoSwitcherMonitoringTest`.
 
 Итог: 3 мин → 6 мин в обычном режиме, 10 мин → 20 мин при системной экономии. Радиомодуль просыпается вдвое реже, логика переключения не меняется.
+
+**Граница честности:** реакция на мёртвый сервер при saver + заблокированном экране может занимать до получаса с учётом подтверждений (`serverDegradationConfirmations = 3`), а не минуты. Это осознанная плата за батарею: разблокировка возвращает обычный каденс в течение минуты, а ручная проверка сервисов доступна сразу.
 
 ### 2.2 Окно недавних падений эндпоинтов
 
