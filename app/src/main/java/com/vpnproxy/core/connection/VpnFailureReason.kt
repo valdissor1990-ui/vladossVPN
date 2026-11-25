@@ -115,15 +115,18 @@ sealed class VpnFailureReason {
                 // A failed local TUN creation is a device-side step: it stays retryable and
                 // must not become TunConflict, which would take the fatal lock.
                 m.contains("opentun failed") -> CoreError(raw)
+                // A malformed profile is checked before any TUN wording: the app always has a
+                // tun inbound, so a config error mentions "tun" without being a conflict.
+                isConfigurationError(raw) -> CoreError(raw)
                 // TUN ownership/creation markers come before the generic libbox wrapper:
                 // SingBoxCore prefixes every startup failure with "Unable to start libbox …",
-                // including a real TUN conflict, which must keep the fatal lock.
+                // including a real TUN conflict, which must keep the fatal lock. Only conflict
+                // wording is listed here: a bare "tun" match turned setup errors into a lock.
                 m.contains("establish failed") ||
                     m.contains("establish() returned null") ||
                     m.contains("tun conflict") ||
                     m.contains("создать tun") ||
-                    m.contains("create tun") ||
-                    m.contains("tun") -> TunConflict
+                    m.contains("create tun") -> TunConflict
                 isLocalCoreStartFailure(raw) -> CoreError(raw)
                 m.contains("timeout") || m.contains("превышено время") ->
                     NetworkTimeout(raw)
