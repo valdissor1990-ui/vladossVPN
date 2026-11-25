@@ -646,7 +646,14 @@ class VpnProxyService : VpnService() {
     }
 
     private fun emitCoreError(t: Throwable) {
-        val reason = when (t) {
+        // Take the typed reason from the cause chain first. SingBoxCore wraps every startup
+        // failure in IllegalStateException("Unable to start libbox …"), so parsing only
+        // t.message loses the original VpnFailureReason (for example openTun -> TunConflict).
+        val typedReason = generateSequence(t as Throwable?) { it.cause }
+            .filterIsInstance<VpnStartException>()
+            .firstOrNull()
+            ?.reason
+        val reason = typedReason ?: when (t) {
             is VpnStartException -> t.reason
             else -> VpnFailureReason.fromMessage(t.message)
         }
@@ -669,35 +676,39 @@ class VpnProxyService : VpnService() {
         }
 
         val isLocalCoreFailure = VpnFailureReason.isLocalCoreStartFailure(errorMessage)
-        if (isLocalCoreFailure) {
-            // The core failed to start or to create TUN locally. The profile is not at fault,
-            // so do not ban it: an empty candidate list would turn a device-side problem into
-            // a fake "all servers are dead" verdict.
-            logCollector.warn(TAG, "Local core start failure detected — NOT banning server")
-            connectionCoordinator.send(ConnectionEvent.CoreError(reason))
-            return
-        }
-
         val isConfigError = errorMessage.contains("unknown field") ||
             errorMessage.contains("decode config") ||
             errorMessage.contains("invalid config") ||
             errorMessage.contains("invalid configuration")
 
-        if (isConfigError) {
-            // Ошибка генерации конфига (unknown field и т.п.) — короткий бан 1с,
-            // чтобы fallback сразу мог взять следующий сервер без проблемного extra.
-            logCollector.warn(
-                TAG,
-                "Configuration error detected for ${autoSwitcher.currentServer.value?.config?.name}. " +
-                    "Skipping long blacklist to allow immediate fallback."
-            )
-            autoSwitcher.markServerFailed(
-                autoSwitcher.currentServer.value?.config,
-                ttlMs = 1_000L
-            )
-        } else {
-            // Сетевая/ядерная ошибка — обычный бан ~10 мин.
-            autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+        val isLocalReason = reason is VpnFailureReason.TunConflict ||
+            reason is VpnFailureReason.AnotherVpnActive ||
+            reason is VpnFailureReason.PermissionDenied
+
+        when {
+            isConfigError -> {
+                // Ошибка генерации конфига (unknown field и т.п.) — короткий бан 1с,
+                // чтобы fallback сразу мог взять следующий сервер без проблемного extra.
+                logCollector.warn(
+                    TAG,
+                    "Configuration error detected for ${autoSwitcher.currentServer.value?.config?.name}. " +
+                        "Skipping long blacklist to allow immediate fallback."
+                )
+                autoSwitcher.markServerFailed(
+                    autoSwitcher.currentServer.value?.config,
+                    ttlMs = 1_000L
+                )
+            }
+            isLocalCoreFailure || isLocalReason -> {
+                // The core failed to start, TUN could not be created, another VPN owns the
+                // tunnel or permission is missing. The profile is not at fault; banning it
+                // would turn a device-side problem into a fake "all servers are dead" verdict.
+                logCollector.warn(TAG, "Local VPN failure detected — NOT banning server")
+            }
+            else -> {
+                // Сетевая/ядерная ошибка — обычный бан ~10 мин.
+                autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+            }
         }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))
     }

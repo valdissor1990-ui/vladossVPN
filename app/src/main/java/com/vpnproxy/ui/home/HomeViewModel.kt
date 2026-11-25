@@ -595,14 +595,14 @@ class HomeViewModel @Inject constructor(
      * touches the endpoint-failure history. [BypassOrchestrator] caps preset changes, so a
      * dead network cannot loop.
      *
-     * Scheduling is confined to Main: the state collector already runs there, and
-     * [failConnect] hops here before scheduling, so the `isActive` check and the assignment
-     * cannot start two steps for one failure.
+     * Scheduling is confined to Main: the state collector already runs there, so the
+     * `isActive` check and the assignment cannot start two steps for one failure.
+     * [failConnect] does not schedule the autopilot: only a retryable state from the
+     * coordinator reaches this function.
      */
     private fun scheduleBypassAutopilot() {
-        // Run the decision on Main. The state collector already runs there, and failConnect
-        // can call this from IO; a single thread makes the isActive check and the assignment
-        // atomic without extra locks.
+        // Run the decision on Main. The state collector already runs there; a single thread
+        // makes the isActive check and the assignment atomic without extra locks.
         viewModelScope.launch(Dispatchers.Main.immediate) {
             if (!FeatureFlags.BYPASS_AUTOPILOT_ENABLED) return@launch
             if (bypassJob?.isActive == true) return@launch
@@ -929,13 +929,19 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
                 // The coordinator moves to Connecting after ServerSelected, and the collector
-                // normally arms the watchdog. Arm it here as a safety net: the coordinator can
-                // silently drop ServerSelected when the provider scope changed during preflight,
-                // and then no Connecting transition ever happens. Both arm and cancel run on
-                // Main, so there is no cross-thread cancel+assign race.
+                // normally arms the watchdog. Arm it here too, but only while the attempt is
+                // live: a late arm after a terminal Error could fire during the next preflight.
+                // If ServerSelected is still queued, the collector arms it on the Connecting
+                // transition. Both arm and cancel run on Main, so there is no cross-thread
+                // cancel+assign race.
                 withContext(Dispatchers.Main.immediate) {
                     if (activeTraceId == traceId) {
-                        armConnectingWatchdog()
+                        when (connectionCoordinator.state.value) {
+                            is ConnectionState.Connecting,
+                            is ConnectionState.Reconnecting,
+                            is ConnectionState.Verifying -> armConnectingWatchdog()
+                            else -> Unit
+                        }
                     }
                 }
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null

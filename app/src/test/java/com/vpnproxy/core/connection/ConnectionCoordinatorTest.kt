@@ -261,6 +261,34 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
+    fun providerScope_rejectsServerSelectedWithVisibleError() {
+        val current = sampleServer().copy(config = sampleServer().config.copy(providerTag = "subscription-A"))
+        val outside = current.copy(
+            config = current.config.copy(
+                name = "outside",
+                address = "outside.example.org",
+                providerTag = "subscription-B"
+            )
+        )
+
+        coordinator.setProviderScope("subscription-A")
+        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
+            coordinator.activeTraceId == "scoped" && coordinator.state.value is ConnectionState.Disconnected
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(outside, "scoped")) {
+            coordinator.state.value is ConnectionState.Error
+        }
+
+        val error = coordinator.state.value as ConnectionState.Error
+        assertEquals(
+            "Выбранный сервер вне выбранной подписки. Обновите список или выберите подписку заново.",
+            error.message
+        )
+        assertFalse(error.retryable)
+        assertFalse(coordinator.hasSelectedServer())
+    }
+
+    @Test
     fun fatalAnotherVpnActive_goesToError_noRetry_locks() {
         sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
             coordinator.hasSelectedServer()
