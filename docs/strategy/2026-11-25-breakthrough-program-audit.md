@@ -297,7 +297,7 @@ Endpoint может быть заблокирован сам по себе, CDN 
 | Вложенные клики `Card` и `RadioButton`. | У `RadioButton` обработчик отключён, кликабельна вся карточка. |
 | Формулировка «NORMAL = побайтово golden path» неверна при включённом urltest. | Уточнено: `NORMAL` сбрасывает только транспортную маскировку, остальные настройки сохраняются. |
 
-Тесты после правок: `BypassProfileTest` — 9, `BypassOrchestratorTest` — 5.
+Тесты после правок: `BypassProfileTest` — 9, `BypassOrchestratorTest` — 5, `ConnectionCoordinatorTest` — 15 (включая замену `ShowError` и запрет `ServerSelected` при fatal-lock). Всего 227 тестов, 0 падений.
 
 Остаётся до включения флага: интеграционный тест `HomeViewModel` (в проекте отсутствует тестовый каркас для него) и проверка на устройстве.
 
