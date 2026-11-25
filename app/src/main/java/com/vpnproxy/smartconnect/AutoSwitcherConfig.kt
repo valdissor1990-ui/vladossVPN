@@ -64,4 +64,9 @@ object AutoSwitcherConfig {
     /** SharedPreferences name / key for optional in-app economy toggle. */
     const val batteryPrefsName = "vpn_battery_policy_v1"
     const val batteryEconomyEnabledKey = "economy_mode"
+    /**
+     * Screen-off factor for the monitoring interval. A locked phone has no user watching the
+     * latency, so wakeups are halved again on top of Battery Saver / economy mode.
+     */
+    const val screenOffIntervalMultiplier = 2L
 }
