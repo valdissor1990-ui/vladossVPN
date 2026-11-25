@@ -46,12 +46,14 @@ class VpnFailureReasonTest {
     @Test
     fun presetAutopilotOnlyAcceptsTransportFailures() {
         assertTrue(VpnFailureReason.NetworkTimeout("timeout").isPresetRetryable())
-        assertTrue(VpnFailureReason.Unknown.isPresetRetryable())
+        assertTrue(VpnFailureReason.CoreError("handshake timeout").isPresetRetryable())
+        assertFalse(VpnFailureReason.Unknown.isPresetRetryable())
         assertFalse(VpnFailureReason.BindError.isPresetRetryable())
         assertFalse(VpnFailureReason.PermissionDenied.isPresetRetryable())
         assertFalse(VpnFailureReason.TunConflict.isPresetRetryable())
         assertFalse(VpnFailureReason.AnotherVpnActive.isPresetRetryable())
         assertFalse(VpnFailureReason.CoreError("""json: unknown field "extra"""").isPresetRetryable())
+        assertFalse(VpnFailureReason.CoreError("Unable to start libbox 1.14.3: native init failed").isPresetRetryable())
     }
 
     @Test

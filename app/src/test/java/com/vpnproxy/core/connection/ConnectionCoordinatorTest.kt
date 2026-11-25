@@ -136,10 +136,14 @@ class ConnectionCoordinatorTest {
         val traceBefore = coordinator.activeTraceId
 
         coordinator.send(ConnectionEvent.ConnectRequested("autopilot", userInitiated = false))
-        Thread.sleep(150)
+        // Barrier: UserDisconnect is processed after the ignored ConnectRequested, does not
+        // clear the fatal lock, and gives the test a deterministic ordering signal instead of
+        // sleeping and hoping the negative event was processed.
+        sendAndWait(ConnectionEvent.UserDisconnect) {
+            coordinator.state.value is ConnectionState.Disconnecting
+        }
 
         assertTrue(coordinator.isFatalErrorLocked)
-        assertTrue(coordinator.state.value is ConnectionState.Error)
         assertEquals(traceBefore, coordinator.activeTraceId)
     }
 
