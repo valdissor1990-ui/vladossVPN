@@ -64,7 +64,8 @@ class ServiceChecker @Inject constructor(
                         val result = semaphore.withPermit {
                             probeOne(target, vpnActive, coreTransitioning)
                         }
-                        onResult?.invoke(result)
+                        // A broken callback must not abort the sweep and lose finished results.
+                        runCatching { onResult?.invoke(result) }
                         result
                     }
                 }.awaitAll()

@@ -21,7 +21,10 @@ import kotlin.concurrent.thread
 class HttpServiceProbeTest {
 
     private companion object {
-        const val HEAD_DELAY_MS = 300L
+        /** Slow HEAD; the successful GET must stay well below it. */
+        const val HEAD_DELAY_MS = 500L
+        /** Generous ceiling for a local GET, still below HEAD_DELAY_MS. */
+        const val LATENCY_CEILING_MS = 400L
     }
 
     private lateinit var server: ServerSocket
@@ -118,7 +121,7 @@ class HttpServiceProbeTest {
     fun latencyComesFromTheSuccessfulAttemptOnly() = runBlocking {
         val result = probe().probe(target("/head-rejected"))
 
-        // HEAD is slowed down by HEAD_DELAY_MS; summing both attempts would exceed it.
-        assertTrue("latency=${result.latencyMs}", result.latencyMs < HEAD_DELAY_MS)
+        // HEAD is slowed down by HEAD_DELAY_MS; summing both attempts would exceed the ceiling.
+        assertTrue("latency=${result.latencyMs}", result.latencyMs < LATENCY_CEILING_MS)
     }
 }

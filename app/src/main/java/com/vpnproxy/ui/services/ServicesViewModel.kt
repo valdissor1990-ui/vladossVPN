@@ -126,9 +126,9 @@ class ServicesViewModel @Inject constructor(
             } catch (error: Exception) {
                 // Technical details belong in the journal, not in the UI.
                 logCollector.warn(TAG, "SERVICE-CHECK failed error=${error.javaClass.simpleName}")
-                _state.update {
-                    it.copy(
-                        results = partial.toMap().ifEmpty { it.results },
+                _state.update { current ->
+                    current.copy(
+                        results = partial.toMap().ifEmpty { current.results },
                         message = ERROR_TEXT
                     )
                 }
