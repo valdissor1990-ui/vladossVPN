@@ -137,8 +137,13 @@ fun ServicesScreen(
 
             state.lastCheckedAt?.let { checkedAt ->
                 Spacer(Modifier.height(8.dp))
+                val text = if (state.partial) {
+                    "Проверено частично: ${state.results.size} из ${ServiceCatalog.defaultTargets.size}"
+                } else {
+                    "Проверено: ${formatTime(checkedAt)}"
+                }
                 Text(
-                    "Проверено: ${formatTime(checkedAt)}",
+                    text,
                     color = HappMuted,
                     fontSize = 12.sp
                 )

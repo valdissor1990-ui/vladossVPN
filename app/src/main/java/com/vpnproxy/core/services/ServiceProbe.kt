@@ -40,8 +40,9 @@ class HttpServiceProbe(
 
     companion object {
         /**
-         * Per-attempt timeout. Kept below the sweep deadline budget: 7 targets in 2 waves
-         * with HEAD+GET fallback must fit inside the ViewModel's 20 s limit.
+         * Per-attempt timeout. 3 s is a deliberate trade: slow 3G TLS handshakes may be
+         * reported as "не удалось проверить", but the whole sweep must fit the 20 s deadline.
+         * Connect and read each get 3 s, so one attempt can theoretically take 6 s.
          */
         private const val TIMEOUT_MS = 3_000
         private const val USER_AGENT = "vladossVPN/1.0"

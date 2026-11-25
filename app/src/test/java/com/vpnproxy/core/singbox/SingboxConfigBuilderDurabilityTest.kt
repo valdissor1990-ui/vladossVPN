@@ -115,6 +115,20 @@ class SingboxConfigBuilderDurabilityTest {
     }
 
     @Test
+    fun defaultDurabilityProducesGoldenConfigShape() {
+        // Guards the promise that an untouched install gets a single concrete proxy outbound
+        // and no urltest group, even if someone changes the default durability argument.
+        val json = SingboxConfigBuilder.buildVpn(config("primary"))
+        val outbounds = outbounds(json)
+        val root = Json.parseToJsonElement(json).jsonObject
+
+        assertFalse(outbounds.any { it["type"]!!.jsonPrimitive.content == "urltest" })
+        val proxy = outbounds.single { it["tag"]!!.jsonPrimitive.content == "proxy" }
+        assertEquals("vless", proxy["type"]!!.jsonPrimitive.content)
+        assertEquals("proxy", root["route"]!!.jsonObject["final"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun utlsFingerprintOverrideWins() {
         val tls = outbounds(
             SingboxConfigBuilder.buildVpn(

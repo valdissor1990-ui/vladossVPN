@@ -27,7 +27,9 @@ data class ServicesUiState(
     val coreTransitioning: Boolean = false,
     val results: Map<String, ServiceCheckResult> = emptyMap(),
     val lastCheckedAt: Long? = null,
-    val message: String? = null
+    val message: String? = null,
+    /** True when the deadline cut the sweep short, so the table is incomplete. */
+    val partial: Boolean = false
 )
 
 @HiltViewModel
@@ -57,7 +59,7 @@ class ServicesViewModel @Inject constructor(
     private var runJob: Job? = null
 
     /** Guards against an old coroutine's `finally` clearing the flag of a newer run. */
-    private var runGeneration = 0
+    private val runGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     init {
         // Live tunnel state: the screen must never claim "VPN is off" while it is on.
@@ -77,7 +79,7 @@ class ServicesViewModel @Inject constructor(
             _state.update { it.copy(message = BUSY_TEXT) }
             return
         }
-        val generation = ++runGeneration
+        val generation = runGeneration.incrementAndGet()
         // Collected as targets finish: if the deadline hits, the user still sees partial data.
         val partial = java.util.concurrent.ConcurrentHashMap<String, ServiceCheckResult>()
         runJob = viewModelScope.launch {
@@ -108,7 +110,8 @@ class ServicesViewModel @Inject constructor(
                     it.copy(
                         results = results.associateBy { result -> result.serviceId },
                         lastCheckedAt = System.currentTimeMillis(),
-                        message = null
+                        message = null,
+                        partial = false
                     )
                 }
             } catch (timeout: TimeoutCancellationException) {
@@ -118,7 +121,8 @@ class ServicesViewModel @Inject constructor(
                         results = partial.toMap(),
                         lastCheckedAt = if (partial.isEmpty()) it.lastCheckedAt
                         else System.currentTimeMillis(),
-                        message = TIMEOUT_TEXT
+                        message = TIMEOUT_TEXT,
+                        partial = partial.isNotEmpty()
                     )
                 }
             } catch (cancelled: CancellationException) {
@@ -128,15 +132,16 @@ class ServicesViewModel @Inject constructor(
                 logCollector.warn(TAG, "SERVICE-CHECK failed error=${error.javaClass.simpleName}")
                 _state.update { current ->
                     current.copy(
-                        results = partial.toMap().ifEmpty { current.results },
-                        message = ERROR_TEXT
+                        results = partial.toMap(),
+                        message = ERROR_TEXT,
+                        partial = partial.isNotEmpty()
                     )
                 }
             } finally {
                 // Runs on success, failure and cancellation: without it a cancelled sweep
                 // would leave the button stuck on "already running" forever. The generation
                 // check keeps a late `finally` from clearing the flag of a newer run.
-                if (generation == runGeneration) {
+                if (generation == runGeneration.get()) {
                     _state.update { it.copy(isChecking = false) }
                 }
             }
@@ -149,7 +154,7 @@ class ServicesViewModel @Inject constructor(
         runJob = null
         // Invalidate the cancelled coroutine's `finally`, then release the flag here:
         // a cancel that lands before the coroutine starts never reaches its `finally`.
-        runGeneration++
+        runGeneration.incrementAndGet()
         _state.update { it.copy(isChecking = false) }
     }
 
@@ -164,7 +169,8 @@ class ServicesViewModel @Inject constructor(
             val next = current.copy(
                 isChecking = true,
                 results = emptyMap(),
-                message = null
+                message = null,
+                partial = false
             )
             if (_state.compareAndSet(current, next)) return next
         }

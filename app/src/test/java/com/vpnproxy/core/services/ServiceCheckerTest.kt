@@ -177,6 +177,27 @@ class ServiceCheckerTest {
     }
 
     @Test
+    fun onResultReceivesEveryTargetExactlyOnce() = runBlocking {
+        val probe = FakeProbe(
+            mapOf(
+                "a" to ServiceProbeResult(reachable = true, latencyMs = 5L, httpCode = 200),
+                "b" to ServiceProbeResult(reachable = true, latencyMs = 7L, httpCode = 200)
+            )
+        )
+        val checker = ServiceChecker(probe)
+        val collected = java.util.concurrent.ConcurrentHashMap<String, ServiceCheckResult>()
+
+        val results = checker.checkAll(
+            targets,
+            vpnActive = { true },
+            onResult = { result -> collected[result.serviceId] = result }
+        )
+
+        assertEquals(results!!.map { it.serviceId }.toSet(), collected.keys)
+        assertEquals(targets.size, collected.size)
+    }
+
+    @Test
     fun catalogueHasNoRussianEndpointsAndNoDuplicates() {
         val targets = ServiceCatalog.defaultTargets
         assertEquals(targets.size, targets.map { it.id }.distinct().size)

@@ -87,5 +87,8 @@ class ServicesViewModelTest {
         assertTrue(vm.state.value.isChecking)
         advanceUntilIdle()
         assertFalse(vm.state.value.isChecking)
+        // The retry must produce a full table, not inherit a half-finished one.
+        assertEquals(ServiceCatalog.defaultTargets.size, vm.state.value.results.size)
+        assertFalse(vm.state.value.partial)
     }
 }

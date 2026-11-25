@@ -29,9 +29,10 @@ class ServiceChecker @Inject constructor(
 
     companion object {
         /**
-         * 7 targets in 2 waves at a 3 s per-attempt timeout: worst case ~12 s, which fits
-         * inside the ViewModel's 20 s deadline. Three permits would allow ~24 s and turn a
-         * dead upstream into an empty result table.
+         * 7 targets in 2 waves at a 3 s connect + 3 s read timeout. A live loopback proxy
+         * answers in milliseconds, so a normal sweep takes ~1-2 s; the pathological ceiling
+         * is ~24 s, which is exactly why partial results are kept when the deadline fires.
+         * Three permits would only add a third wave without improving the normal case.
          */
         private const val MAX_CONCURRENCY = 4
     }
