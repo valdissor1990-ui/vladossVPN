@@ -314,11 +314,20 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 if (!isWithinProviderScope(event.server)) {
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
+                    if (current is ConnectionState.Connected) {
+                        // A live tunnel keeps its selection handle. Clearing it here would make
+                        // currentServerName()/hasSelectedServer() report nothing for a session
+                        // that is still up, and ShowError would tear it down for no reason.
+                        logW("Live session kept; out-of-scope selection ignored")
+                        return
+                    }
                     // Do not leave a stale selection behind: NetworkChanged would otherwise
                     // reconnect the core to the server that was just rejected.
                     pendingServerName = null
                     activeScoredServer = null
                     hasServerSelected = false
+                    activeTraceId = null
+                    cancelSelectionJob()
                     // A silent return leaves the UI in "Подключение…" until the watchdog fires.
                     // Tell the user why the selection was rejected instead of waiting 90 seconds.
                     send(

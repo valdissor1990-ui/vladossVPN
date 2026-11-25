@@ -15,6 +15,7 @@ import com.vpnproxy.R
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.connection.FailureBanPolicy
 import com.vpnproxy.core.connection.VpnFailureReason
 import com.vpnproxy.core.connection.VpnStartException
 import com.vpnproxy.core.diagnostics.BatteryLogger
@@ -664,9 +665,7 @@ class VpnProxyService : VpnService() {
             is VpnFailureReason.CoreError -> reason.message
             else -> reason.toString()
         }).lowercase()
-        val isBindError = errorMessage.contains("address already in use") ||
-            errorMessage.contains("bind:") ||
-            errorMessage.contains("eaddrinuse")
+        val isBindError = FailureBanPolicy.isBindFailure(errorMessage)
 
         if (isBindError) {
             // A local listener collision is a lifecycle failure, not evidence against the remote server.
@@ -675,50 +674,39 @@ class VpnProxyService : VpnService() {
             return
         }
 
-        val isConfigError = VpnFailureReason.isConfigurationError(errorMessage)
-        // A remote network failure can be wrapped by the same libbox startup prefix. It is
-        // still a network failure, so the profile may be fine but the endpoint is not reachable.
-        val isNetworkFailure = reason is VpnFailureReason.NetworkTimeout ||
-            errorMessage.contains("timeout") ||
-            errorMessage.contains("deadline exceeded") ||
-            errorMessage.contains("connection refused") ||
-            errorMessage.contains("no route") ||
-            errorMessage.contains("unreachable") ||
-            errorMessage.contains("eof")
-        val isLocalCoreFailure = VpnFailureReason.isLocalCoreStartFailure(errorMessage)
+        // The profile that actually failed is the selected one; the auto-switcher handle can
+        // already be cleared by a scope rejection, and then the ban would be silently lost.
+        val failedConfig = connectionCoordinator.currentSelectedServer()?.config
+            ?: autoSwitcher.currentServer.value?.config
 
-        val isLocalReason = reason is VpnFailureReason.TunConflict ||
-            reason is VpnFailureReason.AnotherVpnActive ||
-            reason is VpnFailureReason.PermissionDenied
-
-        when {
-            isConfigError -> {
+        when (FailureBanPolicy.action(reason, errorMessage)) {
+            FailureBanPolicy.Action.BAN_SHORT -> {
                 // Ошибка генерации конфига (unknown field и т.п.) — короткий бан 1с,
                 // чтобы fallback сразу мог взять следующий сервер без проблемного extra.
                 logCollector.warn(
                     TAG,
-                    "Configuration error detected for ${autoSwitcher.currentServer.value?.config?.name}. " +
+                    "Configuration error detected for ${failedConfig?.name}. " +
                         "Skipping long blacklist to allow immediate fallback."
                 )
                 autoSwitcher.markServerFailed(
-                    autoSwitcher.currentServer.value?.config,
+                    failedConfig,
                     ttlMs = 1_000L
                 )
             }
-            isNetworkFailure -> {
+            FailureBanPolicy.Action.BAN_NETWORK -> {
                 // Сетевая ошибка, даже если она пришла в обёртке запуска ядра.
                 logCollector.warn(TAG, "Network failure detected — banning server")
-                autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+                autoSwitcher.markServerFailed(failedConfig)
             }
-            isLocalCoreFailure || isLocalReason -> {
+            FailureBanPolicy.Action.NO_BAN -> {
                 // The core failed to start, TUN could not be created, another VPN owns the
                 // tunnel or permission is missing. The profile is not at fault; banning it
                 // would turn a device-side problem into a fake "all servers are dead" verdict.
                 logCollector.warn(TAG, "Local VPN failure detected — NOT banning server")
             }
-            else -> {
+            FailureBanPolicy.Action.BAN_OTHER -> {
                 // Прочие ошибки ядра — обычный бан ~10 мин.
-                autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+                autoSwitcher.markServerFailed(failedConfig)
             }
         }
         connectionCoordinator.send(ConnectionEvent.CoreError(reason))

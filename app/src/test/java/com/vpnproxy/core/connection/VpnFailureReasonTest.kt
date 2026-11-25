@@ -47,6 +47,36 @@ class VpnFailureReasonTest {
     }
 
     @Test
+    fun wrappedConfigErrorMentionsTunAllowsFallback() {
+        // The app always has a tun inbound, so a config error text mentions "tun" without
+        // being a conflict. It must stay a fatal-but-fallback CoreError, not a TUN lock.
+        val reason = VpnFailureReason.fromMessage(
+            """Unable to start libbox 1.14.3: start inbound/tun[tun-in]: json: unknown field "mtu""""
+        )
+
+        assertTrue(reason is VpnFailureReason.CoreError)
+        assertFalse(reason.isRetryable())
+        assertTrue(reason.canFallbackToNextServer())
+        assertFalse(reason.isPresetRetryable())
+    }
+
+    @Test
+    fun wrappedTunSetupNotPermittedStaysRetryable() {
+        // Setting up the tun interface is a device-side step. It is not a conflict with
+        // another VPN, so it must not take the fatal lock or block server fallback.
+        listOf(
+            "Unable to start libbox 1.14.3: start inbound/tun[tun-in]: configure tun interface: operation not permitted",
+            "Unable to start libbox 1.14.3: set tun address: operation not permitted"
+        ).forEach { message ->
+            val reason = VpnFailureReason.fromMessage(message)
+            assertTrue(message, reason is VpnFailureReason.CoreError)
+            assertTrue(message, reason.isRetryable())
+            assertTrue(message, reason.canFallbackToNextServer())
+            assertFalse(message, reason.isPresetRetryable())
+        }
+    }
+
+    @Test
     fun profileConfigurationErrorAllowsFallbackButRemainsFatalWithoutCandidates() {
         val reason = VpnFailureReason.fromMessage(
             """Unable to start libbox 1.14.3: outbounds[0].transport.session_id_placement: json: unknown field"""
