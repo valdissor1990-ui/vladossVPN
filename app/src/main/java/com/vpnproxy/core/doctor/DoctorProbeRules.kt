@@ -7,7 +7,7 @@ import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
  *
  * A probe that cannot possibly succeed must not report `FAIL`: a QUIC profile has no TCP
  * endpoint, and a profile without TLS has no handshake. The Doctor turns a non-null reason
- * into `WARN`, never into a false diagnosis.
+ * into `SKIP` with the reason as the summary, never into a false diagnosis.
  */
 internal object DoctorProbeRules {
 

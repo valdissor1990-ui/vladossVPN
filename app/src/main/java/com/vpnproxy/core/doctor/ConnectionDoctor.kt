@@ -111,7 +111,8 @@ class ConnectionDoctor(
                 status = outcome.status,
                 summary = outcome.summary,
                 durationMs = duration,
-                remedy = outcome.remedy
+                remedy = outcome.remedy,
+                skipReason = outcome.skipReason
             )
         }
     }

@@ -198,7 +198,14 @@ class AndroidDoctorProbes @Inject constructor(
         }
         val resolved = withTimeoutOrNull(DNS_TIMEOUT_MS.toLong()) {
             withContext(Dispatchers.IO) {
-                runCatching { InetAddress.getAllByName(host).isNotEmpty() }.getOrDefault(false)
+                try {
+                    // DNS is a blocking call and ignores cancellation without this wrapper.
+                    runInterruptible { InetAddress.getAllByName(host).isNotEmpty() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
             }
         }
         return if (resolved == true) {
@@ -215,15 +222,24 @@ class AndroidDoctorProbes @Inject constructor(
     private suspend fun checkTcp(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
         DoctorProbeRules.tcpSkipReason(config)?.let {
-            return StepOutcome(DiagnosticStatus.OK, it)
+            return StepOutcome(DiagnosticStatus.SKIP, it, skipReason = it)
         }
         val connected = withTimeoutOrNull(TCP_TIMEOUT_MS + 1_000L) {
             withContext(Dispatchers.IO) {
-                runCatching {
-                    Socket().use { socket ->
-                        socket.connect(InetSocketAddress(config.address, config.port), TCP_TIMEOUT_MS)
+                try {
+                    // Blocking connect ignores coroutine cancellation; runInterruptible lets the
+                    // step timeout and the total Doctor budget actually stop it.
+                    runInterruptible {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress(config.address, config.port), TCP_TIMEOUT_MS)
+                        }
                     }
-                }.isSuccess
+                    true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
             }
         } == true
         return if (connected) {
@@ -258,27 +274,35 @@ class AndroidDoctorProbes @Inject constructor(
             )
         }
         DoctorProbeRules.tlsSkipReason(config)?.let {
-            return StepOutcome(DiagnosticStatus.OK, it)
+            return StepOutcome(DiagnosticStatus.SKIP, it, skipReason = it)
         }
         val host = config.sni?.takeIf { it.isNotBlank() }
             ?: config.host?.takeIf { it.isNotBlank() }
             ?: config.address
-        val handshake = withTimeoutOrNull(TLS_TIMEOUT_MS.toLong()) {
+        // Connect and handshake are sequential, so the outer budget must cover both.
+        val handshake = withTimeoutOrNull(TCP_TIMEOUT_MS + TLS_TIMEOUT_MS + 1_000L) {
             withContext(Dispatchers.IO) {
-                runCatching {
-                    (SSLSocketFactory.getDefault().createSocket() as SSLSocket).use { socket ->
-                        socket.connect(InetSocketAddress(config.address, config.port), TCP_TIMEOUT_MS)
-                        // A read timeout makes startHandshake() bounded even if the server
-                        // accepts TCP and then stays silent.
-                        socket.soTimeout = TLS_TIMEOUT_MS
-                        if (!isIpLiteral(host)) {
-                            socket.sslParameters = socket.sslParameters.apply {
-                                serverNames = listOf(SNIHostName(host))
+                try {
+                    runInterruptible {
+                        (SSLSocketFactory.getDefault().createSocket() as SSLSocket).use { socket ->
+                            socket.connect(InetSocketAddress(config.address, config.port), TCP_TIMEOUT_MS)
+                            // A read timeout makes startHandshake() bounded even if the server
+                            // accepts TCP and then stays silent.
+                            socket.soTimeout = TLS_TIMEOUT_MS
+                            if (!isIpLiteral(host)) {
+                                socket.sslParameters = socket.sslParameters.apply {
+                                    serverNames = listOf(SNIHostName(host))
+                                }
                             }
+                            socket.startHandshake()
                         }
-                        socket.startHandshake()
                     }
-                }.isSuccess
+                    true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
             }
         } == true
         return if (handshake) {
@@ -301,7 +325,10 @@ class AndroidDoctorProbes @Inject constructor(
                 Remedy.Recheck
             )
         }
-        val result = deepProbeEngine.pingProfiles(listOf(config)).firstOrNull()
+        // The engine logs `profile=${config.name}` on a failed sample, and a default profile
+        // name is `address:port`. The Doctor already knows the endpoint, so the log must not.
+        val probeConfig = config.copy(name = "doctor")
+        val result = deepProbeEngine.pingProfiles(listOf(probeConfig)).firstOrNull()
         return if (result?.success == true) {
             StepOutcome(
                 DiagnosticStatus.OK,
@@ -391,7 +418,7 @@ class AndroidDoctorProbes @Inject constructor(
      * `runInterruptible` is required: a blocking socket call ignores coroutine cancellation,
      * so neither the step timeout nor the total budget could stop it otherwise.
      */
-    private suspend fun probeHttpStatus(url: String): Int? = runCatching {
+    private suspend fun probeHttpStatus(url: String): Int? = try {
         runInterruptible(Dispatchers.IO) {
             fun request(method: String): Int {
                 val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -410,7 +437,12 @@ class AndroidDoctorProbes @Inject constructor(
             val head = request("HEAD")
             if (head == HttpURLConnection.HTTP_BAD_METHOD) request("GET") else head
         }
-    }.getOrNull()
+    } catch (cancelled: CancellationException) {
+        // External cancellation (leaving the screen) must propagate, not become a verdict.
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
 
     private fun allConfigs(): List<ParsedConfig> =
         jsonConfigs.allConfigsIncluding(subscriptions.getAllConfigs())
@@ -421,7 +453,8 @@ class AndroidDoctorProbes @Inject constructor(
      * something to probe.
      */
     private fun probeConfig(): ParsedConfig? =
-        activeConfig(allConfigs()) ?: allConfigs().firstOrNull { it.isValid() }
+        activeConfig(allConfigs().filter { it.isValid() })
+            ?: allConfigs().firstOrNull { it.isValid() }
 
     private fun activeConfig(configs: List<ParsedConfig>): ParsedConfig? {
         val saved = lastServerStore.load() ?: return null

@@ -29,13 +29,19 @@ data class DiagnosticResult(
     }
 }
 
-/** What a probe reports. `SKIP` is decided by the orchestrator, not by a probe. */
+/** What a probe reports. `SKIP` is allowed when the profile itself makes the step inapplicable. */
 data class StepOutcome(
     val status: DiagnosticStatus,
     val summary: String,
-    val remedy: Remedy? = null
+    val remedy: Remedy? = null,
+    val skipReason: String? = null
 ) {
     init {
-        require(status != DiagnosticStatus.SKIP) { "probes cannot skip a step" }
+        require(status != DiagnosticStatus.SKIP || skipReason != null) {
+            "a skipped step must explain why"
+        }
+        require(status == DiagnosticStatus.SKIP || skipReason == null) {
+            "only a skipped step carries a skip reason"
+        }
     }
 }

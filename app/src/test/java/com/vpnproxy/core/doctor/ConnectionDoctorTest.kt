@@ -141,6 +141,25 @@ class ConnectionDoctorTest {
     }
 
     @Test
+    fun probeLevelSkipCarriesItsReasonIntoTheReport() = runTest {
+        val reason = "TLS-рукопожатие не проверяется: в профиле нет TLS."
+        val probes = FakeProbes { step, _ ->
+            if (step == DiagnosticStep.TLS) {
+                StepOutcome(DiagnosticStatus.SKIP, reason, skipReason = reason)
+            } else {
+                StepOutcome(DiagnosticStatus.OK, "ok")
+            }
+        }
+        val report = ConnectionDoctor(probes, clock = { testScheduler.currentTime })
+            .diagnose(DoctorContext(tunnelUp = false, isolatedCoreConsent = true))
+
+        val tls = result(report, DiagnosticStep.TLS)
+        assertEquals(DiagnosticStatus.SKIP, tls.status)
+        assertEquals(reason, tls.skipReason)
+        assertEquals(reason, tls.summary)
+    }
+
+    @Test
     fun remediesSeparateSafeActionsFromConfirmation() {
         assertEquals(RemedySafety.SAFE_AUTO, Remedy.Recheck.safety)
         assertEquals(RemedySafety.SAFE_AUTO, Remedy.OpenSettings(SettingsSection.DNS).safety)
