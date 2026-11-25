@@ -647,8 +647,8 @@ class VpnProxyService : VpnService() {
 
     private fun emitCoreError(t: Throwable) {
         // Take the typed reason from the cause chain first. SingBoxCore wraps every startup
-        // failure in IllegalStateException("Unable to start libbox …"), so parsing only
-        // t.message loses the original VpnFailureReason (for example openTun -> TunConflict).
+        // failure in IllegalStateException("Unable to start libbox …"), so the message-only
+        // path turns an openTun failure into TunConflict and loses the typed reason.
         val typedReason = generateSequence(t as Throwable?) { it.cause }
             .filterIsInstance<VpnStartException>()
             .firstOrNull()
@@ -675,11 +675,17 @@ class VpnProxyService : VpnService() {
             return
         }
 
+        val isConfigError = VpnFailureReason.isConfigurationError(errorMessage)
+        // A remote network failure can be wrapped by the same libbox startup prefix. It is
+        // still a network failure, so the profile may be fine but the endpoint is not reachable.
+        val isNetworkFailure = reason is VpnFailureReason.NetworkTimeout ||
+            errorMessage.contains("timeout") ||
+            errorMessage.contains("deadline exceeded") ||
+            errorMessage.contains("connection refused") ||
+            errorMessage.contains("no route") ||
+            errorMessage.contains("unreachable") ||
+            errorMessage.contains("eof")
         val isLocalCoreFailure = VpnFailureReason.isLocalCoreStartFailure(errorMessage)
-        val isConfigError = errorMessage.contains("unknown field") ||
-            errorMessage.contains("decode config") ||
-            errorMessage.contains("invalid config") ||
-            errorMessage.contains("invalid configuration")
 
         val isLocalReason = reason is VpnFailureReason.TunConflict ||
             reason is VpnFailureReason.AnotherVpnActive ||
@@ -699,6 +705,11 @@ class VpnProxyService : VpnService() {
                     ttlMs = 1_000L
                 )
             }
+            isNetworkFailure -> {
+                // Сетевая ошибка, даже если она пришла в обёртке запуска ядра.
+                logCollector.warn(TAG, "Network failure detected — banning server")
+                autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
+            }
             isLocalCoreFailure || isLocalReason -> {
                 // The core failed to start, TUN could not be created, another VPN owns the
                 // tunnel or permission is missing. The profile is not at fault; banning it
@@ -706,7 +717,7 @@ class VpnProxyService : VpnService() {
                 logCollector.warn(TAG, "Local VPN failure detected — NOT banning server")
             }
             else -> {
-                // Сетевая/ядерная ошибка — обычный бан ~10 мин.
+                // Прочие ошибки ядра — обычный бан ~10 мин.
                 autoSwitcher.markServerFailed(autoSwitcher.currentServer.value?.config)
             }
         }

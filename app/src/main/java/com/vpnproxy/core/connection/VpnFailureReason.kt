@@ -65,7 +65,8 @@ sealed class VpnFailureReason {
     }
 
     companion object {
-        private fun isConfigurationError(message: String): Boolean {
+        /** True when the message points at the profile/config, not at the device or network. */
+        fun isConfigurationError(message: String): Boolean {
             val m = message.lowercase()
             return m.contains("unknown field") ||
                 m.contains("decode config") ||
@@ -111,12 +112,19 @@ sealed class VpnFailureReason {
                 m.contains("another vpn") -> AnotherVpnActive
                 m.contains("permission is missing") || m.contains("permission denied") || m.contains("permission revoked") ->
                     PermissionDenied
-                // libbox wraps every startup failure with the same prefix, including local
-                // TUN creation. Check it before the broad "tun" rule, otherwise openTun
-                // becomes TunConflict and blocks retries and fallback.
+                // A failed local TUN creation is a device-side step: it stays retryable and
+                // must not become TunConflict, which would take the fatal lock.
+                m.contains("opentun failed") -> CoreError(raw)
+                // TUN ownership/creation markers come before the generic libbox wrapper:
+                // SingBoxCore prefixes every startup failure with "Unable to start libbox …",
+                // including a real TUN conflict, which must keep the fatal lock.
+                m.contains("establish failed") ||
+                    m.contains("establish() returned null") ||
+                    m.contains("tun conflict") ||
+                    m.contains("создать tun") ||
+                    m.contains("create tun") ||
+                    m.contains("tun") -> TunConflict
                 isLocalCoreStartFailure(raw) -> CoreError(raw)
-                m.contains("establish failed") || m.contains("establish() returned null") || m.contains("tun") ->
-                    TunConflict
                 m.contains("timeout") || m.contains("превышено время") ->
                     NetworkTimeout(raw)
                 else -> CoreError(raw)

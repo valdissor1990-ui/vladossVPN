@@ -33,6 +33,20 @@ class VpnFailureReasonTest {
     }
 
     @Test
+    fun wrappedTunConflictKeepsFatalLockAndBlocksFallback() {
+        // Sing-box prefixes every startup failure with "Unable to start libbox …", including
+        // a real TUN conflict. The typed reason must still be TunConflict.
+        val reason = VpnFailureReason.fromMessage(
+            "Unable to start libbox 1.14.3: Не удалось создать TUN. Закройте другое VPN и повторите."
+        )
+
+        assertTrue(reason is VpnFailureReason.TunConflict)
+        assertFalse(reason.isRetryable())
+        assertFalse(reason.canFallbackToNextServer())
+        assertFalse(reason.isPresetRetryable())
+    }
+
+    @Test
     fun profileConfigurationErrorAllowsFallbackButRemainsFatalWithoutCandidates() {
         val reason = VpnFailureReason.fromMessage(
             """Unable to start libbox 1.14.3: outbounds[0].transport.session_id_placement: json: unknown field"""
