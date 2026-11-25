@@ -25,6 +25,18 @@ sealed class VpnFailureReason {
     }
 
     /**
+     * Whether changing transport hardening (TLS fragmentation, uTLS fingerprint) can
+     * plausibly help. A local port collision or a broken profile is retryable by the
+     * coordinator but must not consume an autopilot preset change.
+     */
+    fun isPresetRetryable(): Boolean = when (this) {
+        is NetworkTimeout -> true
+        is CoreError -> !isFatalCoreMessage(message) && !isConfigurationError(message)
+        is Unknown -> true
+        else -> false
+    }
+
+    /**
      * A malformed profile should be skipped when other profiles remain. Keep its
      * ordinary retry classification fatal so we do not retry the same broken profile
      * after the candidate list has been exhausted.

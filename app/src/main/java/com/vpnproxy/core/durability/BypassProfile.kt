@@ -20,7 +20,7 @@ enum class BypassProfile(
 ) {
     NORMAL(
         title = "Обычный",
-        summary = "Без дополнительных изменений. Подходит для большинства сетей."
+        summary = "Сбрасывает маскировку TLS. Остальные настройки, включая urltest, сохраняются."
     ),
 
     HARD_NETWORK(
