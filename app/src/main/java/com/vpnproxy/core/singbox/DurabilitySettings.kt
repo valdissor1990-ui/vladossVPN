@@ -1,7 +1,6 @@
 package com.vpnproxy.core.singbox
 
 import android.content.Context
-import com.vpnproxy.util.DebugFlags
 
 /**
  * Optional transport-durability features that harden a connection against DPI and server
@@ -34,9 +33,13 @@ data class DurabilityOptions(
 }
 
 /**
- * Persistence for [DurabilityOptions]. Mirrors [DiagnosticSettings]: values only take effect
- * in diagnostic-enabled builds, so a production build keeps the golden defaults regardless
- * of what is stored on disk.
+ * Persistence for [DurabilityOptions].
+ *
+ * User-facing durability knobs are read in every build: the plan's bypass autopilot must
+ * work for ordinary users, not only in debug. Safety comes from the defaults — every flag
+ * is `false`, so an untouched install produces exactly the golden config. Enabling a knob
+ * is an explicit user action in the durability section and takes effect on the next core
+ * start, because [com.vpnproxy.service.VpnProxyService] reads these options once at launch.
  */
 object DurabilitySettings {
     private const val PREFS = "durability_settings"
@@ -44,7 +47,6 @@ object DurabilitySettings {
     val utlsFingerprints = listOf("chrome", "firefox", "edge", "safari", "ios", "android", "random", "randomized")
 
     fun load(context: Context): DurabilityOptions {
-        if (!DebugFlags.diagnosticEnabled()) return DurabilityOptions()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val fingerprint = prefs.getString("utls_fingerprint", null)?.takeIf { it in utlsFingerprints }
         return DurabilityOptions(
