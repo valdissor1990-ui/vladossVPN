@@ -25,11 +25,20 @@ class ConnectionDoctor(
     private val probes: DoctorProbes,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val stepTimeoutMs: Long = STEP_TIMEOUT_MS,
-    private val totalTimeoutMs: Long = TOTAL_TIMEOUT_MS
+    private val totalTimeoutMs: Long = TOTAL_TIMEOUT_MS,
+    private val stepTimeoutOverrides: Map<DiagnosticStep, Long> = DEFAULT_OVERRIDES
 ) {
     companion object {
         const val STEP_TIMEOUT_MS = 8_000L
         const val TOTAL_TIMEOUT_MS = 45_000L
+        /** The traffic and service probes own their internal deadlines and need more room. */
+        const val TRAFFIC_TIMEOUT_MS = 12_000L
+        const val SERVICES_TIMEOUT_MS = 20_000L
+
+        val DEFAULT_OVERRIDES: Map<DiagnosticStep, Long> = mapOf(
+            DiagnosticStep.TRAFFIC to TRAFFIC_TIMEOUT_MS,
+            DiagnosticStep.SERVICES to SERVICES_TIMEOUT_MS
+        )
     }
 
     init {
@@ -73,8 +82,9 @@ class ConnectionDoctor(
         remainingMs: Long
     ): DiagnosticResult {
         val stepStartedAt = clock()
+        val stepBudget = stepTimeoutOverrides[step] ?: stepTimeoutMs
         val outcome = try {
-            withTimeoutOrNull(minOf(stepTimeoutMs, remainingMs)) {
+            withTimeoutOrNull(minOf(stepBudget, remainingMs)) {
                 probes.probe(step, context)
             }
         } catch (cancelled: CancellationException) {

@@ -22,6 +22,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.HttpURLConnection
+import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 import javax.net.ssl.SNIHostName
@@ -55,6 +57,7 @@ class AndroidDoctorProbes @Inject constructor(
         const val TCP_TIMEOUT_MS = 3_000
         const val TLS_TIMEOUT_MS = 5_000
         const val DNS_TIMEOUT_MS = 5_000
+        const val HTTP_TIMEOUT_MS = 6_000
         const val SUBSCRIPTION_STALE_MS = 7L * 24L * 60L * 60L * 1_000L
         const val SERVICE_SAMPLE = 5
     }
@@ -86,7 +89,7 @@ class AndroidDoctorProbes @Inject constructor(
             }
         }
 
-    private fun checkSubscription(): StepOutcome {
+    private suspend fun checkSubscription(): StepOutcome {
         val all = subscriptions.subscriptions.value
         if (all.isEmpty()) {
             return StepOutcome(
@@ -105,14 +108,40 @@ class AndroidDoctorProbes @Inject constructor(
         }
         val now = System.currentTimeMillis()
         val stale = enabled.count { it.lastUpdated <= 0L || now - it.lastUpdated > SUBSCRIPTION_STALE_MS }
-        return if (stale > 0) {
-            StepOutcome(
+
+        // Contract of step 1: check the URL outside the tunnel and report only the status code.
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            return StepOutcome(
                 DiagnosticStatus.WARN,
-                "Подписки давно не обновлялись: $stale из ${enabled.size}.",
+                "VPN активен: проверка подписки вне туннеля недоступна.",
+                Remedy.Recheck
+            )
+        }
+        val target = enabled.firstOrNull { it.url.isNotBlank() }
+        val status = target?.let { withTimeoutOrNull(HTTP_TIMEOUT_MS + 1_000L) {
+            withContext(Dispatchers.IO) { probeHttpStatus(it.url) }
+        } }
+        return when {
+            target == null -> StepOutcome(
+                DiagnosticStatus.WARN,
+                "У подписок нет адреса для проверки.",
+                Remedy.OpenSettings(SettingsSection.SUBSCRIPTIONS)
+            )
+            status == null -> StepOutcome(
+                DiagnosticStatus.WARN,
+                "Подписку не удалось проверить: нет ответа. Возможна блокировка сети.",
                 Remedy.RefreshSubscription
             )
-        } else {
-            StepOutcome(DiagnosticStatus.OK, "Подписки обновлены недавно: ${enabled.size}.")
+            status != null && status in 200..399 -> StepOutcome(
+                DiagnosticStatus.OK,
+                "Подписка отвечает: HTTP $status." +
+                    if (stale > 0) " Давно не обновлялась: $stale из ${enabled.size}." else ""
+            )
+            else -> StepOutcome(
+                DiagnosticStatus.FAIL,
+                "Подписка вернула HTTP $status. Обновите её или проверьте адрес.",
+                Remedy.RefreshSubscription
+            )
         }
     }
 
@@ -154,9 +183,9 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkDns(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
-        val host = config.sni?.takeIf { it.isNotBlank() }
-            ?: config.host?.takeIf { it.isNotBlank() }
-            ?: config.address
+        // Resolve the server address itself. SNI is a camouflage name and proves nothing
+        // about the endpoint the profile actually connects to.
+        val host = config.address
         if (isIpLiteral(host)) {
             return StepOutcome(DiagnosticStatus.OK, "Адрес задан IP, DNS не требуется.")
         }
@@ -178,6 +207,9 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkTcp(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        DoctorProbeRules.tcpSkipReason(config)?.let {
+            return StepOutcome(DiagnosticStatus.WARN, it, Remedy.Recheck)
+        }
         val connected = withTimeoutOrNull(TCP_TIMEOUT_MS + 1_000L) {
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -200,6 +232,15 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkTls(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        // The tunnel may have come up after the DoctorContext snapshot. Without this guard the
+        // socket would go through the tunnel and a normal handshake result would be misread.
+        if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
+            return StepOutcome(
+                DiagnosticStatus.WARN,
+                "VPN ещё не остановлен. TLS-проба не запускалась.",
+                Remedy.Recheck
+            )
+        }
         if (config.security.equals("reality", ignoreCase = true)) {
             // Reality is designed to look like someone else's TLS. A plain handshake proves
             // nothing, so report a warning and leave the verdict to the proxy probe.
@@ -208,6 +249,9 @@ class AndroidDoctorProbes @Inject constructor(
                 "Reality нельзя проверить обычным TLS-рукопожатием. Смотрите прокси-пробу.",
                 Remedy.Recheck
             )
+        }
+        DoctorProbeRules.tlsSkipReason(config)?.let {
+            return StepOutcome(DiagnosticStatus.WARN, it, Remedy.Recheck)
         }
         val host = config.sni?.takeIf { it.isNotBlank() }
             ?: config.host?.takeIf { it.isNotBlank() }
@@ -287,8 +331,9 @@ class AndroidDoctorProbes @Inject constructor(
     }
 
     private suspend fun checkTraffic(): StepOutcome {
-        val config = probeConfig()
-        val result = DiagnosticProbe.runOnce(config?.name ?: "unknown", logCollector)
+        // Never pass the profile name: it defaults to "address:port" and would leak a server
+        // address into the persistent journal that DiagnosticProbe writes.
+        val result = DiagnosticProbe.runOnce("doctor", logCollector)
         return if (result.success) {
             StepOutcome(
                 DiagnosticStatus.OK,
@@ -331,6 +376,29 @@ class AndroidDoctorProbes @Inject constructor(
             )
         }
     }
+
+    /**
+     * Returns the HTTP status only. The URL is never logged, shown or put into the report.
+     * HEAD first; some panels reject it with 405, so a GET without reading the body follows.
+     */
+    private fun probeHttpStatus(url: String): Int? = runCatching {
+        fun request(method: String): Int {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = HTTP_TIMEOUT_MS
+                readTimeout = HTTP_TIMEOUT_MS
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "vladossVPN-doctor")
+            }
+            return try {
+                connection.responseCode
+            } finally {
+                connection.disconnect()
+            }
+        }
+        val head = request("HEAD")
+        if (head == HttpURLConnection.HTTP_BAD_METHOD) request("GET") else head
+    }.getOrNull()
 
     private fun allConfigs(): List<ParsedConfig> =
         jsonConfigs.allConfigsIncluding(subscriptions.getAllConfigs())
