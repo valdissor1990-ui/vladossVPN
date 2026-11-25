@@ -31,7 +31,7 @@ class ConnectionDoctor(
     companion object {
         const val STEP_TIMEOUT_MS = 8_000L
         const val TOTAL_TIMEOUT_MS = 45_000L
-        /** The traffic and service probes own their internal deadlines and need more room. */
+        /** Upper bounds for steps that do several network requests; the total budget still caps the run. */
         const val TRAFFIC_TIMEOUT_MS = 12_000L
         const val SERVICES_TIMEOUT_MS = 20_000L
 
@@ -44,6 +44,9 @@ class ConnectionDoctor(
     init {
         require(stepTimeoutMs > 0L) { "stepTimeoutMs must be positive" }
         require(totalTimeoutMs > 0L) { "totalTimeoutMs must be positive" }
+        require(stepTimeoutOverrides.values.all { it > 0L }) {
+            "step timeout overrides must be positive"
+        }
     }
 
     suspend fun diagnose(

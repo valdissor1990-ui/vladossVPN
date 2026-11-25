@@ -16,7 +16,7 @@ internal object DoctorProbeRules {
 
     fun tcpSkipReason(config: ParsedConfig): String? =
         if (config.transport.lowercase() in QUIC_TRANSPORTS) {
-            "UDP-транспорт: TCP-проба не применима."
+            "TCP-проба не требуется: профиль работает по UDP."
         } else {
             null
         }
@@ -24,10 +24,10 @@ internal object DoctorProbeRules {
     fun tlsSkipReason(config: ParsedConfig): String? {
         val transport = config.transport.lowercase()
         if (transport in QUIC_TRANSPORTS) {
-            return "UDP-транспорт: обычный TLS-рукопожатие не применимо."
+            return "TLS-рукопожатие не проверяется: профиль работает по UDP."
         }
         if (config.security.lowercase() !in TLS_SECURITY) {
-            return "Профиль без TLS: рукопожатие не проверяется."
+            return "TLS-рукопожатие не проверяется: в профиле нет TLS."
         }
         return null
     }

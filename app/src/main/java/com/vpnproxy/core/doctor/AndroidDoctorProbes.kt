@@ -1,4 +1,4 @@
-package com.vpnproxy.core.doctor
+﻿package com.vpnproxy.core.doctor
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -17,6 +17,7 @@ import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
@@ -57,7 +58,7 @@ class AndroidDoctorProbes @Inject constructor(
         const val TCP_TIMEOUT_MS = 3_000
         const val TLS_TIMEOUT_MS = 5_000
         const val DNS_TIMEOUT_MS = 5_000
-        const val HTTP_TIMEOUT_MS = 6_000
+        const val HTTP_TIMEOUT_MS = 3_000
         const val SUBSCRIPTION_STALE_MS = 7L * 24L * 60L * 60L * 1_000L
         const val SERVICE_SAMPLE = 5
     }
@@ -118,9 +119,11 @@ class AndroidDoctorProbes @Inject constructor(
             )
         }
         val target = enabled.firstOrNull { it.url.isNotBlank() }
-        val status = target?.let { withTimeoutOrNull(HTTP_TIMEOUT_MS + 1_000L) {
-            withContext(Dispatchers.IO) { probeHttpStatus(it.url) }
-        } }
+        // HEAD + optional GET each get their own socket timeout, so the outer deadline must
+        // cover both. runInterruptible inside the probe makes the deadline real.
+        val status = target?.let {
+            withTimeoutOrNull(HTTP_TIMEOUT_MS * 2 + 1_000L) { probeHttpStatus(it.url) }
+        }
         return when {
             target == null -> StepOutcome(
                 DiagnosticStatus.WARN,
@@ -132,10 +135,14 @@ class AndroidDoctorProbes @Inject constructor(
                 "Подписку не удалось проверить: нет ответа. Возможна блокировка сети.",
                 Remedy.RefreshSubscription
             )
-            status != null && status in 200..399 -> StepOutcome(
+            status in 200..399 && stale > 0 -> StepOutcome(
+                DiagnosticStatus.WARN,
+                "Подписка отвечает: HTTP $status. Давно не обновлялась: $stale из ${enabled.size}.",
+                Remedy.RefreshSubscription
+            )
+            status in 200..399 -> StepOutcome(
                 DiagnosticStatus.OK,
-                "Подписка отвечает: HTTP $status." +
-                    if (stale > 0) " Давно не обновлялась: $stale из ${enabled.size}." else ""
+                "Подписка отвечает: HTTP $status."
             )
             else -> StepOutcome(
                 DiagnosticStatus.FAIL,
@@ -208,7 +215,7 @@ class AndroidDoctorProbes @Inject constructor(
     private suspend fun checkTcp(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
         DoctorProbeRules.tcpSkipReason(config)?.let {
-            return StepOutcome(DiagnosticStatus.WARN, it, Remedy.Recheck)
+            return StepOutcome(DiagnosticStatus.OK, it)
         }
         val connected = withTimeoutOrNull(TCP_TIMEOUT_MS + 1_000L) {
             withContext(Dispatchers.IO) {
@@ -251,7 +258,7 @@ class AndroidDoctorProbes @Inject constructor(
             )
         }
         DoctorProbeRules.tlsSkipReason(config)?.let {
-            return StepOutcome(DiagnosticStatus.WARN, it, Remedy.Recheck)
+            return StepOutcome(DiagnosticStatus.OK, it)
         }
         val host = config.sni?.takeIf { it.isNotBlank() }
             ?: config.host?.takeIf { it.isNotBlank() }
@@ -380,24 +387,29 @@ class AndroidDoctorProbes @Inject constructor(
     /**
      * Returns the HTTP status only. The URL is never logged, shown or put into the report.
      * HEAD first; some panels reject it with 405, so a GET without reading the body follows.
+     *
+     * `runInterruptible` is required: a blocking socket call ignores coroutine cancellation,
+     * so neither the step timeout nor the total budget could stop it otherwise.
      */
-    private fun probeHttpStatus(url: String): Int? = runCatching {
-        fun request(method: String): Int {
-            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = HTTP_TIMEOUT_MS
-                readTimeout = HTTP_TIMEOUT_MS
-                instanceFollowRedirects = false
-                setRequestProperty("User-Agent", "vladossVPN-doctor")
+    private suspend fun probeHttpStatus(url: String): Int? = runCatching {
+        runInterruptible(Dispatchers.IO) {
+            fun request(method: String): Int {
+                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method
+                    connectTimeout = HTTP_TIMEOUT_MS
+                    readTimeout = HTTP_TIMEOUT_MS
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", "vladossVPN-doctor")
+                }
+                return try {
+                    connection.responseCode
+                } finally {
+                    connection.disconnect()
+                }
             }
-            return try {
-                connection.responseCode
-            } finally {
-                connection.disconnect()
-            }
+            val head = request("HEAD")
+            if (head == HttpURLConnection.HTTP_BAD_METHOD) request("GET") else head
         }
-        val head = request("HEAD")
-        if (head == HttpURLConnection.HTTP_BAD_METHOD) request("GET") else head
     }.getOrNull()
 
     private fun allConfigs(): List<ParsedConfig> =

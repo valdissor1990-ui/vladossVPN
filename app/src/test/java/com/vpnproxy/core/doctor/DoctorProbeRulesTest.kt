@@ -44,5 +44,21 @@ class DoctorProbeRulesTest {
         assertNotNull(DoctorProbeRules.tlsSkipReason(config("ws", "")))
         assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "tls")))
         assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "reality")))
+        // Case must not matter: a profile with TLS in capitals is still testable.
+        assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "TLS")))
+        assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "Reality")))
+    }
+
+    @Test
+    fun emptyTransportStillGetsTcpProbe() {
+        // An empty transport means a plain TCP profile, so the probe is applicable.
+        assertNull(DoctorProbeRules.tcpSkipReason(config("", "tls")))
+        assertNull(DoctorProbeRules.tlsSkipReason(config("", "tls")))
+    }
+
+    @Test
+    fun tcpProbeAppliesToNonQuicWithoutTls() {
+        assertNull(DoctorProbeRules.tcpSkipReason(config("ws", "none")))
+        assertNull(DoctorProbeRules.tcpSkipReason(config("grpc", "")))
     }
 }
