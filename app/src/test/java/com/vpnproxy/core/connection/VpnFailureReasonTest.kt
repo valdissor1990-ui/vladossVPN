@@ -68,6 +68,17 @@ class VpnFailureReasonTest {
     }
 
     @Test
+    fun localTunCreationFailureDoesNotConsumePresetAndStillFallsBack() {
+        val reason = VpnFailureReason.CoreError("Sing-box openTun failed: cannot create fd")
+
+        // Creating TUN is a device-side step; a different server cannot fix it either, but the
+        // coordinator still retries and keeps the fallback path open.
+        assertTrue(reason.isRetryable())
+        assertTrue(reason.canFallbackToNextServer())
+        assertFalse(reason.isPresetRetryable())
+    }
+
+    @Test
     fun decodeConfigSchemaErrorsAllowFallback() {
         val reason = VpnFailureReason.fromMessage(
             "libbox failed to parse config: configuration schema mismatch"

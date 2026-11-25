@@ -668,11 +668,20 @@ class VpnProxyService : VpnService() {
             return
         }
 
+        val isLocalCoreFailure = VpnFailureReason.isLocalCoreStartFailure(errorMessage)
+        if (isLocalCoreFailure) {
+            // The core failed to start or to create TUN locally. The profile is not at fault,
+            // so do not ban it: an empty candidate list would turn a device-side problem into
+            // a fake "all servers are dead" verdict.
+            logCollector.warn(TAG, "Local core start failure detected — NOT banning server")
+            connectionCoordinator.send(ConnectionEvent.CoreError(reason))
+            return
+        }
+
         val isConfigError = errorMessage.contains("unknown field") ||
             errorMessage.contains("decode config") ||
             errorMessage.contains("invalid config") ||
-            errorMessage.contains("invalid configuration") ||
-            errorMessage.contains("unable to start libbox")
+            errorMessage.contains("invalid configuration")
 
         if (isConfigError) {
             // Ошибка генерации конфига (unknown field и т.п.) — короткий бан 1с,

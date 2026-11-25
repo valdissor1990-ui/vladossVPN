@@ -80,12 +80,15 @@ sealed class VpnFailureReason {
             isConfigurationError(message)
 
         /**
-         * A local libbox start failure: the coordinator should retry and fall back to the next
-         * server, but the bypass autopilot must not rewrite TLS settings for it.
+         * A local core start failure: the coordinator should retry and fall back to the next
+         * server, but neither the bypass autopilot nor the smart switcher may blame the
+         * profile. Covers libbox startup and local TUN creation.
          */
-        private fun isLocalCoreStartFailure(message: String): Boolean {
+        fun isLocalCoreStartFailure(message: String): Boolean {
             val m = message.lowercase()
-            return m.contains("unable to start libbox") || m.contains("failed to start libbox")
+            return m.contains("unable to start libbox") ||
+                m.contains("failed to start libbox") ||
+                m.contains("opentun failed")
         }
 
         private fun isFatalCoreMessage(message: String): Boolean {
