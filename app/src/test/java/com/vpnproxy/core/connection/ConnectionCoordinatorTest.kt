@@ -84,7 +84,7 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun showError_replacesChangedErrorAndIgnoresIdenticalOne() {
+    fun showError_replacesChangedErrorAndDoesNotReemitIdenticalOne() {
         sendAndWait(ConnectionEvent.ShowError("first failure", retryable = true)) {
             (coordinator.state.value as? ConnectionState.Error)?.message == "first failure"
         }
@@ -120,6 +120,46 @@ class ConnectionCoordinatorTest {
 
         assertTrue(coordinator.isFatalErrorLocked)
         assertTrue(coordinator.state.value is ConnectionState.Error)
+    }
+
+    @Test
+    fun nonUserConnectRequested_doesNotClearFatalLock() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+        val traceBefore = coordinator.activeTraceId
+
+        coordinator.send(ConnectionEvent.ConnectRequested("autopilot", userInitiated = false))
+        Thread.sleep(150)
+
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertTrue(coordinator.state.value is ConnectionState.Error)
+        assertEquals(traceBefore, coordinator.activeTraceId)
+    }
+
+    @Test
+    fun userConnectRequested_clearsFatalLock() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked
+        }
+
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            !coordinator.isFatalErrorLocked
+        }
+
+        assertEquals("manual", coordinator.activeTraceId)
     }
 
     @Test

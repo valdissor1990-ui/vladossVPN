@@ -2,6 +2,7 @@ package com.vpnproxy.core.connection
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VpnFailureReasonTest {
@@ -40,6 +41,17 @@ class VpnFailureReasonTest {
         assertFalse(reason.isRetryable())
         org.junit.Assert.assertEquals(true, reason.canFallbackToNextServer())
         org.junit.Assert.assertEquals(false, VpnFailureReason.PermissionDenied.canFallbackToNextServer())
+    }
+
+    @Test
+    fun presetAutopilotOnlyAcceptsTransportFailures() {
+        assertTrue(VpnFailureReason.NetworkTimeout("timeout").isPresetRetryable())
+        assertTrue(VpnFailureReason.Unknown.isPresetRetryable())
+        assertFalse(VpnFailureReason.BindError.isPresetRetryable())
+        assertFalse(VpnFailureReason.PermissionDenied.isPresetRetryable())
+        assertFalse(VpnFailureReason.TunConflict.isPresetRetryable())
+        assertFalse(VpnFailureReason.AnotherVpnActive.isPresetRetryable())
+        assertFalse(VpnFailureReason.CoreError("""json: unknown field "extra"""").isPresetRetryable())
     }
 
     @Test

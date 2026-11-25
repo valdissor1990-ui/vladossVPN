@@ -203,7 +203,7 @@ class ConnectionCoordinator @Inject constructor(
         retryCount = 0
         isFatalErrorLocked = true
         cancelSelectionJob()
-        setState(ConnectionState.Error(reason.userMessage(), reason.isRetryable()), reason = reason.toString())
+        setState(ConnectionState.Error(reason.userMessage(), reason.isPresetRetryable()), reason = reason.toString())
     }
 
     private fun cancelSelectionJob() {
@@ -602,7 +602,7 @@ class ConnectionCoordinator @Inject constructor(
                     logE(msg)
                     retryCount = 0
                     if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
-                        setState(ConnectionState.Error(msg), reason = "maxRetries:$reason")
+                        setState(ConnectionState.Error(msg, reason.isPresetRetryable()), reason = "maxRetries:$reason")
                     }
                 }
             }
