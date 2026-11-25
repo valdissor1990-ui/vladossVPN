@@ -147,7 +147,8 @@ class HomeViewModel @Inject constructor(
 
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
-    private var selectionJob: Job? = null
+    /** Read and cancelled by the coordinator actor; visibility must cross threads. */
+    @Volatile private var selectionJob: Job? = null
     private var manualReconnectJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
@@ -696,6 +697,21 @@ class HomeViewModel @Inject constructor(
         if (retryable) scheduleBypassAutopilot()
     }
 
+    /**
+     * Fails the attempt only while [traceId] still owns the connect flow.
+     *
+     * The check and the state change run on Main in one block. A plain `if (activeTraceId ==
+     * traceId) failConnect(...)` from the IO preflight is check-then-act: a new Connect can
+     * start between the two and lose its `permissionFlowInProgress` to a stale coroutine.
+     */
+    private suspend fun failConnectIfCurrent(traceId: String, message: String, retryable: Boolean) {
+        withContext(Dispatchers.Main.immediate) {
+            if (activeTraceId == traceId) {
+                failConnect(message, retryable)
+            }
+        }
+    }
+
     private fun connect(
         fromManualReconnect: Boolean = false,
         userInitiated: Boolean = true
@@ -799,8 +815,7 @@ class HomeViewModel @Inject constructor(
                 if (configs.isEmpty()) configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                 configs = filterConfigsForSelectedSubscription(configs)
                 if (configs.isEmpty()) {
-                    if (activeTraceId != traceId) return@launch
-                    failConnect("Нет доступных серверов", retryable = false)
+                    failConnectIfCurrent(traceId, "Нет доступных серверов", retryable = false)
                     return@launch
                 }
                 // ConnectRequested intentionally does not start the VPN service. If a previous
@@ -813,8 +828,8 @@ class HomeViewModel @Inject constructor(
                     true
                 } ?: false
                 if (!coreStopped) {
-                    if (activeTraceId != traceId) return@launch
-                    failConnect(
+                    failConnectIfCurrent(
+                        traceId,
                         "Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд.",
                         retryable = false
                     )
@@ -836,10 +851,10 @@ class HomeViewModel @Inject constructor(
                         .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                         .sorted()
                     if (partial.isEmpty()) {
-                        if (activeTraceId != traceId) return@launch
-                        failConnect(
+                        failConnectIfCurrent(
+                            traceId,
                             "Проверка серверов заняла слишком много времени. Повторите подключение.",
-                            retryable = true
+                            retryable = false
                         )
                         return@launch
                     }
@@ -858,8 +873,11 @@ class HomeViewModel @Inject constructor(
                     }
                 } else null
                 if (verifiedConfigs.isEmpty() && manualFallback == null) {
-                    if (activeTraceId != traceId) return@launch
-                    failConnect("Не найдено серверов с подтверждённой доступностью", retryable = true)
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не найдено серверов с подтверждённой доступностью",
+                        retryable = false
+                    )
                     logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}; manualFallback=false"))
                     return@launch
                 }
@@ -884,13 +902,15 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 if (selected == null) {
-                    if (activeTraceId != traceId) return@launch
-                    failConnect("Не удалось выбрать проверенный сервер", retryable = true)
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не удалось выбрать проверенный сервер",
+                        retryable = false
+                    )
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
                 if (_uiState.value.isRecommendationMode && manuallySelectedServer == null) {
-                    cancelConnectingWatchdog()
                     endConnectFlow()
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.DISCONNECTED,
@@ -910,21 +930,19 @@ class HomeViewModel @Inject constructor(
                     // Keep the real cause visible instead of replacing it with a generic text.
                     val reason = (connectionCoordinator.state.value as? ConnectionState.Error)?.message
                         ?: "Подключение отменено: сначала нажмите «Подключить»."
-                    failConnect(reason, retryable = false)
+                    failConnectIfCurrent(traceId, reason, retryable = false)
                     return@launch
                 }
-                // From here the service is expected to start the core and validate traffic.
-                // The watchdog covers exactly this phase, not the preflight or the permission
-                // dialog before it.
-                armConnectingWatchdog()
+                // The coordinator moves to Connecting after ServerSelected, and the state
+                // collector arms the watchdog on Main. Do not arm it from this IO coroutine:
+                // two threads doing cancel+assign on the same job can lose one of them.
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                if (activeTraceId != traceId) return@launch
-                failConnect(e.message ?: "Ошибка выбора сервера", retryable = false)
+                failConnectIfCurrent(traceId, e.message ?: "Ошибка выбора сервера", retryable = false)
             }
         }
     }
@@ -1087,30 +1105,35 @@ class HomeViewModel @Inject constructor(
                 } ?: false
 
                 if (!stopped) {
-                    if (activeTraceId == traceId) {
-                        failConnect(
-                            "Не удалось остановить прежнее подключение. Повторите попытку.",
-                            retryable = false
-                        )
-                    }
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не удалось остановить прежнее подключение. Повторите попытку.",
+                        retryable = false
+                    )
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
 
                 withContext(Dispatchers.Main.immediate) {
-                    endConnectFlow()
-                    // connect() will request VPN permission if needed and run the same
-                    // fresh subscription/preflight pipeline as the main Connect button.
-                    lastConnectClickMs = 0L
-                    connect(fromManualReconnect = true)
+                    // Re-check inside the Main block: a new Connect can start while this
+                    // coroutine is between the guard above and the dispatch.
+                    if (activeTraceId == traceId) {
+                        endConnectFlow()
+                        // connect() will request VPN permission if needed and run the same
+                        // fresh subscription/preflight pipeline as the main Connect button.
+                        lastConnectClickMs = 0L
+                        connect(fromManualReconnect = true)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                if (activeTraceId == traceId) {
-                    logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
-                    failConnect(failure.message ?: "Не удалось переключить сервер", retryable = false)
-                }
+                logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
+                failConnectIfCurrent(
+                    traceId,
+                    failure.message ?: "Не удалось переключить сервер",
+                    retryable = false
+                )
             }
         }
     }
