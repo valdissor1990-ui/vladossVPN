@@ -111,6 +111,10 @@ sealed class VpnFailureReason {
                 m.contains("another vpn") -> AnotherVpnActive
                 m.contains("permission is missing") || m.contains("permission denied") || m.contains("permission revoked") ->
                     PermissionDenied
+                // libbox wraps every startup failure with the same prefix, including local
+                // TUN creation. Check it before the broad "tun" rule, otherwise openTun
+                // becomes TunConflict and blocks retries and fallback.
+                isLocalCoreStartFailure(raw) -> CoreError(raw)
                 m.contains("establish failed") || m.contains("establish() returned null") || m.contains("tun") ->
                     TunConflict
                 m.contains("timeout") || m.contains("превышено время") ->

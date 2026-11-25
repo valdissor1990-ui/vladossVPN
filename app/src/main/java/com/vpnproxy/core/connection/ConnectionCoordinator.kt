@@ -314,6 +314,14 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 if (!isWithinProviderScope(event.server)) {
                     logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
+                    // A silent return leaves the UI in "Подключение…" until the watchdog fires.
+                    // Tell the user why the selection was rejected instead of waiting 90 seconds.
+                    send(
+                        ConnectionEvent.ShowError(
+                            "Выбранный сервер вне выбранной подписки. Обновите список или выберите подписку заново.",
+                            retryable = false
+                        )
+                    )
                     return
                 }
                 activeNetworkBucket = scoringEngine.currentNetworkBucket()

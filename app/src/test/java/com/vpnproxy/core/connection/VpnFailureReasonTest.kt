@@ -69,7 +69,11 @@ class VpnFailureReasonTest {
 
     @Test
     fun localTunCreationFailureDoesNotConsumePresetAndStillFallsBack() {
-        val reason = VpnFailureReason.CoreError("Sing-box openTun failed: cannot create fd")
+        // The real path wraps the platform reason in "Unable to start libbox …", so the
+        // classification must survive the same string the service sees.
+        val reason = VpnFailureReason.fromMessage(
+            "Unable to start libbox 1.14.3: Sing-box openTun failed: cannot create fd"
+        )
 
         // Creating TUN is a device-side step; a different server cannot fix it either, but the
         // coordinator still retries and keeps the fallback path open.
