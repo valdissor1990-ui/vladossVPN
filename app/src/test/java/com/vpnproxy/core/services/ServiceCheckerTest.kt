@@ -1,5 +1,7 @@
 package com.vpnproxy.core.services
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -9,13 +11,15 @@ import org.junit.Test
 class ServiceCheckerTest {
 
     private class FakeProbe(
-        private val byId: Map<String, ServiceProbeResult>
+        private val byId: Map<String, ServiceProbeResult>,
+        private val throwFor: Set<String> = emptySet()
     ) : ServiceProbe {
         var calls = 0
             private set
 
         override suspend fun probe(target: ServiceTarget): ServiceProbeResult {
             calls++
+            if (target.id in throwFor) throw IllegalStateException("boom")
             return byId[target.id] ?: ServiceProbeResult(reachable = false, latencyMs = 0L)
         }
     }
@@ -94,6 +98,57 @@ class ServiceCheckerTest {
             assertTrue(!result.serviceId.contains("http"))
             assertTrue(result.reason?.contains("example") != true)
         }
+    }
+
+    @Test
+    fun redirectIsUnknownNotReachable() = runBlocking {
+        val probe = FakeProbe(
+            mapOf("a" to ServiceProbeResult(reachable = false, latencyMs = 8L, httpCode = 302, reason = "HTTP_302"))
+        )
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
+
+        assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("a").status)
+        assertEquals(302, results.getValue("a").httpCode)
+    }
+
+    @Test
+    fun probeExceptionBecomesUnknownAndDoesNotAbortTheSweep() = runBlocking {
+        val probe = FakeProbe(
+            mapOf("b" to ServiceProbeResult(reachable = true, latencyMs = 20L, httpCode = 200)),
+            throwFor = setOf("a")
+        )
+        val checker = ServiceChecker(probe)
+
+        val results = checker.checkAll(targets, vpnActive = true)!!.associateBy { it.serviceId }
+
+        assertEquals(ServiceCheckStatus.UNKNOWN, results.getValue("a").status)
+        assertEquals(ServiceCheckStatus.REACHABLE, results.getValue("b").status)
+    }
+
+    @Test
+    fun cancellationReleasesTheRunLock() = runBlocking {
+        var firstSweep = true
+        val probe = object : ServiceProbe {
+            override suspend fun probe(target: ServiceTarget): ServiceProbeResult {
+                if (firstSweep) {
+                    firstSweep = false
+                    delay(10_000)
+                }
+                return ServiceProbeResult(reachable = true, latencyMs = 5L, httpCode = 200)
+            }
+        }
+        val checker = ServiceChecker(probe)
+        val job = launch { checker.checkAll(targets, vpnActive = true) }
+        delay(50)
+        job.cancel()
+        job.join()
+        assertTrue(job.isCancelled)
+
+        // The same checker must accept a new sweep: the lock was released in `finally`.
+        val results = checker.checkAll(targets, vpnActive = true)
+        assertEquals(2, results?.size)
     }
 
     @Test

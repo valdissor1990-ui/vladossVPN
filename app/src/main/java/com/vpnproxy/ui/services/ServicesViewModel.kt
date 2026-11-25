@@ -9,6 +9,7 @@ import com.vpnproxy.core.services.ServiceChecker
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +23,7 @@ data class ServicesUiState(
     val coreTransitioning: Boolean = false,
     val results: Map<String, ServiceCheckResult> = emptyMap(),
     val lastCheckedAt: Long? = null,
-    val error: String? = null
+    val message: String? = null
 )
 
 @HiltViewModel
@@ -32,6 +33,8 @@ class ServicesViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "ServicesViewModel"
+        private const val ERROR_TEXT = "Не удалось проверить сервисы. Попробуйте позже."
+        private const val BUSY_TEXT = "Проверка уже идёт."
     }
 
     private val checker = ServiceChecker()
@@ -40,36 +43,28 @@ class ServicesViewModel @Inject constructor(
     val state: StateFlow<ServicesUiState> = _state.asStateFlow()
 
     fun checkAll() {
-        if (_state.value.isChecking) return
+        val claimed = tryClaimRun()
+        if (claimed == null) {
+            _state.update { it.copy(message = BUSY_TEXT) }
+            return
+        }
+
         viewModelScope.launch {
-            val vpnActive = VpnProxyService.isRunning.value
-            val transitioning = VpnProxyService.isCoreTransitioning.value
-            _state.update {
-                it.copy(
-                    isChecking = true,
-                    vpnActive = vpnActive,
-                    coreTransitioning = transitioning,
-                    results = emptyMap(),
-                    error = null
-                )
-            }
             val results = runCatching {
                 checker.checkAll(
                     targets = ServiceCatalog.defaultTargets,
-                    vpnActive = vpnActive,
-                    coreTransitioning = transitioning
+                    vpnActive = claimed.vpnActive,
+                    coreTransitioning = claimed.coreTransitioning
                 )
             }.getOrElse { error ->
-                _state.update {
-                    it.copy(
-                        isChecking = false,
-                        error = "Проверка не удалась: ${error.javaClass.simpleName}"
-                    )
-                }
+                if (error is CancellationException) throw error
+                // Technical details belong in the journal, not in the UI.
+                logCollector.warn(TAG, "SERVICE-CHECK failed error=${error.javaClass.simpleName}")
+                _state.update { it.copy(isChecking = false, message = ERROR_TEXT) }
                 return@launch
             }
             if (results == null) {
-                _state.update { it.copy(isChecking = false) }
+                _state.update { it.copy(isChecking = false, message = BUSY_TEXT) }
                 return@launch
             }
             // Journal only the aggregate: service hosts must never appear in logs.
@@ -86,9 +81,29 @@ class ServicesViewModel @Inject constructor(
                 it.copy(
                     isChecking = false,
                     results = results.associateBy { result -> result.serviceId },
-                    lastCheckedAt = System.currentTimeMillis()
+                    lastCheckedAt = System.currentTimeMillis(),
+                    message = null
                 )
             }
+        }
+    }
+
+    /**
+     * Atomically flips [ServicesUiState.isChecking]. Two taps in the same frame cannot both win,
+     * so the second one reports "already running" instead of silently doing nothing.
+     */
+    private fun tryClaimRun(): ServicesUiState? {
+        while (true) {
+            val current = _state.value
+            if (current.isChecking) return null
+            val next = current.copy(
+                isChecking = true,
+                vpnActive = VpnProxyService.isRunning.value,
+                coreTransitioning = VpnProxyService.isCoreTransitioning.value,
+                results = emptyMap(),
+                message = null
+            )
+            if (_state.compareAndSet(current, next)) return next
         }
     }
 }

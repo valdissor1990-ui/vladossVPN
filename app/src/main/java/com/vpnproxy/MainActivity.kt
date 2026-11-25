@@ -22,6 +22,7 @@ import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
@@ -162,7 +163,10 @@ private fun VPNProxyNavHost(
                 onNavigateToSubscriptions = { navController.navigate(Route.Subscriptions.path) },
                 onNavigateToDebug = { navController.navigate(Route.Debug.path) },
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) },
-                onNavigateToServices = { navController.navigate(Route.Services.path) }
+                onNavigateToServices = {
+                    if (FeatureFlags.SERVICE_CHECK_ENABLED) navController.navigate(Route.Services.path)
+                },
+                showServicesEntry = FeatureFlags.SERVICE_CHECK_ENABLED
             )
         }
 
@@ -195,7 +199,9 @@ private fun VPNProxyNavHost(
         }
 
         composable(Route.Services.path) {
-            ServicesScreen(onBack = { navController.popBackStack() })
+            if (FeatureFlags.SERVICE_CHECK_ENABLED) {
+                ServicesScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }

@@ -28,6 +28,10 @@ interface ServiceProbe {
  * The caller must ensure the VPN is running and not transitioning. This class
  * never starts a second core: it only uses the local proxy that the active VPN
  * already exposes.
+ *
+ * Only a 2xx answer proves the control request reached the target. A redirect is
+ * ambiguous (captive portal, geo bounce), so it maps to `UNKNOWN` instead of a
+ * false "works".
  */
 class HttpServiceProbe(
     private val proxyHost: String = "127.0.0.1",
@@ -37,6 +41,9 @@ class HttpServiceProbe(
     companion object {
         private const val TIMEOUT_MS = 4_000
         private const val USER_AGENT = "vladossVPN/1.0"
+
+        /** Bodies are drained with a cap so a huge page cannot stall the sweep. */
+        private const val DRAIN_LIMIT_BYTES = 4_096
     }
 
     override suspend fun probe(target: ServiceTarget): ServiceProbeResult = withContext(Dispatchers.IO) {
@@ -67,13 +74,16 @@ class HttpServiceProbe(
             }
             connection = active
             val code = runInterruptible(Dispatchers.IO) { active.responseCode }
+            drain(active, method, code)
             ServiceProbeResult(
-                reachable = code in 200..399,
+                reachable = code in 200..299,
                 latencyMs = 0L,
                 httpCode = code,
-                reason = if (code in 200..399) null else "HTTP_$code"
+                reason = if (code in 200..299) null else "HTTP_$code"
             )
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            // CancellationException extends IllegalStateException in the JVM, so the generic
+            // catch below would swallow a cancelled coroutine and report it as a probe failure.
             throw cancelled
         } catch (e: Exception) {
             ServiceProbeResult(
@@ -83,6 +93,25 @@ class HttpServiceProbe(
             )
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    /** Reads up to [DRAIN_LIMIT_BYTES] and closes the stream so the socket is not reset. */
+    private fun drain(connection: HttpURLConnection, method: String, code: Int) {
+        if (method != "GET") return
+        val stream = if (code in 200..299 || code in 300..399) {
+            runCatching { connection.inputStream }.getOrNull()
+        } else {
+            runCatching { connection.errorStream }.getOrNull()
+        }
+        stream?.use { input ->
+            val buffer = ByteArray(512)
+            var total = 0
+            while (total < DRAIN_LIMIT_BYTES) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                total += read
+            }
         }
     }
 

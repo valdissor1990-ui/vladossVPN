@@ -111,9 +111,9 @@ fun ServicesScreen(
                 }
             }
 
-            state.error?.let { error ->
+            state.message?.let { message ->
                 Spacer(Modifier.height(8.dp))
-                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
             }
 
             Spacer(Modifier.height(16.dp))

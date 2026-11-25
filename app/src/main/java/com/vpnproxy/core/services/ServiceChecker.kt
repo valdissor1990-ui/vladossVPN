@@ -58,11 +58,20 @@ class ServiceChecker(
     }
 
     private suspend fun probeOne(target: ServiceTarget): ServiceCheckResult {
-        val result = probe.probe(target)
+        val result = try {
+            probe.probe(target)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            ServiceProbeResult(reachable = false, latencyMs = 0L, reason = e.javaClass.simpleName)
+        }
         return ServiceCheckResult(
             serviceId = target.id,
             status = when {
                 result.reachable -> ServiceCheckStatus.REACHABLE
+                // A redirect does not prove the target answered: it may be a captive portal
+                // or a geo bounce. Treat it as "could not verify", not as "blocked".
+                result.httpCode in 300..399 -> ServiceCheckStatus.UNKNOWN
                 result.httpCode != null -> ServiceCheckStatus.UNREACHABLE
                 else -> ServiceCheckStatus.UNKNOWN
             },
