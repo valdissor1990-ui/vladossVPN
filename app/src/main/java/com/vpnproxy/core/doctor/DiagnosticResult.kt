@@ -26,6 +26,9 @@ data class DiagnosticResult(
         require(status != DiagnosticStatus.SKIP || skipReason != null) {
             "a skipped step must explain why"
         }
+        require(status == DiagnosticStatus.SKIP || skipReason == null) {
+            "only a skipped step carries a skip reason"
+        }
     }
 }
 

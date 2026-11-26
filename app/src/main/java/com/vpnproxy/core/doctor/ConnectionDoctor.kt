@@ -34,8 +34,15 @@ class ConnectionDoctor(
         /** Upper bounds for steps that do several network requests; the total budget still caps the run. */
         const val TRAFFIC_TIMEOUT_MS = 12_000L
         const val SERVICES_TIMEOUT_MS = 20_000L
+        /**
+         * TLS does a TCP connect and then a handshake, so its internal budget is
+         * `TCP + TLS + 1s` (9 s). The step budget must be larger, or the fix would be
+         * silently cut off at the upper bound.
+         */
+        const val TLS_STEP_TIMEOUT_MS = 10_000L
 
         val DEFAULT_OVERRIDES: Map<DiagnosticStep, Long> = mapOf(
+            DiagnosticStep.TLS to TLS_STEP_TIMEOUT_MS,
             DiagnosticStep.TRAFFIC to TRAFFIC_TIMEOUT_MS,
             DiagnosticStep.SERVICES to SERVICES_TIMEOUT_MS
         )

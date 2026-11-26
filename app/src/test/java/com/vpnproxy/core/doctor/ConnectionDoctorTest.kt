@@ -157,6 +157,10 @@ class ConnectionDoctorTest {
         assertEquals(DiagnosticStatus.SKIP, tls.status)
         assertEquals(reason, tls.skipReason)
         assertEquals(reason, tls.summary)
+        // A copied report must explain the skip, not just print "ПРОПУЩЕНО".
+        val exported = report.exportText()
+        assertTrue(exported.contains(DiagnosticStep.TLS.title))
+        assertTrue(exported.contains(reason))
     }
 
     @Test

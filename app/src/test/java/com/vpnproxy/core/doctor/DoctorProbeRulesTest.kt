@@ -43,10 +43,11 @@ class DoctorProbeRulesTest {
         assertNotNull(DoctorProbeRules.tlsSkipReason(config("tcp", "none")))
         assertNotNull(DoctorProbeRules.tlsSkipReason(config("ws", "")))
         assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "tls")))
-        assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "reality")))
+        // Reality is handled before this rule (plain handshake proves nothing), so the rule
+        // itself treats it as "no usable TLS" and keeps one source of truth.
+        assertNotNull(DoctorProbeRules.tlsSkipReason(config("tcp", "reality")))
         // Case must not matter: a profile with TLS in capitals is still testable.
         assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "TLS")))
-        assertNull(DoctorProbeRules.tlsSkipReason(config("tcp", "Reality")))
     }
 
     @Test

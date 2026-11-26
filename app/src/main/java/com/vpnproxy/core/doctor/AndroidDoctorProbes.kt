@@ -1,4 +1,4 @@
-﻿package com.vpnproxy.core.doctor
+package com.vpnproxy.core.doctor
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -190,6 +190,7 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkDns(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        invalidProfileSkip(config)?.let { return it }
         // Resolve the server address itself. SNI is a camouflage name and proves nothing
         // about the endpoint the profile actually connects to.
         val host = config.address
@@ -221,6 +222,7 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkTcp(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        invalidProfileSkip(config)?.let { return it }
         DoctorProbeRules.tcpSkipReason(config)?.let {
             return StepOutcome(DiagnosticStatus.SKIP, it, skipReason = it)
         }
@@ -255,6 +257,7 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkTls(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        invalidProfileSkip(config)?.let { return it }
         // The tunnel may have come up after the DoctorContext snapshot. Without this guard the
         // socket would go through the tunnel and a normal handshake result would be misread.
         if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
@@ -318,6 +321,7 @@ class AndroidDoctorProbes @Inject constructor(
 
     private suspend fun checkProxy(): StepOutcome {
         val config = probeConfig() ?: return noProfile()
+        invalidProfileSkip(config)?.let { return it }
         if (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
             return StepOutcome(
                 DiagnosticStatus.WARN,
@@ -452,9 +456,20 @@ class AndroidDoctorProbes @Inject constructor(
      * [LastServerStore]. Falls back to the first valid profile so a fresh install still has
      * something to probe.
      */
-    private fun probeConfig(): ParsedConfig? =
-        activeConfig(allConfigs().filter { it.isValid() })
-            ?: allConfigs().firstOrNull { it.isValid() }
+    private fun probeConfig(): ParsedConfig? {
+        val configs = allConfigs()
+        // The active profile wins even when invalid: the profile step already reports that,
+        // and transport probes must not silently test a different server instead.
+        return activeConfig(configs) ?: configs.firstOrNull { it.isValid() }
+    }
+
+    private fun invalidProfileSkip(config: ParsedConfig): StepOutcome? =
+        if (config.isValid()) {
+            null
+        } else {
+            val reason = "Активный профиль некорректен. Проверка транспорта пропущена."
+            StepOutcome(DiagnosticStatus.SKIP, reason, skipReason = reason)
+        }
 
     private fun activeConfig(configs: List<ParsedConfig>): ParsedConfig? {
         val saved = lastServerStore.load() ?: return null

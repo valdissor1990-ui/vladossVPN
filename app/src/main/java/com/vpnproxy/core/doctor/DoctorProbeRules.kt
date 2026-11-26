@@ -12,7 +12,11 @@ import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 internal object DoctorProbeRules {
 
     private val QUIC_TRANSPORTS = setOf("hysteria2", "hy2", "tuic")
-    private val TLS_SECURITY = setOf("tls", "reality")
+    /**
+     * `reality` is deliberately absent: a plain TLS handshake proves nothing for it, and
+     * `checkTls` reports that as `WARN` before the applicability rule is consulted.
+     */
+    private val TLS_SECURITY = setOf("tls")
 
     fun tcpSkipReason(config: ParsedConfig): String? =
         if (config.transport.lowercase() in QUIC_TRANSPORTS) {
