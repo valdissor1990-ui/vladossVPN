@@ -15,14 +15,12 @@ class AndroidPrivacyInputsTest {
     private fun map(
         preset: RoutingPreset = RoutingPreset.BYPASS_LAN,
         selfUpdateBuild: Boolean = false,
-        updateChecks: Boolean = true,
         consent: Boolean = false,
         rulesReady: Boolean = false,
         battery: Boolean = false,
         installAllowed: Boolean = false
     ) = mapPrivacyInputs(
         selfUpdateBuildEnabled = selfUpdateBuild,
-        updateChecksEnabled = updateChecks,
         deviceMetadataConsent = consent,
         preset = preset,
         ruleSetsReady = rulesReady,
@@ -42,7 +40,6 @@ class AndroidPrivacyInputsTest {
         val inputs = map(
             preset = RoutingPreset.BYPASS_RU,
             selfUpdateBuild = true,
-            updateChecks = true,
             consent = true,
             rulesReady = true
         )

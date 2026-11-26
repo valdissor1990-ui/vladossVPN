@@ -14,7 +14,6 @@ class PrivacyReportBuilderTest {
 
     private fun inputs(
         selfUpdate: Boolean = false,
-        updateChecks: Boolean = true,
         consent: Boolean = false,
         ruRequested: Boolean = false,
         ruReady: Boolean = false,
@@ -22,7 +21,6 @@ class PrivacyReportBuilderTest {
         installPackages: Boolean = true
     ) = PrivacyInputs(
         selfUpdateBuildEnabled = selfUpdate,
-        updateChecksEnabled = updateChecks,
         deviceMetadataConsent = consent,
         ruRuleSetsRequested = ruRequested,
         ruRuleSetsReady = ruReady,
@@ -46,17 +44,14 @@ class PrivacyReportBuilderTest {
     }
 
     @Test
-    fun userUpdateToggleDisablesTheNetworkFact() {
-        // The build allows updates, but the user turned the toggle off.
-        val off = builder.build(inputs(selfUpdate = true, updateChecks = false))
-        assertFalse(off.fact("network-updates").dataLeavesDevice)
-        assertTrue(off.fact("network-updates").detail.contains("настрой", ignoreCase = true))
+    fun updateFactFollowsTheBuildNotTheSchedule() {
+        // Manual checks still reach GitHub when the background toggle is off, so the fact
+        // describes the build capability, not a schedule.
+        val direct = builder.build(inputs(selfUpdate = true))
+        assertTrue(direct.fact("network-updates").dataLeavesDevice)
+        assertFalse(direct.fact("network-updates").detail.contains("сборке", ignoreCase = true))
 
-        val on = builder.build(inputs(selfUpdate = true, updateChecks = true))
-        assertTrue(on.fact("network-updates").dataLeavesDevice)
-
-        // The play flavor has no self-update at all, regardless of the toggle.
-        val play = builder.build(inputs(selfUpdate = false, updateChecks = true))
+        val play = builder.build(inputs(selfUpdate = false))
         assertFalse(play.fact("network-updates").dataLeavesDevice)
         assertTrue(play.fact("network-updates").detail.contains("сборке", ignoreCase = true))
     }

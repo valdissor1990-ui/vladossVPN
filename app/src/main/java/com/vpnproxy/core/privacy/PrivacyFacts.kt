@@ -54,8 +54,6 @@ data class PrivacyFact(
 data class PrivacyInputs(
     /** `BuildConfig.ENABLE_SELF_UPDATE` of the current flavor. */
     val selfUpdateBuildEnabled: Boolean,
-    /** User toggle `check_updates` in the settings DataStore (default on). */
-    val updateChecksEnabled: Boolean,
     /** `SubscriptionRepository.deviceMetadataConsent` (default off). */
     val deviceMetadataConsent: Boolean,
     /** `RoutingSettings.preset(context) == RoutingPreset.BYPASS_RU`. */
@@ -137,7 +135,6 @@ class PrivacyReportBuilder {
     )
 
     private fun networkFacts(inputs: PrivacyInputs): List<PrivacyFact> {
-        val updatesEnabled = inputs.selfUpdateBuildEnabled && inputs.updateChecksEnabled
         return listOf(
         PrivacyFact(
             id = "network-subscriptions",
@@ -159,16 +156,13 @@ class PrivacyReportBuilder {
             id = "network-updates",
             kind = PrivacyKind.NETWORK,
             title = "Проверка обновлений",
-            detail = when {
-                !inputs.selfUpdateBuildEnabled ->
-                    "Отключена в этой сборке."
-                !inputs.updateChecksEnabled ->
-                    "Отключена в настройках приложения."
-                else ->
-                    "Запрос к GitHub Releases за номером новой версии. Отправляется только версия приложения."
+            detail = if (inputs.selfUpdateBuildEnabled) {
+                "Запрос к GitHub Releases за номером новой версии при проверке обновлений. Отправляется только версия приложения."
+            } else {
+                "Отключена в этой сборке."
             },
             source = PrivacySource.UPDATE_CHECKER,
-            dataLeavesDevice = updatesEnabled
+            dataLeavesDevice = inputs.selfUpdateBuildEnabled
         ),
         PrivacyFact(
             id = "network-geo-rules",
