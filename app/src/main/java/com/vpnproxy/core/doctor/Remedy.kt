@@ -4,7 +4,7 @@ enum class RemedySafety {
     /** Can run from the report screen without extra confirmation. */
     SAFE_AUTO,
 
-    /** Changes the active profile, DNS, core or transport settings: ask first. */
+    /** Changes the active profile or restarts the core: ask first. */
     REQUIRES_CONFIRM
 }
 
@@ -32,6 +32,8 @@ sealed class Remedy(
     data object SwitchServer : Remedy(RemedySafety.REQUIRES_CONFIRM, "Сменить сервер")
     data object ReimportProfile : Remedy(RemedySafety.REQUIRES_CONFIRM, "Импортировать профиль заново")
     data object RestartCore : Remedy(RemedySafety.REQUIRES_CONFIRM, "Перезапустить ядро")
-    data object ChangeDns : Remedy(RemedySafety.REQUIRES_CONFIRM, "Изменить DNS")
-    data object EnableTlsFragment : Remedy(RemedySafety.REQUIRES_CONFIRM, "Включить фрагментацию TLS")
+    // Navigation only: the executor opens the section and the user decides. Marking these
+    // REQUIRES_CONFIRM would block the screen behind a dialog for no safety gain.
+    data object ChangeDns : Remedy(RemedySafety.SAFE_AUTO, "Изменить DNS")
+    data object EnableTlsFragment : Remedy(RemedySafety.SAFE_AUTO, "Включить фрагментацию TLS")
 }

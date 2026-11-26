@@ -169,7 +169,9 @@ class ConnectionDoctorTest {
         assertEquals(RemedySafety.SAFE_AUTO, Remedy.OpenSettings(SettingsSection.DNS).safety)
         assertEquals(RemedySafety.REQUIRES_CONFIRM, Remedy.SwitchServer.safety)
         assertEquals(RemedySafety.REQUIRES_CONFIRM, Remedy.RestartCore.safety)
-        assertEquals(RemedySafety.REQUIRES_CONFIRM, Remedy.EnableTlsFragment.safety)
+        // DNS and TLS are navigation screens, so they are safe to open without a dialog.
+        assertEquals(RemedySafety.SAFE_AUTO, Remedy.ChangeDns.safety)
+        assertEquals(RemedySafety.SAFE_AUTO, Remedy.EnableTlsFragment.safety)
     }
 
     private fun result(report: DoctorReport, step: DiagnosticStep): DiagnosticResult =
