@@ -2,6 +2,7 @@ package com.vpnproxy.smartconnect
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -16,6 +17,31 @@ class AutoSwitcherMonitoringTest {
             AutoSwitcherConfig.screenOffIntervalMultiplier
         val first = AutoSwitcher.monitoringSliceMs(screenOffInterval, elapsedMs = 0L)
         assertEquals(AutoSwitcher.MAX_MONITORING_SLICE_MS, first)
+    }
+
+    @Test
+    fun sliceSequenceReachesTheScreenOffIntervalWithoutExtraChecks() {
+        // Emulates the real loop: 20 minutes of screen-off interval at 60 s per slice.
+        val interval = 20 * 60_000L
+        var elapsed = 0L
+        var slices = 0
+        while (elapsed < interval) {
+            val slice = AutoSwitcher.monitoringSliceMs(interval, elapsed)
+            assertTrue("slice must make progress", slice > 0L)
+            elapsed += slice
+            slices++
+        }
+        assertEquals(20, slices)
+        assertEquals(interval, elapsed)
+    }
+
+    @Test
+    fun shortenedIntervalAfterUnlockIsReachedOnNextIteration() {
+        // Screen off interval was 6 min, 5 min already slept. Unlock halves it to 3 min:
+        // the next iteration must check immediately instead of sleeping another full slice.
+        assertEquals(0L, AutoSwitcher.monitoringSliceMs(intervalMs = 180_000L, elapsedMs = 300_000L))
+        // Partially elapsed: sleep exactly the remainder.
+        assertEquals(30_000L, AutoSwitcher.monitoringSliceMs(intervalMs = 180_000L, elapsedMs = 150_000L))
     }
 
     @Test

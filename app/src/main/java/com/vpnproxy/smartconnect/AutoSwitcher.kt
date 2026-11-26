@@ -250,7 +250,9 @@ class AutoSwitcher @Inject constructor(
             // 20 minutes after the user unlocks the phone, so the wait is sliced.
             var elapsedMs = 0L
             while (isActive) {
-                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context)
+                // Defensive: a zero interval would make monitoringSliceMs throw inside the
+                // coroutine. One second is short enough to recover, long enough not to spin.
+                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context).coerceAtLeast(1_000L)
                 val sliceMs = monitoringSliceMs(intervalMs, elapsedMs)
                 if (sliceMs > 0L) {
                     delay(sliceMs)
