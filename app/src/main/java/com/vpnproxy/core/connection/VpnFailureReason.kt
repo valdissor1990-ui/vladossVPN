@@ -90,11 +90,11 @@ sealed class VpnFailureReason {
             return m.contains("unable to start libbox") ||
                 m.contains("failed to start libbox") ||
                 m.contains("opentun failed") ||
-                // CommandServer and libbox lifecycle errors are local: a bare "read EOF" from
-                // the control socket must not blacklist a healthy endpoint.
+                // CommandServer lifecycle errors are local: a bare "read EOF" from the
+                // control socket must not blacklist a healthy endpoint. The generic "libbox"
+                // word is deliberately not enough — a remote dial error can mention it too.
                 m.contains("commandserver") ||
-                m.contains("command server") ||
-                m.contains("libbox")
+                m.contains("command server")
         }
 
         /**

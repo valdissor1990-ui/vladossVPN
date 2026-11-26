@@ -788,6 +788,9 @@ class VpnProxyService : VpnService() {
             CorePortLease.mutex.withLock {
                 lifecycleController?.stopCore()
             }
+            // The next start sets it again; keeping a stale profile here would let a
+            // stop-phase failure ban a server that is no longer being started.
+            startedConfig = null
 
             if (throwable == null) {
                 logCollector.info(TAG, "Stopping VPN. Reason: $reason")

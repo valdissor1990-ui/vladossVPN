@@ -334,6 +334,16 @@ class ConnectionCoordinatorTest {
                 activeTraceId = "current"
             )
         )
+        // An Error state with a new trace id already has an active attempt: a stale
+        // out-of-scope event must not cancel it either.
+        assertTrue(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Error("boom", retryable = true),
+                hasServerSelected = false,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
         // No trace id or the current trace id: the event is current, so the scope verdict wins.
         assertFalse(
             ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
