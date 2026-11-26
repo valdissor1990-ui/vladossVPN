@@ -16,12 +16,16 @@ class PrivacyReportBuilderTest {
         selfUpdate: Boolean = false,
         consent: Boolean = false,
         ruRequested: Boolean = false,
-        ruReady: Boolean = false
+        ruReady: Boolean = false,
+        batteryExemption: Boolean = true,
+        installPackages: Boolean = true
     ) = PrivacyInputs(
         selfUpdateEnabled = selfUpdate,
         deviceMetadataConsent = consent,
         ruRuleSetsRequested = ruRequested,
-        ruRuleSetsReady = ruReady
+        ruRuleSetsReady = ruReady,
+        batteryExemptionOffered = batteryExemption,
+        installPackagesAllowed = installPackages
     )
 
     @Test
@@ -57,7 +61,7 @@ class PrivacyReportBuilderTest {
     fun requestedRuleSetsThatAreNotReadyProduceAWarning() {
         val pending = builder.build(inputs(ruRequested = true, ruReady = false))
         assertEquals(1, pending.warnings.size)
-        assertTrue(pending.warnings.first().contains("не скачаны"))
+        assertTrue(pending.warnings.first().contains("не готовы"))
 
         // The same request is no longer a warning once the files are on disk.
         assertTrue(builder.build(inputs(ruRequested = true, ruReady = true)).warnings.isEmpty())
@@ -78,18 +82,25 @@ class PrivacyReportBuilderTest {
     }
 
     @Test
-    fun everyManifestPermissionThatMattersIsListed() {
-        val ids = builder.build(inputs()).facts
+    fun flavorSpecificPermissionsFollowTheBuild() {
+        fun permissionIds(report: PrivacyReport) = report.facts
             .filter { it.kind == PrivacyKind.PERMISSION }
             .map { it.id }
             .toSet()
-        // These were missing before and the report claimed to list the permissions.
-        listOf(
-            "perm-change-network",
-            "perm-foreground-special",
-            "perm-wake-lock",
-            "perm-battery"
-        ).forEach { assertTrue("missing $it", it in ids) }
+
+        val direct = permissionIds(builder.build(inputs(batteryExemption = true, installPackages = true)))
+        assertTrue("perm-battery" in direct)
+        assertTrue("perm-install" in direct)
+
+        // The play flavor removes both permissions from the manifest; the report must not
+        // claim them.
+        val play = permissionIds(builder.build(inputs(batteryExemption = false, installPackages = false)))
+        assertFalse("perm-battery" in play)
+        assertFalse("perm-install" in play)
+
+        // Permissions that exist in both flavors stay.
+        listOf("perm-internet", "perm-change-network", "perm-wake-lock", "perm-foreground-special")
+            .forEach { assertTrue("missing $it", it in play) }
     }
 
     @Test

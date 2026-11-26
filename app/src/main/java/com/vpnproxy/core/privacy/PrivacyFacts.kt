@@ -58,8 +58,12 @@ data class PrivacyInputs(
     val deviceMetadataConsent: Boolean,
     /** `RoutingSettings.preset(context) == RoutingPreset.BYPASS_RU`. */
     val ruRuleSetsRequested: Boolean,
-    /** `RuleSetStore.isReady(context)`: the rule-set files are already on disk. */
-    val ruRuleSetsReady: Boolean
+    /** `RuleSetStore.isReady(context)`: the rule-set files are valid and on disk. */
+    val ruRuleSetsReady: Boolean,
+    /** `BuildConfig.ENABLE_BATTERY_EXEMPTION`: the play flavor removes this permission. */
+    val batteryExemptionOffered: Boolean,
+    /** `!BuildConfig.IS_PLAY_STORE`: the play flavor removes REQUEST_INSTALL_PACKAGES. */
+    val installPackagesAllowed: Boolean
 )
 
 data class PrivacyReport(
@@ -81,14 +85,15 @@ class PrivacyReportBuilder {
             addAll(storageFacts())
             addAll(networkFacts(inputs))
             addAll(identifierFacts(inputs))
-            addAll(permissionFacts())
+            addAll(permissionFacts(inputs))
             addAll(telemetryFacts())
         }
         val warnings = buildList {
             if (inputs.ruRuleSetsRequested && !inputs.ruRuleSetsReady) {
-                // Truthful, reachable state: the preset is on but the files are not downloaded
-                // yet, so the tunnel currently degrades to bypass_lan.
-                add("Наборы правил запрошены, но ещё не скачаны: маршрутизация пока работает без них.")
+                // Truthful, reachable state: the preset is on but the files are missing or
+                // invalid. The wording covers both, because a corrupt file is not "missing"
+                // yet the routing preset still references it.
+                add("Наборы правил не готовы или повреждены: часть правил маршрутизации может не применяться.")
             }
         }
         return PrivacyReport(facts = facts, warnings = warnings)
@@ -166,9 +171,9 @@ class PrivacyReportBuilder {
                 !inputs.ruRuleSetsRequested ->
                     "Наборы правил не запрашиваются: выбран пресет без geo-правил."
                 inputs.ruRuleSetsReady ->
-                    "Публичные наборы правил уже скачаны с GitHub и используются локально."
+                    "Публичные наборы правил скачаны с GitHub и периодически обновляются."
                 else ->
-                    "Публичные наборы правил скачиваются с GitHub при выборе пресета «Обе границы»."
+                    "Публичные наборы правил скачиваются с GitHub при выборе пресета «Обход локальной сети и сайтов РФ». Пока файлов нет или они не проверены, часть правил может не применяться."
             },
             source = PrivacySource.RULE_SET_STORE,
             dataLeavesDevice = inputs.ruRuleSetsRequested
@@ -204,18 +209,24 @@ class PrivacyReportBuilder {
         )
     )
 
-    private fun permissionFacts(): List<PrivacyFact> = listOf(
-        permission("perm-internet", "Интернет", "Нужен для VPN и обновления подписок.", PrivacySource.MANIFEST),
-        permission("perm-network-state", "Состояние сети", "Нужно, чтобы замечать смену Wi-Fi и LTE.", PrivacySource.MANIFEST),
-        permission("perm-change-network", "Изменение состояния сети", "Нужно, чтобы переподключать туннель при смене сети.", PrivacySource.MANIFEST),
-        permission("perm-foreground", "Работа в фоне", "Держит VPN включённым при свёрнутом приложении.", PrivacySource.MANIFEST),
-        permission("perm-foreground-special", "Специальный тип фоновой службы", "Обязательное объявление для VPN-службы на современных Android.", PrivacySource.MANIFEST),
-        permission("perm-wake-lock", "Не давать устройству засыпать", "Нужно, чтобы туннель не обрывался во время работы.", PrivacySource.MANIFEST),
-        permission("perm-notifications", "Уведомления", "Показывает состояние VPN и просит отключить экономию батареи.", PrivacySource.MANIFEST),
-        permission("perm-battery", "Исключение из экономии батареи", "Приложение может предложить отключить оптимизацию, чтобы VPN не останавливался. Решение остаётся за вами.", PrivacySource.MANIFEST),
-        permission("perm-boot", "Автозапуск", "Возвращает VPN после перезагрузки, если вы это включили.", PrivacySource.MANIFEST),
-        permission("perm-install", "Установка обновлений", "Позволяет установить скачанный APK вручную.", PrivacySource.MANIFEST)
-    )
+    private fun permissionFacts(inputs: PrivacyInputs): List<PrivacyFact> = buildList {
+        add(permission("perm-internet", "Интернет", "Нужен для VPN и обновления подписок.", PrivacySource.MANIFEST))
+        add(permission("perm-network-state", "Состояние сети", "Нужно, чтобы замечать смену Wi-Fi и LTE.", PrivacySource.MANIFEST))
+        add(permission("perm-change-network", "Изменение состояния сети", "Нужно, чтобы переподключать туннель при смене сети.", PrivacySource.MANIFEST))
+        add(permission("perm-foreground", "Работа в фоне", "Держит VPN включённым при свёрнутом приложении.", PrivacySource.MANIFEST))
+        add(permission("perm-foreground-special", "Специальный тип фоновой службы", "Обязательное объявление для VPN-службы на современных Android.", PrivacySource.MANIFEST))
+        add(permission("perm-wake-lock", "Не давать устройству засыпать", "Нужно, чтобы туннель не обрывался во время работы.", PrivacySource.MANIFEST))
+        add(permission("perm-notifications", "Уведомления", "Показывает состояние VPN и просит отключить экономию батареи.", PrivacySource.MANIFEST))
+        // The play flavor removes this permission and disables the request.
+        if (inputs.batteryExemptionOffered) {
+            add(permission("perm-battery", "Исключение из экономии батареи", "Приложение может предложить отключить оптимизацию, чтобы VPN не останавливался. Решение остаётся за вами.", PrivacySource.MANIFEST))
+        }
+        add(permission("perm-boot", "Автозапуск", "Возвращает VPN после перезагрузки, если вы это включили.", PrivacySource.MANIFEST))
+        // The play flavor removes REQUEST_INSTALL_PACKAGES: updates come from the store.
+        if (inputs.installPackagesAllowed) {
+            add(permission("perm-install", "Установка обновлений", "Позволяет установить скачанный APK вручную.", PrivacySource.MANIFEST))
+        }
+    }
 
     private fun permission(id: String, title: String, detail: String, source: PrivacySource) =
         PrivacyFact(
