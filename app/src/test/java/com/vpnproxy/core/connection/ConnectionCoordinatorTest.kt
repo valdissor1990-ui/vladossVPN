@@ -84,7 +84,7 @@ class ConnectionCoordinatorTest {
     }
 
     @Test
-    fun showError_replacesChangedErrorAndIgnoresIdenticalOne() {
+    fun showError_replacesChangedErrorAndDoesNotReemitIdenticalOne() {
         sendAndWait(ConnectionEvent.ShowError("first failure", retryable = true)) {
             (coordinator.state.value as? ConnectionState.Error)?.message == "first failure"
         }
@@ -120,6 +120,50 @@ class ConnectionCoordinatorTest {
 
         assertTrue(coordinator.isFatalErrorLocked)
         assertTrue(coordinator.state.value is ConnectionState.Error)
+    }
+
+    @Test
+    fun nonUserConnectRequested_doesNotClearFatalLock() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked && coordinator.state.value is ConnectionState.Error
+        }
+        val traceBefore = coordinator.activeTraceId
+
+        coordinator.send(ConnectionEvent.ConnectRequested("autopilot", userInitiated = false))
+        // Barrier: UserDisconnect is processed after the ignored ConnectRequested, does not
+        // clear the fatal lock, and gives the test a deterministic ordering signal instead of
+        // sleeping and hoping the negative event was processed.
+        sendAndWait(ConnectionEvent.UserDisconnect) {
+            coordinator.state.value is ConnectionState.Disconnecting
+        }
+
+        assertTrue(coordinator.isFatalErrorLocked)
+        assertEquals(traceBefore, coordinator.activeTraceId)
+    }
+
+    @Test
+    fun userConnectRequested_clearsFatalLock() {
+        sendAndWait(ConnectionEvent.ServerSelected(sampleServer())) {
+            coordinator.hasSelectedServer()
+        }
+        sendAndWait(ConnectionEvent.UserConnect) {
+            coordinator.state.value is ConnectionState.Connecting
+        }
+        sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.PermissionDenied)) {
+            coordinator.isFatalErrorLocked
+        }
+
+        sendAndWait(ConnectionEvent.ConnectRequested("manual", userInitiated = true)) {
+            !coordinator.isFatalErrorLocked
+        }
+
+        assertEquals("manual", coordinator.activeTraceId)
     }
 
     @Test
@@ -214,6 +258,109 @@ class ConnectionCoordinatorTest {
         sendAndWait(ConnectionEvent.CoreError(VpnFailureReason.NetworkTimeout("test"))) {
             coordinator.currentServerName() == "allowed" && coordinator.state.value is ConnectionState.Reconnecting
         }
+    }
+
+    @Test
+    fun providerScope_rejectsServerSelectedWithVisibleError() {
+        val current = sampleServer().copy(config = sampleServer().config.copy(providerTag = "subscription-A"))
+        val outside = current.copy(
+            config = current.config.copy(
+                name = "outside",
+                address = "outside.example.org",
+                providerTag = "subscription-B"
+            )
+        )
+
+        coordinator.setProviderScope("subscription-A")
+        sendAndWait(ConnectionEvent.ConnectRequested("scoped", userInitiated = true)) {
+            coordinator.activeTraceId == "scoped" && coordinator.state.value is ConnectionState.Disconnected
+        }
+        sendAndWait(ConnectionEvent.ServerSelected(outside, "scoped")) {
+            coordinator.state.value is ConnectionState.Error
+        }
+
+        val error = coordinator.state.value as ConnectionState.Error
+        assertEquals(
+            "Выбранный сервер вне выбранной подписки. Обновите список или выберите подписку заново.",
+            error.message
+        )
+        assertFalse(error.retryable)
+        assertFalse(coordinator.hasSelectedServer())
+    }
+
+    @Test
+    fun outOfScopeSelectionKeepsLiveConnectedSession() {
+        // A rejected selection must not tear down a working tunnel. The rule is pure so it is
+        // covered without driving a real traffic validation.
+        assertTrue(
+            ConnectionCoordinator.keepsLiveSelectionOnOutOfScope(
+                ConnectionState.Connected("test-server")
+            )
+        )
+        listOf(
+            ConnectionState.Disconnected,
+            ConnectionState.Connecting,
+            ConnectionState.Reconnecting,
+            ConnectionState.Disconnecting,
+            ConnectionState.Verifying("test-server"),
+            ConnectionState.Error("boom", retryable = true)
+        ).forEach { state ->
+            assertFalse(
+                "$state must not keep a live selection",
+                ConnectionCoordinator.keepsLiveSelectionOnOutOfScope(state)
+            )
+        }
+    }
+
+    @Test
+    fun staleOutOfScopeSelectionDoesNotCancelAnInFlightAttempt() {
+        // A stale event from an older selection must be dropped in Verifying: otherwise it
+        // clears the live attempt and shows a non-retryable error to the user.
+        assertTrue(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
+        // While still waiting for any server, the rejection must be reported instead of
+        // silently timing out.
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Connecting,
+                hasServerSelected = false,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
+        // An Error state with a new trace id already has an active attempt: a stale
+        // out-of-scope event must not cancel it either.
+        assertTrue(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Error("boom", retryable = true),
+                hasServerSelected = false,
+                eventTraceId = "stale",
+                activeTraceId = "current"
+            )
+        )
+        // No trace id or the current trace id: the event is current, so the scope verdict wins.
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = null,
+                activeTraceId = "current"
+            )
+        )
+        assertFalse(
+            ConnectionCoordinator.shouldIgnoreStaleOutOfScope(
+                ConnectionState.Verifying("test-server"),
+                hasServerSelected = true,
+                eventTraceId = "current",
+                activeTraceId = "current"
+            )
+        )
     }
 
     @Test

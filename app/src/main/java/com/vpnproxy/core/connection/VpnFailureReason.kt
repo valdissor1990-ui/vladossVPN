@@ -25,6 +25,21 @@ sealed class VpnFailureReason {
     }
 
     /**
+     * Whether changing transport hardening (TLS fragmentation, uTLS fingerprint) can
+     * plausibly help. A local port collision or a broken profile is retryable by the
+     * coordinator but must not consume an autopilot preset change.
+     */
+    fun isPresetRetryable(): Boolean = when (this) {
+        is NetworkTimeout -> true
+        // A local core start failure is retried and may fall back to another server, but a
+        // TLS preset cannot fix it. Keep this check here instead of isFatalCoreMessage():
+        // that predicate also disables coordinator retries and server fallback.
+        is CoreError -> !isFatalCoreMessage(message) && !isLocalCoreStartFailure(message)
+        // A blank or unknown failure carries no evidence that TLS hardening can help.
+        else -> false
+    }
+
+    /**
      * A malformed profile should be skipped when other profiles remain. Keep its
      * ordinary retry classification fatal so we do not retry the same broken profile
      * after the candidate list has been exhausted.
@@ -50,7 +65,8 @@ sealed class VpnFailureReason {
     }
 
     companion object {
-        private fun isConfigurationError(message: String): Boolean {
+        /** True when the message points at the profile/config, not at the device or network. */
+        fun isConfigurationError(message: String): Boolean {
             val m = message.lowercase()
             return m.contains("unknown field") ||
                 m.contains("decode config") ||
@@ -64,6 +80,34 @@ sealed class VpnFailureReason {
         private fun isProfileConfigurationError(message: String): Boolean =
             isConfigurationError(message)
 
+        /**
+         * A local core start failure: the coordinator should retry and fall back to the next
+         * server, but neither the bypass autopilot nor the smart switcher may blame the
+         * profile. Covers libbox startup and local TUN creation.
+         */
+        fun isLocalCoreStartFailure(message: String): Boolean {
+            val m = message.lowercase()
+            return m.contains("unable to start libbox") ||
+                m.contains("failed to start libbox") ||
+                m.contains("opentun failed") ||
+                // CommandServer lifecycle errors are local: a bare "read EOF" from the
+                // control socket must not blacklist a healthy endpoint. The generic "libbox"
+                // word is deliberately not enough — a remote dial error can mention it too.
+                m.contains("commandserver") ||
+                m.contains("command server")
+        }
+
+        /**
+         * Wording that really means another VPN owns the tunnel. Setup errors ("create tun",
+         * "configure tun … not permitted") are device-side, not a conflict, and must stay
+         * retryable: the app config always contains a tun inbound, so "tun" alone proves nothing.
+         */
+        private val TUN_CONFLICT_MARKERS = listOf(
+            "tun conflict",
+            "another vpn owns",
+            "establish() returned null"
+        )
+
         private fun isFatalCoreMessage(message: String): Boolean {
             val m = message.lowercase()
             return isConfigurationError(message) ||
@@ -71,8 +115,7 @@ sealed class VpnFailureReason {
                 m.contains("permission denied") ||
                 m.contains("permission is missing") ||
                 m.contains("permission revoked") ||
-                m.contains("establish failed") ||
-                m.contains("tun conflict")
+                TUN_CONFLICT_MARKERS.any { m.contains(it) }
         }
 
         /** Best-effort parse of legacy string errors into typed reasons. */
@@ -84,8 +127,17 @@ sealed class VpnFailureReason {
                 m.contains("another vpn") -> AnotherVpnActive
                 m.contains("permission is missing") || m.contains("permission denied") || m.contains("permission revoked") ->
                     PermissionDenied
-                m.contains("establish failed") || m.contains("establish() returned null") || m.contains("tun") ->
-                    TunConflict
+                // A failed local TUN creation is a device-side step: it stays retryable and
+                // must not become TunConflict, which would take the fatal lock.
+                m.contains("opentun failed") -> CoreError(raw)
+                // A malformed profile is checked before any TUN wording: the app always has a
+                // tun inbound, so a config error mentions "tun" without being a conflict.
+                isConfigurationError(raw) -> CoreError(raw)
+                // Real ownership conflicts only. TUN *creation/setup* failures are device-side:
+                // they fall through to isLocalCoreStartFailure() and stay retryable with
+                // fallback, instead of taking the fatal lock.
+                TUN_CONFLICT_MARKERS.any { m.contains(it) } -> TunConflict
+                isLocalCoreStartFailure(raw) -> CoreError(raw)
                 m.contains("timeout") || m.contains("превышено время") ->
                     NetworkTimeout(raw)
                 else -> CoreError(raw)
