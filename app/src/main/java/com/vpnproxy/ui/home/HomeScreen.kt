@@ -90,7 +90,9 @@ fun HomeScreen(
     @Suppress("UNUSED_PARAMETER") showDebug: Boolean = true,
     onNavigateToSettings: () -> Unit = {},
     onNavigateToServices: () -> Unit = {},
-    showServicesEntry: Boolean = false
+    showServicesEntry: Boolean = false,
+    onNavigateToDoctor: () -> Unit = {},
+    showDoctorEntry: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
@@ -258,6 +260,8 @@ fun HomeScreen(
                         onOpenSubscriptions = onNavigateToSubscriptions,
                         onOpenServices = onNavigateToServices,
                         showServicesEntry = showServicesEntry,
+                        onOpenDoctor = onNavigateToDoctor,
+                        showDoctorEntry = showDoctorEntry,
                         onDelete = { viewModel.removeSelectedSubscription() },
                         onOpenLink = {
                             val url = selected?.url ?: return@SubscriptionHeader
@@ -406,6 +410,8 @@ private fun SubscriptionHeader(
     onOpenSubscriptions: () -> Unit,
     onOpenServices: () -> Unit,
     showServicesEntry: Boolean,
+    onOpenDoctor: () -> Unit,
+    showDoctorEntry: Boolean,
     onDelete: () -> Unit,
     onOpenLink: () -> Unit
 ) {
@@ -470,6 +476,9 @@ private fun SubscriptionHeader(
                     Icon(Icons.Filled.MoreVert, contentDescription = "Ещё", tint = HappMuted)
                 }
                 DropdownMenu(expanded = moreExpanded, onDismissRequest = { onMoreExpanded(false) }) {
+                    if (showDoctorEntry) {
+                        DropdownMenuItem(text = { Text("Доктор подключения") }, onClick = { onMoreExpanded(false); onOpenDoctor() })
+                    }
                     if (showServicesEntry) {
                         DropdownMenuItem(text = { Text("Проверка сервисов") }, onClick = { onMoreExpanded(false); onOpenServices() })
                     }

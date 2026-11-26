@@ -27,6 +27,7 @@ import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
 import com.vpnproxy.ui.durability.DurabilityScreen
+import com.vpnproxy.ui.doctor.DoctorScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
 import com.vpnproxy.ui.servers.ServersListScreen
@@ -167,7 +168,11 @@ private fun VPNProxyNavHost(
                 onNavigateToServices = {
                     if (FeatureFlags.SERVICE_CHECK_ENABLED) navController.navigate(Route.Services.path)
                 },
-                showServicesEntry = FeatureFlags.SERVICE_CHECK_ENABLED
+                showServicesEntry = FeatureFlags.SERVICE_CHECK_ENABLED,
+                onNavigateToDoctor = {
+                    if (FeatureFlags.DOCTOR_ENABLED) navController.navigate(Route.Doctor.path)
+                },
+                showDoctorEntry = FeatureFlags.DOCTOR_ENABLED
             )
         }
 
@@ -211,6 +216,12 @@ private fun VPNProxyNavHost(
                 ServicesScreen(onBack = { navController.popBackStack() })
             }
         }
+
+        if (FeatureFlags.DOCTOR_ENABLED) {
+            composable(Route.Doctor.path) {
+                DoctorScreen(onBack = { navController.popBackStack() })
+            }
+        }
     }
 }
 
@@ -221,5 +232,6 @@ sealed class Route(val path: String) {
     data object Settings : Route("settings")
     data object Debug : Route("debug")
     data object Services : Route("services")
+    data object Doctor : Route("doctor")
     data object Durability : Route("durability")
 }
