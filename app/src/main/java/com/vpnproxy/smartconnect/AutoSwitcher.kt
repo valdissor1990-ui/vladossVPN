@@ -39,6 +39,27 @@ class AutoSwitcher @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AutoSwitcher"
+        /**
+         * Upper bound for a single [delay] in the monitoring loop. The loop re-reads the
+         * screen-dependent interval after every slice, so unlocking the phone resumes normal
+         * checks within a minute instead of waiting out a long screen-off interval.
+         */
+        internal const val MAX_MONITORING_SLICE_MS = 60_000L
+
+        /**
+         * How long to sleep before the next check. Zero means "check now" — the screen may have
+         * turned on and the interval may already be shorter than what has elapsed.
+         */
+        internal fun monitoringSliceMs(
+            intervalMs: Long,
+            elapsedMs: Long,
+            maxSliceMs: Long = MAX_MONITORING_SLICE_MS
+        ): Long {
+            require(intervalMs > 0L) { "intervalMs must be positive" }
+            require(maxSliceMs > 0L) { "maxSliceMs must be positive" }
+            val remaining = intervalMs - elapsedMs
+            return if (remaining <= 0L) 0L else minOf(maxSliceMs, remaining)
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -224,9 +245,21 @@ class AutoSwitcher @Inject constructor(
         markConnected()
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch {
+            // The interval depends on the screen state, which can change during the wait.
+            // Sleeping the whole interval in one call would keep checks blind for up to
+            // 20 minutes after the user unlocks the phone, so the wait is sliced.
+            var elapsedMs = 0L
             while (isActive) {
-                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context)
-                delay(intervalMs)
+                // Defensive: a zero interval would make monitoringSliceMs throw inside the
+                // coroutine. One second is short enough to recover, long enough not to spin.
+                val intervalMs = BatteryPolicy.healthCheckIntervalMs(context).coerceAtLeast(1_000L)
+                val sliceMs = monitoringSliceMs(intervalMs, elapsedMs)
+                if (sliceMs > 0L) {
+                    delay(sliceMs)
+                    elapsedMs += sliceMs
+                    continue
+                }
+                elapsedMs = 0L
                 if (isInPostConnectWarmup()) {
                     logCollector.debug(TAG, "Warmup active — skip health-driven switch checks")
                     continue

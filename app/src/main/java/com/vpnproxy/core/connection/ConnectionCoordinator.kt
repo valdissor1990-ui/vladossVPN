@@ -73,6 +73,8 @@ class ConnectionCoordinator @Inject constructor(
         private const val NETWORK_FAILURE_MESSAGE =
             "Несколько разных серверов не ответили через текущую сеть. Возможно, сеть ограничивает VPN. Попробуйте Wi-Fi или другого оператора."
         const val CONNECTING_TIMEOUT_MS = 90_000L
+        private const val RECENT_FAILURE_WINDOW_MS = 75_000L
+        private const val MAX_RECENT_FAILURES = 24
 
         /**
          * A rejected selection must not destroy a session that is already up. Pure so the
@@ -143,10 +145,16 @@ class ConnectionCoordinator @Inject constructor(
     fun setOnNetworkWideFailure(listener: ((List<ParsedConfig>) -> Unit)?) { onNetworkWideFailure = listener }
 
     private fun recordRecentEndpointFailure(config: ParsedConfig): List<ParsedConfig>? {
-        val now = System.currentTimeMillis()
-        recentEndpointFailures.removeAll { now - it.atMs > 75_000L }
+        // Monotonic on purpose: a wall-clock jump (NTP, manual change) must not keep stale
+        // failures alive or expire the window instantly.
+        val now = System.nanoTime() / 1_000_000L
+        recentEndpointFailures.removeAll { now - it.atMs > RECENT_FAILURE_WINDOW_MS }
         // A repeated failure of the same profile is not evidence of a network-wide problem.
         recentEndpointFailures.removeAll { it.config.connectionKey() == config.connectionKey() }
+        // Hard cap: a long session with fast fallback loops must not grow this list forever.
+        while (recentEndpointFailures.size >= MAX_RECENT_FAILURES) {
+            recentEndpointFailures.removeAt(0)
+        }
         recentEndpointFailures += RecentEndpointFailure(config, now)
         val distinct = recentEndpointFailures.map { it.config }.distinctBy { it.connectionKey() }
         val transportKinds = distinct.map { it.transport.lowercase() }.toSet()
