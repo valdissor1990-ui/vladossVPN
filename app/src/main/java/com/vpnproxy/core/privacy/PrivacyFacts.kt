@@ -216,7 +216,11 @@ class PrivacyReportBuilder {
         add(permission("perm-foreground", "Работа в фоне", "Держит VPN включённым при свёрнутом приложении.", PrivacySource.MANIFEST))
         add(permission("perm-foreground-special", "Специальный тип фоновой службы", "Обязательное объявление для VPN-службы на современных Android.", PrivacySource.MANIFEST))
         add(permission("perm-wake-lock", "Не давать устройству засыпать", "Нужно, чтобы туннель не обрывался во время работы.", PrivacySource.MANIFEST))
-        add(permission("perm-notifications", "Уведомления", "Показывает состояние VPN и просит отключить экономию батареи.", PrivacySource.MANIFEST))
+        add(permission("perm-notifications", "Уведомления", if (inputs.batteryExemptionOffered) {
+            "Показывает состояние VPN и просит отключить экономию батареи."
+        } else {
+            "Показывает состояние VPN."
+        }, PrivacySource.MANIFEST))
         // The play flavor removes this permission and disables the request.
         if (inputs.batteryExemptionOffered) {
             add(permission("perm-battery", "Исключение из экономии батареи", "Приложение может предложить отключить оптимизацию, чтобы VPN не останавливался. Решение остаётся за вами.", PrivacySource.MANIFEST))

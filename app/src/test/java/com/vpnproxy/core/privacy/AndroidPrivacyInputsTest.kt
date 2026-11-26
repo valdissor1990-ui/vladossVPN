@@ -54,9 +54,10 @@ class AndroidPrivacyInputsTest {
     }
 
     @Test
-    fun playFlavorDropsBatteryAndInstallPermissions() {
-        // The play flavor sets ENABLE_BATTERY_EXEMPTION=false and IS_PLAY_STORE=true, so the
-        // provider passes false/false here.
+    fun flavorFlagsAreCopiedIntoInputs() {
+        // The provider passes BuildConfig.ENABLE_BATTERY_EXEMPTION / IS_PLAY_STORE here.
+        // The manifest itself is covered by PrivacyReportBuilderTest, which checks that the
+        // conditional permissions disappear when these flags are false.
         val play = map(battery = false, installAllowed = false)
         assertFalse(play.batteryExemptionOffered)
         assertFalse(play.installPackagesAllowed)
