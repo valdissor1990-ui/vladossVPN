@@ -39,13 +39,27 @@ data class PrivacyFact(
     val requiresOptIn: Boolean = false
 )
 
-/** Current, side-effect-free state the report is derived from. */
-data class PrivacySnapshot(
-    val selfUpdateEnabled: Boolean = false,
-    val deviceMetadataConsent: Boolean = false,
-    val hwidEnabled: Boolean = false,
-    val geoRuleSetsEnabled: Boolean = false,
-    val privacyScreenEnabled: Boolean = false
+/**
+ * The real switches the report is derived from.
+ *
+ * Every field names its production source, and [AndroidPrivacyInputsProvider] is the single
+ * place that reads them. Do not build this by hand in a screen: a hand-built copy becomes a
+ * second source of truth that can silently disagree with the app.
+ *
+ * There is deliberately no `hwidEnabled`: the derived identifier is only ever sent with
+ * [deviceMetadataConsent], so a separate switch would describe a configuration that cannot
+ * exist. There is also no `privacyScreenEnabled`: the report does not decide whether the
+ * screen itself is shown.
+ */
+data class PrivacyInputs(
+    /** `BuildConfig.ENABLE_SELF_UPDATE` of the current flavor. */
+    val selfUpdateEnabled: Boolean,
+    /** `SubscriptionRepository.deviceMetadataConsent` (default off). */
+    val deviceMetadataConsent: Boolean,
+    /** `RoutingSettings.preset(context) == RoutingPreset.BYPASS_RU`. */
+    val ruRuleSetsRequested: Boolean,
+    /** `RuleSetStore.isReady(context)`: the rule-set files are already on disk. */
+    val ruRuleSetsReady: Boolean
 )
 
 data class PrivacyReport(
@@ -57,23 +71,24 @@ data class PrivacyReport(
 /**
  * Builds the privacy report from the same switches that drive the real behaviour.
  *
- * There is no second source of truth: if a feature is off, its network fact is marked as
- * not leaving the device, and a test asserts that the report follows the flags.
+ * The builder has no defaults on [PrivacyInputs]: a caller must pass the real state, so an
+ * all-off report cannot be produced by accident.
  */
 class PrivacyReportBuilder {
 
-    fun build(snapshot: PrivacySnapshot): PrivacyReport {
+    fun build(inputs: PrivacyInputs): PrivacyReport {
         val facts = buildList {
             addAll(storageFacts())
-            addAll(networkFacts(snapshot))
-            addAll(identifierFacts(snapshot))
+            addAll(networkFacts(inputs))
+            addAll(identifierFacts(inputs))
             addAll(permissionFacts())
             addAll(telemetryFacts())
         }
         val warnings = buildList {
-            if (snapshot.hwidEnabled && !snapshot.deviceMetadataConsent) {
-                // Should be impossible: the HWID is only sent with consent. Say it out loud.
-                add("Идентификатор устройства включён без согласия — проверьте настройки.")
+            if (inputs.ruRuleSetsRequested && !inputs.ruRuleSetsReady) {
+                // Truthful, reachable state: the preset is on but the files are not downloaded
+                // yet, so the tunnel currently degrades to bypass_lan.
+                add("Наборы правил запрошены, но ещё не скачаны: маршрутизация пока работает без них.")
             }
         }
         return PrivacyReport(facts = facts, warnings = warnings)
@@ -92,7 +107,7 @@ class PrivacyReportBuilder {
             id = "storage-secrets",
             kind = PrivacyKind.STORAGE,
             title = "Секреты профилей и идентификатор",
-            detail = "Пароли и идентификатор устройства лежат в зашифрованном хранилище (AES-256).",
+            detail = "Сохранённые профили, включая пароли, и производный идентификатор лежат в зашифрованном хранилище приложения (AES-256).",
             source = PrivacySource.DEVICE_ID_MANAGER,
             dataLeavesDevice = false
         ),
@@ -114,7 +129,7 @@ class PrivacyReportBuilder {
         )
     )
 
-    private fun networkFacts(snapshot: PrivacySnapshot): List<PrivacyFact> = listOf(
+    private fun networkFacts(inputs: PrivacyInputs): List<PrivacyFact> = listOf(
         PrivacyFact(
             id = "network-subscriptions",
             kind = PrivacyKind.NETWORK,
@@ -135,49 +150,56 @@ class PrivacyReportBuilder {
             id = "network-updates",
             kind = PrivacyKind.NETWORK,
             title = "Проверка обновлений",
-            detail = if (snapshot.selfUpdateEnabled) {
+            detail = if (inputs.selfUpdateEnabled) {
                 "Запрос к GitHub Releases за номером новой версии. Отправляется только версия приложения."
             } else {
                 "Отключена в этой сборке."
             },
             source = PrivacySource.UPDATE_CHECKER,
-            dataLeavesDevice = snapshot.selfUpdateEnabled
+            dataLeavesDevice = inputs.selfUpdateEnabled
         ),
         PrivacyFact(
             id = "network-geo-rules",
             kind = PrivacyKind.NETWORK,
             title = "Правила маршрутизации",
-            detail = if (snapshot.geoRuleSetsEnabled) {
-                "Скачиваются публичные наборы правил с GitHub при включённых geo-правилах."
-            } else {
-                "Наборы правил не запрашиваются."
+            detail = when {
+                !inputs.ruRuleSetsRequested ->
+                    "Наборы правил не запрашиваются: выбран пресет без geo-правил."
+                inputs.ruRuleSetsReady ->
+                    "Публичные наборы правил уже скачаны с GitHub и используются локально."
+                else ->
+                    "Публичные наборы правил скачиваются с GitHub при выборе пресета «Обе границы»."
             },
             source = PrivacySource.RULE_SET_STORE,
-            dataLeavesDevice = snapshot.geoRuleSetsEnabled
+            dataLeavesDevice = inputs.ruRuleSetsRequested
         )
     )
 
-    private fun identifierFacts(snapshot: PrivacySnapshot): List<PrivacyFact> = listOf(
+    private fun identifierFacts(inputs: PrivacyInputs): List<PrivacyFact> = listOf(
         PrivacyFact(
             id = "identifier-hwid",
             kind = PrivacyKind.IDENTIFIER,
             title = "Идентификатор устройства для панели подписки",
-            detail = "Производный код на основе системного идентификатора с солью приложения; исходный идентификатор не передаётся.",
+            detail = if (inputs.deviceMetadataConsent) {
+                "Передаётся панели подписки производный код на основе системного идентификатора с солью приложения; исходный идентификатор не передаётся."
+            } else {
+                "Не передаётся: согласие на метаданные устройства выключено. Код строится только на устройстве."
+            },
             source = PrivacySource.DEVICE_ID_MANAGER,
-            dataLeavesDevice = snapshot.hwidEnabled && snapshot.deviceMetadataConsent,
+            dataLeavesDevice = inputs.deviceMetadataConsent,
             requiresOptIn = true
         ),
         PrivacyFact(
             id = "identifier-device-meta",
             kind = PrivacyKind.IDENTIFIER,
             title = "Модель и версия Android",
-            detail = if (snapshot.deviceMetadataConsent) {
+            detail = if (inputs.deviceMetadataConsent) {
                 "Передаются панели подписки вместе с идентификатором, потому что вы это разрешили."
             } else {
                 "Не передаются: согласие на метаданные устройства выключено."
             },
             source = PrivacySource.SUBSCRIPTION_REPOSITORY,
-            dataLeavesDevice = snapshot.deviceMetadataConsent,
+            dataLeavesDevice = inputs.deviceMetadataConsent,
             requiresOptIn = true
         )
     )
@@ -185,8 +207,12 @@ class PrivacyReportBuilder {
     private fun permissionFacts(): List<PrivacyFact> = listOf(
         permission("perm-internet", "Интернет", "Нужен для VPN и обновления подписок.", PrivacySource.MANIFEST),
         permission("perm-network-state", "Состояние сети", "Нужно, чтобы замечать смену Wi-Fi и LTE.", PrivacySource.MANIFEST),
+        permission("perm-change-network", "Изменение состояния сети", "Нужно, чтобы переподключать туннель при смене сети.", PrivacySource.MANIFEST),
         permission("perm-foreground", "Работа в фоне", "Держит VPN включённым при свёрнутом приложении.", PrivacySource.MANIFEST),
+        permission("perm-foreground-special", "Специальный тип фоновой службы", "Обязательное объявление для VPN-службы на современных Android.", PrivacySource.MANIFEST),
+        permission("perm-wake-lock", "Не давать устройству засыпать", "Нужно, чтобы туннель не обрывался во время работы.", PrivacySource.MANIFEST),
         permission("perm-notifications", "Уведомления", "Показывает состояние VPN и просит отключить экономию батареи.", PrivacySource.MANIFEST),
+        permission("perm-battery", "Исключение из экономии батареи", "Приложение может предложить отключить оптимизацию, чтобы VPN не останавливался. Решение остаётся за вами.", PrivacySource.MANIFEST),
         permission("perm-boot", "Автозапуск", "Возвращает VPN после перезагрузки, если вы это включили.", PrivacySource.MANIFEST),
         permission("perm-install", "Установка обновлений", "Позволяет установить скачанный APK вручную.", PrivacySource.MANIFEST)
     )
