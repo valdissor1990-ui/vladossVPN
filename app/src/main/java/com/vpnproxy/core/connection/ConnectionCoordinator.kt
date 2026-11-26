@@ -24,9 +24,10 @@ sealed class ConnectionState {
     data object Disconnecting : ConnectionState()
     data object Reconnecting : ConnectionState()
     /**
-     * @param retryable whether an automatic attempt may help. Fatal reasons such as a missing
-     * VPN permission or another active VPN set this to false, so the bypass autopilot stays
-     * out of situations a TLS preset cannot fix.
+     * @param retryable whether changing the transport durability preset may help. It is not a
+     * generic "retry the coordinator" flag: local port collisions and malformed profiles are
+     * retried by the coordinator itself but must not consume an autopilot step. Fatal reasons
+     * always set this to false.
      */
     data class Error(val message: String, val retryable: Boolean = true) : ConnectionState()
 }
@@ -54,6 +55,7 @@ sealed class ConnectionEvent {
         val validationId: Long = -1L
     ) : ConnectionEvent()
     data object ServiceStopped : ConnectionEvent()
+    /** @param retryable whether the bypass autopilot may react to this failure. */
     data class ShowError(val message: String, val retryable: Boolean = true) : ConnectionEvent()
     data object ResetRetryCount : ConnectionEvent()
     data class ForceDisconnected(val reason: String = "") : ConnectionEvent()
@@ -71,6 +73,31 @@ class ConnectionCoordinator @Inject constructor(
         private const val NETWORK_FAILURE_MESSAGE =
             "Несколько разных серверов не ответили через текущую сеть. Возможно, сеть ограничивает VPN. Попробуйте Wi-Fi или другого оператора."
         const val CONNECTING_TIMEOUT_MS = 90_000L
+
+        /**
+         * A rejected selection must not destroy a session that is already up. Pure so the
+         * rule is covered without driving a real traffic validation.
+         */
+        internal fun keepsLiveSelectionOnOutOfScope(state: ConnectionState): Boolean =
+            state is ConnectionState.Connected
+
+        /**
+         * A stale out-of-scope selection must be dropped, except while the coordinator is
+         * still waiting for a server: there, reporting the rejection is the only way to avoid
+         * a silent 90-second timeout.
+         */
+        internal fun shouldIgnoreStaleOutOfScope(
+            state: ConnectionState,
+            hasServerSelected: Boolean,
+            eventTraceId: String?,
+            activeTraceId: String?
+        ): Boolean {
+            if (eventTraceId == null || eventTraceId == activeTraceId) return false
+            val waitingForServer =
+                (state is ConnectionState.Connecting || state is ConnectionState.Reconnecting) &&
+                    !hasServerSelected
+            return !waitingForServer
+        }
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -203,7 +230,7 @@ class ConnectionCoordinator @Inject constructor(
         retryCount = 0
         isFatalErrorLocked = true
         cancelSelectionJob()
-        setState(ConnectionState.Error(reason.userMessage(), reason.isRetryable()), reason = reason.toString())
+        setState(ConnectionState.Error(reason.userMessage(), retryable = false), reason = reason.toString())
     }
 
     private fun cancelSelectionJob() {
@@ -296,6 +323,40 @@ class ConnectionCoordinator @Inject constructor(
                 logI("Fallback candidates configured: ${fallbackCandidates.size} (incoming=$incoming scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"})")
             }
             is ConnectionEvent.ServerSelected -> {
+                // Scope is checked before the trace id: a rejected selection must not rewrite
+                // activeTraceId of a live tunnel that stays connected.
+                if (!isWithinProviderScope(event.server)) {
+                    logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
+                    if (keepsLiveSelectionOnOutOfScope(current)) {
+                        // A live tunnel keeps its selection handle. Clearing it here would make
+                        // currentServerName()/hasSelectedServer() report nothing for a session
+                        // that is still up, and ShowError would tear it down for no reason.
+                        logW("Live session kept; out-of-scope selection ignored")
+                        return
+                    }
+                    // A stale out-of-scope event must not cancel an attempt that is already in
+                    // flight: the user may be waiting for a legitimate selection to finish.
+                    if (shouldIgnoreStaleOutOfScope(current, hasServerSelected, event.traceId, activeTraceId)) {
+                        logW("Ignoring stale out-of-scope ServerSelected for ${event.server.config.name}: eventTraceId=${event.traceId} activeTraceId=$activeTraceId")
+                        return
+                    }
+                    // Do not leave a stale selection behind: NetworkChanged would otherwise
+                    // reconnect the core to the server that was just rejected.
+                    pendingServerName = null
+                    activeScoredServer = null
+                    hasServerSelected = false
+                    activeTraceId = null
+                    cancelSelectionJob()
+                    // A silent return leaves the UI in "Подключение…" until the watchdog fires.
+                    // Tell the user why the selection was rejected instead of waiting 90 seconds.
+                    send(
+                        ConnectionEvent.ShowError(
+                            "Выбранный сервер вне выбранной подписки. Обновите список или выберите подписку заново.",
+                            retryable = false
+                        )
+                    )
+                    return
+                }
                 if (event.traceId != null && event.traceId != activeTraceId) {
                     val isWaitingForServer = (current is ConnectionState.Connecting || current is ConnectionState.Reconnecting) && !hasServerSelected
                     if (isWaitingForServer) {
@@ -308,10 +369,6 @@ class ConnectionCoordinator @Inject constructor(
                 }
                 if (isFatalErrorLocked) {
                     logW("ServerSelected ignored — fatal lock is active; waiting for manual action")
-                    return
-                }
-                if (!isWithinProviderScope(event.server)) {
-                    logW("ServerSelected rejected outside provider scope: ${event.server.config.name} providerTag=${event.server.config.providerTag} scope=${if (providerScopeBlocked) "BLOCKED" else allowedProviderTag ?: "ALL"}")
                     return
                 }
                 activeNetworkBucket = scoringEngine.currentNetworkBucket()
@@ -492,8 +549,10 @@ class ConnectionCoordinator @Inject constructor(
                     // unreliable free-pool nodes rank lower on the next selection.
                     val failedConfig = activeScoredServer?.config
                     val failureLooksLocalOrDns = detail.contains("proxy_port_not_ready", ignoreCase = true) ||
-                        detail.contains("unreachable", ignoreCase = true) ||
-                        detail.contains("DNS_ERROR", ignoreCase = true)
+                        // `detail` is built from `ProbeOutcome.name`: keep the link explicit
+                        // instead of duplicating enum strings that could drift.
+                        detail.contains(com.vpnproxy.core.probe.ProbeOutcome.UNREACHABLE.name, ignoreCase = true) ||
+                        detail.contains(com.vpnproxy.core.probe.ProbeOutcome.DNS_ERROR.name, ignoreCase = true)
                     if (failureLooksLocalOrDns) recentEndpointFailures.clear()
                     if (failedConfig != null && !failureLooksLocalOrDns) {
                         val networkWideProfiles = if (
@@ -602,7 +661,7 @@ class ConnectionCoordinator @Inject constructor(
                     logE(msg)
                     retryCount = 0
                     if (current !is ConnectionState.Error && _state.value !is ConnectionState.Error) {
-                        setState(ConnectionState.Error(msg), reason = "maxRetries:$reason")
+                        setState(ConnectionState.Error(msg, reason.isPresetRetryable()), reason = "maxRetries:$reason")
                     }
                 }
             }

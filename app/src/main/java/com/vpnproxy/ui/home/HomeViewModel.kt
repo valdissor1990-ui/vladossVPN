@@ -12,6 +12,7 @@ import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.LastServerStore
 import com.vpnproxy.core.connection.TraceId
 import com.vpnproxy.core.durability.BypassOrchestrator
+import com.vpnproxy.core.durability.BypassProfile
 import com.vpnproxy.core.dualpath.DualPathStore
 import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.core.ping.LatencyBreakdown
@@ -146,11 +147,12 @@ class HomeViewModel @Inject constructor(
 
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
-    private var selectionJob: Job? = null
+    /** Read and cancelled by the coordinator actor; visibility must cross threads. */
+    @Volatile private var selectionJob: Job? = null
     private var manualReconnectJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
-    private var activeTraceId: String? = null
+    @Volatile private var activeTraceId: String? = null
     @Volatile private var manuallySelectedServer: ScoringEngine.ScoredServer? = null
     @Volatile private var permissionFlowInProgress: Boolean = false
     @Volatile private var userStopRequested: Boolean = false
@@ -364,12 +366,27 @@ class HomeViewModel @Inject constructor(
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = viewModelScope.launch {
             delay(CONNECTING_UI_WATCHDOG_MS)
+            // The UI is the source of truth for "the user still sees Подключение…". The
+            // coordinator can already be in Error after it ignored ConnectRequested or
+            // ServerSelected (fatal lock, stale trace), and the old check then did nothing.
+            val ui = _uiState.value.connectionState
+            if (ui != ConnectionUiState.CONNECTING && ui != ConnectionUiState.VERIFYING) return@launch
             val s = connectionCoordinator.state.value
-            if (s is ConnectionState.Connecting || s is ConnectionState.Reconnecting || s is ConnectionState.Verifying) {
-                logCollector.warn(TAG, tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — RequestDisconnect"))
+            if (s is ConnectionState.Connected) return@launch
+            val coordinatorConnecting = s is ConnectionState.Connecting ||
+                s is ConnectionState.Reconnecting ||
+                s is ConnectionState.Verifying
+            logCollector.warn(
+                TAG,
+                tmsg("UI watchdog ${CONNECTING_UI_WATCHDOG_MS}ms — ui=$ui coordinator=${s.javaClass.simpleName}")
+            )
+            if (coordinatorConnecting) {
                 connectionCoordinator.send(ConnectionEvent.RequestDisconnect)
-                failConnect("Превышено время подключения. Проверьте сеть.", retryable = true)
             }
+            // The watchdog is armed after ServerSelected only, so a timeout here means the core
+            // did not come up. That is a local, app-side timeout: do not spend an autopilot
+            // preset on it, because the previous failure may have been app slowness, not DPI.
+            failConnect("Превышено время подключения. Проверьте сеть.")
         }
     }
 
@@ -577,39 +594,85 @@ class HomeViewModel @Inject constructor(
      * the autopilot sends a non-user ConnectRequested, never clears the fatal lock and never
      * touches the endpoint-failure history. [BypassOrchestrator] caps preset changes, so a
      * dead network cannot loop.
+     *
+     * Scheduling is confined to Main: the state collector already runs there, so the
+     * `isActive` check and the assignment cannot start two steps for one failure.
+     * [failConnect] does not schedule the autopilot: only a retryable state from the
+     * coordinator reaches this function.
      */
     private fun scheduleBypassAutopilot() {
-        if (!FeatureFlags.BYPASS_AUTOPILOT_ENABLED) return
-        if (bypassJob?.isActive == true) return
-        if (autopilotSuppressed || userStopRequested) return
-        bypassJob = viewModelScope.launch {
-            delay(1_500)
+        // Run the decision on Main. The state collector already runs there; a single thread
+        // makes the isActive check and the assignment atomic without extra locks.
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            if (!FeatureFlags.BYPASS_AUTOPILOT_ENABLED) return@launch
+            if (bypassJob?.isActive == true) return@launch
             if (autopilotSuppressed || userStopRequested) return@launch
-            if (connectionCoordinator.state.value !is ConnectionState.Error) return@launch
-            if (connectionCoordinator.isFatalLocked()) {
-                logCollector.info(TAG, "BYPASS-AUTOPILOT stopped: fatal lock is active")
-                _uiState.value = _uiState.value.copy(
-                    notice = "Автопилот остановлен. Нажмите «Подключить», чтобы попробовать снова."
-                )
+            // Recommendation mode is a consent gate: the user has not confirmed any server
+            // yet, so the autopilot must not change transport settings or connect on its own.
+            // Autopilot runs only in automatic/manual modes until device tests cover the
+            // recommendation card flow.
+            if (_uiState.value.isRecommendationMode) {
+                logCollector.info(TAG, "BYPASS-AUTOPILOT not scheduled: recommendation mode requires consent")
                 return@launch
             }
-            val current = DurabilitySettings.load(context)
-            val next = bypassOrchestrator.nextProfile(current) ?: run {
+            // A manual connect that started after the failure owns the flow now. Its
+            // ConnectRequested keeps the coordinator in Error during preflight, so the
+            // state check alone would not notice it.
+            if (permissionFlowInProgress) return@launch
+            if (connectionCoordinator.isFatalLocked()) {
+                // The coordinator will not accept another attempt until the user taps Connect.
+                // Do not start a step just to stop it and show a misleading notice.
+                logCollector.info(TAG, "BYPASS-AUTOPILOT not scheduled: fatal lock is active")
+                return@launch
+            }
+            bypassJob = viewModelScope.launch {
+                delay(1_500)
+                if (autopilotSuppressed || userStopRequested) return@launch
+                if (permissionFlowInProgress) return@launch
+                if (connectionCoordinator.state.value !is ConnectionState.Error) return@launch
+                if (connectionCoordinator.isFatalLocked()) {
+                    logCollector.info(TAG, "BYPASS-AUTOPILOT stopped: fatal lock is active")
+                    return@launch
+                }
+                // The user may have switched to recommendation mode while the step was waiting.
+                if (_uiState.value.isRecommendationMode) {
+                    logCollector.info(TAG, "BYPASS-AUTOPILOT stopped: recommendation mode requires consent")
+                    return@launch
+                }
+                val current = DurabilitySettings.load(context)
+                val detected = BypassProfile.detect(current)
+                if (detected == BypassProfile.CUSTOM) {
+                    logCollector.info(TAG, "BYPASS-AUTOPILOT skipped: custom transport settings")
+                    _uiState.value = _uiState.value.copy(
+                        notice = "Параметры маскировки заданы вручную. Автопилот их не меняет."
+                    )
+                    return@launch
+                }
+                val next = bypassOrchestrator.nextProfile(current) ?: run {
+                    val atCeiling = detected == BypassProfile.MAXIMUM_STEALTH
+                    logCollector.info(
+                        TAG,
+                        "BYPASS-AUTOPILOT exhausted attempts=${bypassOrchestrator.attemptsUsed()} atCeiling=$atCeiling"
+                    )
+                    _uiState.value = _uiState.value.copy(
+                        notice = if (atCeiling) {
+                            "Автопилот уже использует максимальный профиль. Проверьте сеть или выберите сервер вручную."
+                        } else {
+                            "Автопилот исчерпал попытки и остановился. Проверьте сеть или выберите сервер вручную."
+                        }
+                    )
+                    return@launch
+                }
+                DurabilitySettings.save(context, next.applyTo(current))
                 logCollector.info(
                     TAG,
-                    "BYPASS-AUTOPILOT exhausted attempts=${bypassOrchestrator.attemptsUsed()}"
+                    "BYPASS-AUTOPILOT profile=${next.name} attempt=${bypassOrchestrator.attemptsUsed()}"
                 )
                 _uiState.value = _uiState.value.copy(
-                    notice = "Автопилот перебрал все профили и остановился. Проверьте сеть или выберите сервер вручную."
+                    notice = "Автопилот включил профиль «${next.title}». Вернуть прежний можно в разделе «Устойчивость»."
                 )
-                return@launch
+                connect(fromManualReconnect = true, userInitiated = false)
             }
-            DurabilitySettings.save(context, next.applyTo(current))
-            logCollector.info(
-                TAG,
-                "BYPASS-AUTOPILOT profile=${next.name} attempt=${bypassOrchestrator.attemptsUsed()}"
-            )
-            connect(fromManualReconnect = true, userInitiated = false)
         }
     }
 
@@ -619,37 +682,62 @@ class HomeViewModel @Inject constructor(
      * The UI state is set directly: the coordinator may already be in Error and would
      * otherwise drop the duplicate message, leaving the screen on "Подключение…".
      */
-    private fun failConnect(message: String, retryable: Boolean) {
+    private fun failConnect(message: String) {
         endConnectFlow()
-        connectionCoordinator.send(ConnectionEvent.ShowError(message, retryable))
+        // The service cancels scanner background work on every ConnectionState.Error, and the
+        // UI flag below hides the scan controls. Do not cancel the shared scanner here: it
+        // would also kill a user-started full scan and invalidate its fresh results.
+        connectionCoordinator.send(ConnectionEvent.ShowError(message, retryable = false))
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.ERROR,
             isBusy = false,
             isScanningServers = false,
             lastErrorMessage = message
         )
-        if (retryable) scheduleBypassAutopilot()
     }
 
-    private fun connect(fromManualReconnect: Boolean = false, userInitiated: Boolean = true) {
+    /**
+     * Fails the attempt only while [traceId] still owns the connect flow.
+     *
+     * The check and the state change run on Main in one block. A plain `if (activeTraceId ==
+     * traceId) failConnect(...)` from the IO preflight is check-then-act: a new Connect can
+     * start between the two and lose its `permissionFlowInProgress` to a stale coroutine.
+     */
+    private suspend fun failConnectIfCurrent(traceId: String, message: String) {
+        withContext(Dispatchers.Main.immediate) {
+            if (activeTraceId == traceId) {
+                failConnect(message)
+            }
+        }
+    }
+
+    private fun connect(
+        fromManualReconnect: Boolean = false,
+        userInitiated: Boolean = true
+    ) {
         if (!userInitiated && autopilotSuppressed) return
-        if (!fromManualReconnect) {
-            manualReconnectJob?.cancel()
-            manualReconnectJob = null
-        }
-        if (userInitiated) {
-            // An explicit Connect tap is a fresh user decision: it lifts the autopilot stop
-            // and restores its budget, and it may ask for battery exemption.
-            autopilotSuppressed = false
-            bypassOrchestrator.resetBudget()
-            runCatching { BatteryPolicy.requestIgnoreBatteryOptimizations(context) }
-        }
+        // Debounce before mutating any flow state: a double tap must not cancel a waiting
+        // autopilot step, reset its budget, or cancel a manual reconnect while the tap is ignored.
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastConnectClickMs < 900L) {
             Log.d(TAG, "Connect debounced")
             return
         }
+        if (!fromManualReconnect) {
+            manualReconnectJob?.cancel()
+            manualReconnectJob = null
+        }
         lastConnectClickMs = now
+        if (userInitiated) {
+            // An explicit Connect tap is a fresh user decision: it lifts the autopilot stop
+            // and restores its budget, and it cancels a step that was already waiting to
+            // apply a preset.
+            bypassJob?.cancel()
+            bypassJob = null
+            autopilotSuppressed = false
+            bypassOrchestrator.resetBudget()
+            runCatching { BatteryPolicy.requestIgnoreBatteryOptimizations(context) }
+        }
         cancelSelectionJob("new connect")
 
         // An explicit Connect tap is permission to retry the manually selected endpoint, even if a prior attempt temporarily blacklisted it on this network.
@@ -663,7 +751,9 @@ class HomeViewModel @Inject constructor(
             )
             VpnProxyService.clearError()
             _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true, lastErrorMessage = null)
-            armConnectingWatchdog()
+            // The watchdog is armed only after ServerSelected, when the tunnel is actually
+            // expected to come up. Arming it here made it fire while the system VPN dialog was
+            // open or a slow preflight was still running.
             if (userInitiated) {
                 vpnPermissionRequester?.invoke() ?: run {
                     logCollector.warn(TAG, "VPN permission requester not set; proceeding without prompt")
@@ -675,7 +765,7 @@ class HomeViewModel @Inject constructor(
                 onVpnPermissionGranted()
             }
         } catch (e: Exception) {
-            failConnect(e.message ?: "Не удалось начать подключение", retryable = false)
+            failConnect(e.message ?: "Не удалось начать подключение")
         }
     }
 
@@ -696,7 +786,6 @@ class HomeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         // Keep a startup scan alive. scanForConnection waits for its mutex and reuses
         // results only when the exact profiles and current network bucket still match.
-        armConnectingWatchdog()
         selectionJob?.cancel()
         selectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -725,7 +814,7 @@ class HomeViewModel @Inject constructor(
                 if (configs.isEmpty()) configs = jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                 configs = filterConfigsForSelectedSubscription(configs)
                 if (configs.isEmpty()) {
-                    failConnect("Нет доступных серверов", retryable = false)
+                    failConnectIfCurrent(traceId, "Нет доступных серверов")
                     return@launch
                 }
                 // ConnectRequested intentionally does not start the VPN service. If a previous
@@ -738,9 +827,9 @@ class HomeViewModel @Inject constructor(
                     true
                 } ?: false
                 if (!coreStopped) {
-                    failConnect(
-                        "Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд.",
-                        retryable = false
+                    failConnectIfCurrent(
+                        traceId,
+                        "Предыдущее VPN-подключение ещё останавливается. Повторите попытку через несколько секунд."
                     )
                     return@launch
                 }
@@ -760,9 +849,9 @@ class HomeViewModel @Inject constructor(
                         .filter { it.successRate > 0.5f && it.latencyMs != Long.MAX_VALUE }
                         .sorted()
                     if (partial.isEmpty()) {
-                        failConnect(
-                            "Проверка серверов заняла слишком много времени. Повторите подключение.",
-                            retryable = true
+                        failConnectIfCurrent(
+                            traceId,
+                            "Проверка серверов заняла слишком много времени. Повторите подключение."
                         )
                         return@launch
                     }
@@ -781,7 +870,10 @@ class HomeViewModel @Inject constructor(
                     }
                 } else null
                 if (verifiedConfigs.isEmpty() && manualFallback == null) {
-                    failConnect("Не найдено серверов с подтверждённой доступностью", retryable = true)
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не найдено серверов с подтверждённой доступностью"
+                    )
                     logCollector.warn(TAG, tmsg("Preflight finished without reachable profiles: checked=${configs.size}; manualFallback=false"))
                     return@launch
                 }
@@ -806,12 +898,14 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 if (selected == null) {
-                    failConnect("Не удалось выбрать проверенный сервер", retryable = true)
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не удалось выбрать проверенный сервер"
+                    )
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
                 if (_uiState.value.isRecommendationMode && manuallySelectedServer == null) {
-                    cancelConnectingWatchdog()
                     endConnectFlow()
                     _uiState.value = _uiState.value.copy(
                         connectionState = ConnectionUiState.DISCONNECTED,
@@ -825,19 +919,44 @@ class HomeViewModel @Inject constructor(
                 val fallbackPool = verifiedServers + unverifiedFallbackTail(configs, verifiedConfigs)
                 connectionCoordinator.send(ConnectionEvent.SetFallbackCandidates(fallbackPool))
                 connectionCoordinator.send(ConnectionEvent.ServerSelected(selected, traceId))
+                if (activeTraceId != traceId) return@launch
+                if (connectionCoordinator.isFatalLocked()) {
+                    // The lock can appear between the autopilot pre-check and ServerSelected.
+                    // Keep the real cause visible instead of replacing it with a generic text.
+                    val reason = (connectionCoordinator.state.value as? ConnectionState.Error)?.message
+                        ?: "Подключение отменено: сначала нажмите «Подключить»."
+                    failConnectIfCurrent(traceId, reason)
+                    return@launch
+                }
+                // The coordinator moves to Connecting after ServerSelected, and the collector
+                // normally arms the watchdog. Arm it here too, but only while the attempt is
+                // live: a late arm after a terminal Error could fire during the next preflight.
+                // If ServerSelected is still queued, the collector arms it on the Connecting
+                // transition. Both arm and cancel run on Main, so there is no cross-thread
+                // cancel+assign race.
+                withContext(Dispatchers.Main.immediate) {
+                    if (activeTraceId == traceId) {
+                        when (connectionCoordinator.state.value) {
+                            is ConnectionState.Connecting,
+                            is ConnectionState.Reconnecting,
+                            is ConnectionState.Verifying -> armConnectingWatchdog()
+                            else -> Unit
+                        }
+                    }
+                }
                 if (_uiState.value.isRecommendationMode) manuallySelectedServer = null
                 ensureServiceRunning()
                 logCollector.info(TAG, tmsg("Selected freshly probed server ${selected.config.name} in ${android.os.SystemClock.elapsedRealtime() - selectionStartedAt}ms; reachable=${verifiedConfigs.size} refreshed=$refreshedSubscription"))
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                failConnect(e.message ?: "Ошибка выбора сервера", retryable = false)
+                failConnectIfCurrent(traceId, e.message ?: "Ошибка выбора сервера")
             }
         }
     }
 
     fun onVpnPermissionDenied() {
-        failConnect("Нет разрешения VPN. Выдайте доступ в настройках.", retryable = false)
+        failConnect("Нет разрешения VPN. Выдайте доступ в настройках.")
     }
 
     fun disconnect() {
@@ -968,6 +1087,9 @@ class HomeViewModel @Inject constructor(
         // Never feed its possibly stale scan result directly to ServerSelected: stop
         // the old core first, then let the normal Connect flow perform fresh preflight.
         manualReconnectJob?.cancel()
+        bypassJob?.cancel()
+        bypassJob = null
+        autopilotSuppressed = true
         val traceId = TraceId.newId()
         activeTraceId = traceId
         userStopRequested = true
@@ -991,30 +1113,33 @@ class HomeViewModel @Inject constructor(
                 } ?: false
 
                 if (!stopped) {
-                    if (activeTraceId == traceId) {
-                        failConnect(
-                            "Не удалось остановить прежнее подключение. Повторите попытку.",
-                            retryable = false
-                        )
-                    }
+                    failConnectIfCurrent(
+                        traceId,
+                        "Не удалось остановить прежнее подключение. Повторите попытку."
+                    )
                     return@launch
                 }
                 if (activeTraceId != traceId) return@launch
 
                 withContext(Dispatchers.Main.immediate) {
-                    endConnectFlow()
-                    // connect() will request VPN permission if needed and run the same
-                    // fresh subscription/preflight pipeline as the main Connect button.
-                    lastConnectClickMs = 0L
-                    connect(fromManualReconnect = true)
+                    // Re-check inside the Main block: a new Connect can start while this
+                    // coroutine is between the guard above and the dispatch.
+                    if (activeTraceId == traceId) {
+                        endConnectFlow()
+                        // connect() will request VPN permission if needed and run the same
+                        // fresh subscription/preflight pipeline as the main Connect button.
+                        lastConnectClickMs = 0L
+                        connect(fromManualReconnect = true)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                if (activeTraceId == traceId) {
-                    logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
-                    failConnect(failure.message ?: "Не удалось переключить сервер", retryable = false)
-                }
+                logCollector.error(TAG, "Manual server switch preflight handoff failed", failure)
+                failConnectIfCurrent(
+                    traceId,
+                    failure.message ?: "Не удалось переключить сервер"
+                )
             }
         }
     }
