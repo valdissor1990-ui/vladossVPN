@@ -89,7 +89,7 @@ jobs:
 
       - name: Scan filesystem and dependency manifests
         id: scan
-        uses: anchore/scan-action@v6
+        uses: anchore/scan-action@v7
         with:
           path: .
           fail-build: false
