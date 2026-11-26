@@ -14,13 +14,15 @@ class PrivacyReportBuilderTest {
 
     private fun inputs(
         selfUpdate: Boolean = false,
+        updateChecks: Boolean = true,
         consent: Boolean = false,
         ruRequested: Boolean = false,
         ruReady: Boolean = false,
         batteryExemption: Boolean = true,
         installPackages: Boolean = true
     ) = PrivacyInputs(
-        selfUpdateEnabled = selfUpdate,
+        selfUpdateBuildEnabled = selfUpdate,
+        updateChecksEnabled = updateChecks,
         deviceMetadataConsent = consent,
         ruRuleSetsRequested = ruRequested,
         ruRuleSetsReady = ruReady,
@@ -41,6 +43,22 @@ class PrivacyReportBuilderTest {
         assertTrue(on.fact("network-geo-rules").dataLeavesDevice)
         assertTrue(on.fact("identifier-hwid").dataLeavesDevice)
         assertTrue(on.fact("identifier-device-meta").dataLeavesDevice)
+    }
+
+    @Test
+    fun userUpdateToggleDisablesTheNetworkFact() {
+        // The build allows updates, but the user turned the toggle off.
+        val off = builder.build(inputs(selfUpdate = true, updateChecks = false))
+        assertFalse(off.fact("network-updates").dataLeavesDevice)
+        assertTrue(off.fact("network-updates").detail.contains("настрой", ignoreCase = true))
+
+        val on = builder.build(inputs(selfUpdate = true, updateChecks = true))
+        assertTrue(on.fact("network-updates").dataLeavesDevice)
+
+        // The play flavor has no self-update at all, regardless of the toggle.
+        val play = builder.build(inputs(selfUpdate = false, updateChecks = true))
+        assertFalse(play.fact("network-updates").dataLeavesDevice)
+        assertTrue(play.fact("network-updates").detail.contains("сборке", ignoreCase = true))
     }
 
     @Test

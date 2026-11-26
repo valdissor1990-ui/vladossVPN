@@ -7,20 +7,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Covers the pure flavor mapping without Android. The provider only reads the sources and
- * delegates to [mapPrivacyInputs], so this is the whole decision logic.
+ * Covers the pure mapping from sources to [PrivacyInputs] without Android. The provider only
+ * reads the sources and delegates to [mapPrivacyInputs].
  */
 class AndroidPrivacyInputsTest {
 
     private fun map(
         preset: RoutingPreset = RoutingPreset.BYPASS_LAN,
-        selfUpdate: Boolean = false,
+        selfUpdateBuild: Boolean = false,
+        updateChecks: Boolean = true,
         consent: Boolean = false,
         rulesReady: Boolean = false,
         battery: Boolean = false,
         installAllowed: Boolean = false
     ) = mapPrivacyInputs(
-        selfUpdateEnabled = selfUpdate,
+        selfUpdateBuildEnabled = selfUpdateBuild,
+        updateChecksEnabled = updateChecks,
         deviceMetadataConsent = consent,
         preset = preset,
         ruleSetsReady = rulesReady,
@@ -39,32 +41,26 @@ class AndroidPrivacyInputsTest {
     fun everySourceIsCopied() {
         val inputs = map(
             preset = RoutingPreset.BYPASS_RU,
-            selfUpdate = true,
+            selfUpdateBuild = true,
+            updateChecks = true,
             consent = true,
-            rulesReady = true,
-            battery = true,
-            installAllowed = true
+            rulesReady = true
         )
-        assertTrue(inputs.selfUpdateEnabled)
+        assertTrue(inputs.selfUpdateBuildEnabled)
         assertTrue(inputs.deviceMetadataConsent)
         assertTrue(inputs.ruRuleSetsRequested)
         assertTrue(inputs.ruRuleSetsReady)
-        assertTrue(inputs.batteryExemptionOffered)
-        assertTrue(inputs.installPackagesAllowed)
     }
 
     @Test
-    fun flavorFlagsAreCopiedIntoInputs() {
-        // The provider passes BuildConfig.ENABLE_BATTERY_EXEMPTION / IS_PLAY_STORE here.
-        // The manifest itself is covered by PrivacyReportBuilderTest, which checks that the
-        // conditional permissions disappear when these flags are false.
-        val play = map(battery = false, installAllowed = false)
-        assertFalse(play.batteryExemptionOffered)
-        assertFalse(play.installPackagesAllowed)
-
-        val direct = map(battery = true, installAllowed = true)
-        assertTrue(direct.batteryExemptionOffered)
-        assertTrue(direct.installPackagesAllowed)
+    fun batteryAndInstallFlagsAreCopied() {
+        // The provider passes BuildConfig.ENABLE_BATTERY_EXEMPTION and !IS_PLAY_STORE here.
+        // The report itself only drops these permissions when the flags are false; see
+        // PrivacyReportBuilderTest.flavorSpecificPermissionsFollowTheBuild.
+        assertFalse(map(battery = false, installAllowed = false).batteryExemptionOffered)
+        assertFalse(map(battery = false, installAllowed = false).installPackagesAllowed)
+        assertTrue(map(battery = true, installAllowed = true).batteryExemptionOffered)
+        assertTrue(map(battery = true, installAllowed = true).installPackagesAllowed)
     }
 
     @Test

@@ -33,7 +33,7 @@ data class PrivacyFact(
     val title: String,
     val detail: String,
     val source: PrivacySource,
-    /** True only when data actually leaves the device in the current configuration. */
+    /** True when this feature can send data off the device under the current configuration. It is not a claim that a request is in flight right now. */
     val dataLeavesDevice: Boolean,
     /** True when sending requires explicit user consent. */
     val requiresOptIn: Boolean = false
@@ -53,7 +53,9 @@ data class PrivacyFact(
  */
 data class PrivacyInputs(
     /** `BuildConfig.ENABLE_SELF_UPDATE` of the current flavor. */
-    val selfUpdateEnabled: Boolean,
+    val selfUpdateBuildEnabled: Boolean,
+    /** User toggle `check_updates` in the settings DataStore (default on). */
+    val updateChecksEnabled: Boolean,
     /** `SubscriptionRepository.deviceMetadataConsent` (default off). */
     val deviceMetadataConsent: Boolean,
     /** `RoutingSettings.preset(context) == RoutingPreset.BYPASS_RU`. */
@@ -134,7 +136,9 @@ class PrivacyReportBuilder {
         )
     )
 
-    private fun networkFacts(inputs: PrivacyInputs): List<PrivacyFact> = listOf(
+    private fun networkFacts(inputs: PrivacyInputs): List<PrivacyFact> {
+        val updatesEnabled = inputs.selfUpdateBuildEnabled && inputs.updateChecksEnabled
+        return listOf(
         PrivacyFact(
             id = "network-subscriptions",
             kind = PrivacyKind.NETWORK,
@@ -155,13 +159,16 @@ class PrivacyReportBuilder {
             id = "network-updates",
             kind = PrivacyKind.NETWORK,
             title = "Проверка обновлений",
-            detail = if (inputs.selfUpdateEnabled) {
-                "Запрос к GitHub Releases за номером новой версии. Отправляется только версия приложения."
-            } else {
-                "Отключена в этой сборке."
+            detail = when {
+                !inputs.selfUpdateBuildEnabled ->
+                    "Отключена в этой сборке."
+                !inputs.updateChecksEnabled ->
+                    "Отключена в настройках приложения."
+                else ->
+                    "Запрос к GitHub Releases за номером новой версии. Отправляется только версия приложения."
             },
             source = PrivacySource.UPDATE_CHECKER,
-            dataLeavesDevice = inputs.selfUpdateEnabled
+            dataLeavesDevice = updatesEnabled
         ),
         PrivacyFact(
             id = "network-geo-rules",
@@ -171,14 +178,15 @@ class PrivacyReportBuilder {
                 !inputs.ruRuleSetsRequested ->
                     "Наборы правил не запрашиваются: выбран пресет без geo-правил."
                 inputs.ruRuleSetsReady ->
-                    "Публичные наборы правил скачаны с GitHub и периодически обновляются."
+                    "Публичные наборы правил скачаны с GitHub при выборе пресета и обновляются вручную кнопкой «Обновить»."
                 else ->
                     "Публичные наборы правил скачиваются с GitHub при выборе пресета «Обход локальной сети и сайтов РФ». Пока файлов нет или они не проверены, часть правил может не применяться."
             },
             source = PrivacySource.RULE_SET_STORE,
             dataLeavesDevice = inputs.ruRuleSetsRequested
         )
-    )
+        )
+    }
 
     private fun identifierFacts(inputs: PrivacyInputs): List<PrivacyFact> = listOf(
         PrivacyFact(
@@ -216,11 +224,7 @@ class PrivacyReportBuilder {
         add(permission("perm-foreground", "Работа в фоне", "Держит VPN включённым при свёрнутом приложении.", PrivacySource.MANIFEST))
         add(permission("perm-foreground-special", "Специальный тип фоновой службы", "Обязательное объявление для VPN-службы на современных Android.", PrivacySource.MANIFEST))
         add(permission("perm-wake-lock", "Не давать устройству засыпать", "Нужно, чтобы туннель не обрывался во время работы.", PrivacySource.MANIFEST))
-        add(permission("perm-notifications", "Уведомления", if (inputs.batteryExemptionOffered) {
-            "Показывает состояние VPN и просит отключить экономию батареи."
-        } else {
-            "Показывает состояние VPN."
-        }, PrivacySource.MANIFEST))
+        add(permission("perm-notifications", "Уведомления", "Показывает состояние VPN.", PrivacySource.MANIFEST))
         // The play flavor removes this permission and disables the request.
         if (inputs.batteryExemptionOffered) {
             add(permission("perm-battery", "Исключение из экономии батареи", "Приложение может предложить отключить оптимизацию, чтобы VPN не останавливался. Решение остаётся за вами.", PrivacySource.MANIFEST))
