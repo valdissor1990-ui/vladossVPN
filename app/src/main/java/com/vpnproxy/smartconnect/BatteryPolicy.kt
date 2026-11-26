@@ -19,6 +19,16 @@ object BatteryPolicy {
         return pm?.isPowerSaveMode == true
     }
 
+    /**
+     * A locked phone does not need sub-minute latency checks. Android reports `isInteractive`
+     * as false both for screen-off and for Doze, which is exactly when a long tunnel session
+     * used to drain the battery in competitors.
+     */
+    fun isScreenOff(context: Context): Boolean {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        return pm?.isInteractive == false
+    }
+
     fun isEconomyModeEnabled(context: Context): Boolean {
         val prefs = context.getSharedPreferences(
             AutoSwitcherConfig.batteryPrefsName,
@@ -36,21 +46,28 @@ object BatteryPolicy {
 
     /**
      * Effective health-check delay:
-     * system saver > in-app economy > normal.
+     * system saver > in-app economy > normal, then stretched while the screen is off.
      */
     fun healthCheckIntervalMs(context: Context): Long =
         healthCheckIntervalMs(
             systemBatterySaver = isSystemBatterySaver(context),
-            economyMode = isEconomyModeEnabled(context)
+            economyMode = isEconomyModeEnabled(context),
+            screenOff = isScreenOff(context)
         )
 
     /** Pure policy function so precedence is covered by fast unit tests. */
-    internal fun healthCheckIntervalMs(systemBatterySaver: Boolean, economyMode: Boolean): Long =
-        when {
+    internal fun healthCheckIntervalMs(
+        systemBatterySaver: Boolean,
+        economyMode: Boolean,
+        screenOff: Boolean = false
+    ): Long {
+        val base = when {
             systemBatterySaver -> AutoSwitcherConfig.batterySaverHealthCheckIntervalMs
             economyMode -> AutoSwitcherConfig.economyHealthCheckIntervalMs
             else -> AutoSwitcherConfig.healthCheckIntervalMs
         }
+        return if (screenOff) base * AutoSwitcherConfig.screenOffIntervalMultiplier else base
+    }
 
     fun shouldRunMicroProbe(context: Context): Boolean =
         shouldRunMicroProbe(isSystemBatterySaver(context))
