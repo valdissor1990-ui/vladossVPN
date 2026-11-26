@@ -37,14 +37,17 @@ abstract class DoctorActionsModule {
             actions: RemedyActions,
             connectionCoordinator: ConnectionCoordinator,
             logCollector: LogCollector
-        ): RemedyExecutor = RemedyExecutor(
-            actions = actions,
-            isRestartAllowed = {
+        ): RemedyExecutor {
+            val isRestartAllowed: () -> Boolean = {
                 val state = connectionCoordinator.state.value
                 val connecting = state is ConnectionState.Connecting || state is ConnectionState.Verifying
                 !connecting && !VpnProxyService.isCoreTransitioning.value
-            },
-            log = { line -> logCollector.warn("RemedyExecutor", line) }
-        )
+            }
+            return RemedyExecutor(
+                actions = actions,
+                isRestartAllowed = isRestartAllowed,
+                log = { line -> logCollector.warn("RemedyExecutor", line) }
+            )
+        }
     }
 }
