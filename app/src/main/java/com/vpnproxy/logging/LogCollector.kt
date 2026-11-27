@@ -31,10 +31,16 @@ import javax.inject.Singleton
 @Singleton
 class LogCollector @Inject constructor() {
     @Volatile private var appContext: Context? = null
+    @Volatile private var nativeLogClearer: (() -> Unit)? = null
 
     /** Called by Application before planting Timber trees; no-op persistence in isolated unit tests. */
     fun initialize(context: Context) {
         appContext = context.applicationContext
+    }
+
+    /** Registers the process-wide native writer so Clear logs can discard its pending batch too. */
+    fun setNativeLogClearer(clearer: () -> Unit) {
+        nativeLogClearer = clearer
     }
 
     companion object {
@@ -227,29 +233,33 @@ class LogCollector @Inject constructor() {
      * queued before the clear are discarded so they cannot recreate deleted files.
      */
     fun clear() {
+        // Keep the ring buffer locked until both writers have discarded their pending
+        // batches and the files are deleted. Entries added after this block are new logs.
         synchronized(bufferLock) {
             buffer.clear()
             publishDirty = false
-        }
-        droppedEntries.set(0L)
-        droppedChars.set(0L)
-        _logs.value = emptyList()
-        _filteredLogs.value = emptyList()
-        _stats.value = LogStats()
+            droppedEntries.set(0L)
+            droppedChars.set(0L)
+            _logs.value = emptyList()
+            _filteredLogs.value = emptyList()
+            _stats.value = LogStats()
 
-        val logDirectory = appContext?.let { File(it.filesDir, "logs") }
-        // Match safeFlush() lock order: fileLock -> pendingLock. A queued batch is
-        // discarded while no writer can be between draining the queue and writing it.
-        synchronized(fileLock) {
-            synchronized(pendingLock) {
-                pendingText.setLength(0)
-            }
-            val undeleted = logDirectory?.listFiles()
-                ?.filter { it.isFile }
-                ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
-                .orEmpty()
-            undeleted.forEach { file ->
-                Log.w(TAG, "Could not delete persisted log file ${file.name}")
+            val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+            // Match safeFlush() lock order: fileLock -> pendingLock. NativeLogSink.clear()
+            // takes its own writer lock and waits for any in-flight native file write.
+            synchronized(fileLock) {
+                synchronized(pendingLock) {
+                    pendingText.setLength(0)
+                }
+                runCatching { nativeLogClearer?.invoke() }
+                    .onFailure { Log.w(TAG, "Could not clear native log queue: ${it.javaClass.simpleName}") }
+                val undeleted = logDirectory?.listFiles()
+                    ?.filter { it.isFile }
+                    ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
+                    .orEmpty()
+                undeleted.forEach { file ->
+                    Log.w(TAG, "Could not delete persisted log file ${file.name}")
+                }
             }
         }
     }
