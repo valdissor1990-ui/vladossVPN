@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.privacy.AndroidPrivacyInputsProvider
 import com.vpnproxy.core.privacy.PrivacyReport
 import com.vpnproxy.core.privacy.PrivacyReportBuilder
+import com.vpnproxy.core.privacy.PrivacyKind
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
