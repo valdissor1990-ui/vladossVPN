@@ -136,11 +136,9 @@ class DebugViewModel @Inject constructor(
             _libboxTail.value = withContext(Dispatchers.IO) {
                 runCatching {
                     val callbackLines = logCollector.getAllEntries()
-                        .asSequence()
                         .filter { it.tag == "LIBBOX" }
                         .takeLast(100)
                         .map { it.toFormattedString(maskSensitive = true) }
-                        .toList()
                     val file = java.io.File(context.filesDir, "logs/libbox.log")
                     val fileLines = if (file.isFile) {
                         val tail = java.util.ArrayDeque<String>(100)
