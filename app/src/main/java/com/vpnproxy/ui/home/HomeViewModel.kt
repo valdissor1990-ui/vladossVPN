@@ -1039,16 +1039,49 @@ class HomeViewModel @Inject constructor(
     }
 
     fun refreshSubscription() {
+        if (_uiState.value.isRefreshingSubscription) return
         viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isRefreshingSubscription = true,
+                notice = "Обновляем подписку…"
+            )
             try {
-                _uiState.value = _uiState.value.copy(isRefreshingSubscription = true)
-                subscriptionRepository.refreshAll()
+                val totalServers = subscriptionRepository.refreshAll()
+                val report = subscriptionRepository.lastImportReport.value
                 updateAutoSwitcherProviderScope()
-                if (connectionCoordinator.state.value is ConnectionState.Connected) refreshAutomaticScopeCandidates()
+                if (connectionCoordinator.state.value is ConnectionState.Connected) {
+                    refreshAutomaticScopeCandidates()
+                }
+
+                val providers = report?.providers.orEmpty()
+                val downloaded = providers.count { it.source == "network" }
+                val unchanged = providers.count { it.source == "etag_cache" }
+                val cached = providers.count {
+                    it.source == "encrypted_body" || it.source == "aggregate_cache"
+                }
+                val failed = providers.count { it.source == "failed" }
+                val serverCount = report?.globallyUniqueCount ?: totalServers
+
+                val resultMessage = when {
+                    providers.isEmpty() ->
+                        "Нет активных подписок для обновления. Проверьте, добавлена ли подписка."
+                    failed == 0 && cached == 0 ->
+                        "Проверка завершена: $serverCount серверов. Новых данных: ${downloaded}, без изменений: ${unchanged}."
+                    downloaded + unchanged > 0 ->
+                        "Частичное обновление: $serverCount серверов. Проверено источников: ${downloaded + unchanged}, ошибок: ${failed}, использован сохранённый кэш: ${cached}."
+                    cached > 0 ->
+                        "Не удалось получить свежие данные. Показан сохранённый список: $serverCount серверов. Проверьте интернет или ссылку подписки."
+                    else ->
+                        "Не удалось обновить подписку. Сервер не ответил или вернул некорректный список. Попробуйте позже."
+                }
+                _uiState.value = _uiState.value.copy(notice = resultMessage)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
+                _uiState.value = _uiState.value.copy(
+                    notice = "Ошибка обновления подписки: ${e.message?.take(120) ?: e.javaClass.simpleName}"
+                )
             } finally {
                 _uiState.value = _uiState.value.copy(isRefreshingSubscription = false)
             }
