@@ -421,7 +421,7 @@ private fun SubscriptionHeader(
         else -> hostOf(subscription.url).ifBlank { subscription.name }
     }
     val lastCheckedAt = if (allMode) {
-        subscriptions.maxOfOrNull { it.lastUpdated }
+        subscriptions.filter { it.enabled }.maxOfOrNull { it.lastUpdated }
     } else {
         subscription?.lastUpdated
     }
