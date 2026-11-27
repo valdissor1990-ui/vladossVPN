@@ -612,13 +612,22 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
+                        val isClashProxy = item["port"] != null && item["server_port"] == null && item["protocol"] == null
                         val expected = countJsonCandidates(item)
-                        val parsed = extractAllFromJsonObject(item, providerTag)
+                        val parsed = if (isClashProxy) {
+                            runCatching { ClashProxyMapper.toParsedConfig(item.toPlainProxyMap(), providerTag) }
+                                .getOrNull()?.let(::listOf).orEmpty()
+                        } else {
+                            extractAllFromJsonObject(item, providerTag)
+                        }
                         candidateCount += expected
                         configs.addAll(parsed)
                         val rejected = (expected - parsed.size).coerceAtLeast(0)
                         if (rejected > 0) {
-                            val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                            val reason = if (parsed.isEmpty()) {
+                                if (isClashProxy) ClashProxyMapper.classifyRejection(item.toPlainProxyMap())
+                                else classifyJsonRejection(item)
+                            } else "invalid_or_malformed_entry"
                             repeat(rejected) { rejectionCounts?.increment(reason) }
                         }
                     }
