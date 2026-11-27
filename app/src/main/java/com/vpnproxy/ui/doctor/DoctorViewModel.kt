@@ -63,6 +63,7 @@ class DoctorViewModel @Inject constructor(
     private companion object {
         const val TAG = "DoctorViewModel"
         const val BUSY_TEXT = "Проверка уже идёт."
+        const val REMEDY_BUSY_TEXT = "Дождитесь завершения текущего действия."
         const val ERROR_TEXT = "Не удалось выполнить проверку. Попробуйте ещё раз."
         const val REMEDY_ERROR_TEXT = "Не удалось выполнить действие. Попробуйте ещё раз."
     }
@@ -94,7 +95,7 @@ class DoctorViewModel @Inject constructor(
      */
     fun run(withConsent: Boolean) {
         if (tryClaimRun() == null) {
-            _state.update { it.copy(message = BUSY_TEXT) }
+            _state.update { it.copy(message = if (it.remedyBusy) REMEDY_BUSY_TEXT else BUSY_TEXT) }
             return
         }
         val generation = runGeneration.incrementAndGet()
@@ -152,6 +153,7 @@ class DoctorViewModel @Inject constructor(
      * is the user's explicit action.
      */
     fun onRemedyPressed(remedy: Remedy) {
+        if (_state.value.isRunning || _state.value.remedyBusy) return
         if (remedy.safety == RemedySafety.REQUIRES_CONFIRM) {
             _state.update { it.copy(pendingConfirm = remedy, remedyMessage = null) }
             return
@@ -182,7 +184,7 @@ class DoctorViewModel @Inject constructor(
     private fun execute(remedy: Remedy, confirmed: Boolean) {
         // The executor also answers BUSY; this guard keeps the UI from queueing coroutines
         // while a side effect is already running.
-        if (_state.value.remedyBusy) return
+        if (_state.value.isRunning || _state.value.remedyBusy) return
         _state.update { it.copy(remedyBusy = true, remedyMessage = null, performed = null) }
         viewModelScope.launch {
             try {
