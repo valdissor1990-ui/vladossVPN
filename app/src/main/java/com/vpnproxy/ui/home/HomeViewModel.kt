@@ -1097,7 +1097,7 @@ class HomeViewModel @Inject constructor(
             } catch (e: Exception) {
                 logCollector.error(TAG, "refreshSubscription failed", e)
                 _uiState.value = _uiState.value.copy(
-                    notice = "Ошибка обновления подписки: ${e.message?.take(120) ?: e.javaClass.simpleName}"
+                    notice = "Ошибка обновления подписки (${e.javaClass.simpleName}). Проверьте интернет и ссылку подписки."
                 )
             } finally {
                 _uiState.value = _uiState.value.copy(isRefreshingSubscription = false)
