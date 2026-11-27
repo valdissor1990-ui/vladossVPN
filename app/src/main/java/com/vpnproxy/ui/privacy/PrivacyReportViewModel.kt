@@ -10,6 +10,7 @@ import com.vpnproxy.core.privacy.PrivacyKind
 import com.vpnproxy.subscription.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +47,8 @@ class PrivacyReportViewModel @Inject constructor(
                     builder.build(provider.read())
                 }
                 _state.value = PrivacyReportUiState(report = report)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 _state.value = PrivacyReportUiState(error = "Не удалось сформировать отчёт. Повторите попытку.")
             }
