@@ -41,12 +41,21 @@ class AndroidRemedyActions @Inject constructor(
     override suspend fun refreshSubscription(): RemedyActionResult = withContext(Dispatchers.IO) {
         try {
             val configs = subscriptionRepository.refreshAll()
-            if (configs > 0) {
+            val report = subscriptionRepository.lastImportReport.value
+            val hasFreshProviderResponse = report?.providers?.any { provider ->
+                provider.failureCode == null &&
+                    provider.source != "encrypted_body" &&
+                    provider.source != "aggregate_cache" &&
+                    provider.source != "failed"
+            } == true
+            if (configs > 0 && hasFreshProviderResponse) {
                 RemedyActionResult.Done
             } else {
-                // Refresh completed but produced nothing usable: report a rejection rather
-                // than a success the user cannot see any effect from.
-                RemedyActionResult.Failed(RemedyFailure.REJECTED)
+                // refreshAll() can return cached profiles after every network request failed.
+                // A positive profile count alone is not evidence that the subscription updated.
+                RemedyActionResult.Failed(
+                    if (configs == 0) RemedyFailure.REJECTED else RemedyFailure.NETWORK
+                )
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -58,14 +67,15 @@ class AndroidRemedyActions @Inject constructor(
 
     override suspend fun restartCore(): RemedyActionResult = withContext(Dispatchers.Main) {
         try {
-            // Restarting an active tunnel and starting an idle core are two different service
-            // actions; the coordinator decides the rest.
-            val action = if (VpnProxyService.isRunning.value) {
-                VpnProxyService.ACTION_REQUEST_RECONNECT
-            } else {
-                VpnProxyService.ACTION_ENSURE_RUNNING
+            // ACTION_ENSURE_RUNNING only logs the actor state; it does not start a
+            // disconnected tunnel. Do not report a successful restart when there is no
+            // active VPN service to reconnect.
+            if (!VpnProxyService.isRunning.value) {
+                return@withContext RemedyActionResult.Failed(RemedyFailure.BAD_STATE)
             }
-            val intent = Intent(context, VpnProxyService::class.java).apply { this.action = action }
+            val intent = Intent(context, VpnProxyService::class.java).apply {
+                action = VpnProxyService.ACTION_REQUEST_RECONNECT
+            }
             context.startForegroundService(intent)
             RemedyActionResult.Done
         } catch (cancelled: CancellationException) {
@@ -78,10 +88,20 @@ class AndroidRemedyActions @Inject constructor(
 
     override suspend fun switchServer(): RemedyActionResult = withContext(Dispatchers.IO) {
         try {
+            if (!VpnProxyService.isRunning.value) {
+                return@withContext RemedyActionResult.Failed(RemedyFailure.BAD_STATE)
+            }
+            val current = autoSwitcher.currentServer.value
+                ?: return@withContext RemedyActionResult.Failed(RemedyFailure.REJECTED)
             val next = autoSwitcher.switchToNext()
                 ?: return@withContext RemedyActionResult.Failed(RemedyFailure.REJECTED)
-            // The same path an explicit tap on a server row takes, so teardown and preflight
-            // stay identical.
+            if (next.config.connectionKey() == current.config.connectionKey()) {
+                // AutoSwitcher returns the current server when it is the only healthy option.
+                // Do not turn that no-op into a fake successful switch/reconnect.
+                return@withContext RemedyActionResult.Failed(RemedyFailure.REJECTED)
+            }
+            // Match the normal manual-selection path: reset retry state before selecting.
+            connectionCoordinator.send(ConnectionEvent.ResetRetryCount)
             connectionCoordinator.send(
                 ConnectionEvent.ServerSelected(next, connectionCoordinator.activeTraceId)
             )
