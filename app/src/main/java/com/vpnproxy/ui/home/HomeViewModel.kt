@@ -150,7 +150,7 @@ class HomeViewModel @Inject constructor(
 
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
-    /** Read and cancelled by the coordinator actor; visibility must cross threads. */
+    /** The coordinator actor and Main must atomically publish/cancel the current selection job. */
     private val selectionJobLock = Any()
     private var selectionGeneration = 0L
     private var selectionJob: Job? = null
@@ -699,7 +699,7 @@ class HomeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             connectionState = ConnectionUiState.ERROR,
             isBusy = false,
-            isScanningServers = false,
+            isScanningServers = serverScanner.isScanning.value,
             lastErrorMessage = message
         )
     }
