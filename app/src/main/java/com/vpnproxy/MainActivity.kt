@@ -23,6 +23,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.vpnproxy.core.feature.FeatureFlags
+import com.vpnproxy.core.doctor.Remedy
+import com.vpnproxy.core.doctor.SettingsSection
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.ui.debug.DebugScreen
@@ -219,7 +221,20 @@ private fun VPNProxyNavHost(
 
         if (FeatureFlags.DOCTOR_ENABLED) {
             composable(Route.Doctor.path) {
-                DoctorScreen(onBack = { navController.popBackStack() })
+                DoctorScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigate = { remedy ->
+                        when (remedy) {
+                            is Remedy.OpenSettings -> when (remedy.section) {
+                                SettingsSection.SUBSCRIPTIONS -> navController.navigate(Route.Subscriptions.path)
+                                SettingsSection.DNS, SettingsSection.DURABILITY -> navController.navigate(Route.Settings.path)
+                            }
+                            Remedy.ChangeDns, Remedy.EnableTlsFragment ->
+                                navController.navigate(Route.Settings.path)
+                            else -> Unit
+                        }
+                    }
+                )
             }
         }
     }
