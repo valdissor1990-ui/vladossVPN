@@ -183,7 +183,7 @@ fun DoctorScreen(
             state.results.forEach { result ->
                 DoctorResultCard(
                     result = result,
-                    actionsEnabled = !state.remedyBusy,
+                    actionsEnabled = !state.remedyBusy && !state.isRunning,
                     onRemedyClick = viewModel::onRemedyPressed
                 )
                 Spacer(Modifier.height(8.dp))
