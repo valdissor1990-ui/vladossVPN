@@ -1061,6 +1061,23 @@ class HomeViewModel @Inject constructor(
                 }
                 val failed = providers.count { it.source == "failed" }
                 val serverCount = report?.globallyUniqueCount ?: totalServers
+                val reportedProviders = providers.filter { it.candidateCount != null && it.rejectedCount != null }
+                val candidateTotal = reportedProviders.sumOf { it.candidateCount ?: 0 }
+                val acceptedTotal = reportedProviders.sumOf { it.acceptedCount }
+                val rejectedTotal = reportedProviders.sumOf { it.rejectedCount ?: 0 }
+                val rejectionDetails = providers.flatMap { it.rejectionReasons.entries }
+                    .groupBy({ it.key }, { it.value })
+                    .mapValues { (_, counts) -> counts.sum() }
+                    .entries.sortedByDescending { it.value }.take(3)
+                    .joinToString { "${it.key}: ${it.value}" }
+                val importDetails = if (reportedProviders.isNotEmpty()) {
+                    buildString {
+                        append(" Импортировано записей: $acceptedTotal из $candidateTotal; отклонено: $rejectedTotal.")
+                        if (rejectionDetails.isNotBlank()) append(" Причины: $rejectionDetails.")
+                        val duplicates = (report?.providerDuplicates ?: 0) + (report?.globalDuplicates ?: 0)
+                        if (duplicates > 0) append(" Удалено дубликатов: $duplicates.")
+                    }
+                } else ""
 
                 val resultMessage = when {
                     providers.isEmpty() ->
@@ -1074,7 +1091,7 @@ class HomeViewModel @Inject constructor(
                     else ->
                         "Не удалось обновить подписку. Сервер не ответил или вернул некорректный список. Попробуйте позже."
                 }
-                _uiState.value = _uiState.value.copy(notice = resultMessage)
+                _uiState.value = _uiState.value.copy(notice = resultMessage + importDetails)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
