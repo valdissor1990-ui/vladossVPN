@@ -252,8 +252,10 @@ class SingBoxCore(
         private const val MAX_PENDING_CHARS = 1024 * 1024
 
         private val lock = Any()
+        private val writeLock = Any()
         private val pending = StringBuilder()
         private val droppedLines = AtomicLong(0L)
+        private var generation = 0L
         @Volatile private var directory: File? = null
 
         private val writer: ScheduledExecutorService by lazy {
@@ -284,9 +286,14 @@ class SingBoxCore(
 
         /** Discards queued native lines and deletes both active and rotated files atomically. */
         fun clear(dir: File) {
-            synchronized(lock) {
-                pending.setLength(0)
-                droppedLines.set(0L)
+            // Serialize deletion against disk writes without holding the callback queue lock
+            // during I/O. The generation invalidates a batch drained before this clear.
+            synchronized(writeLock) {
+                synchronized(lock) {
+                    pending.setLength(0)
+                    generation++
+                    droppedLines.set(0L)
+                }
                 listOf("libbox.log", "libbox.log.1").forEach { name ->
                     val file = File(dir, name)
                     if (file.exists() && !file.delete()) {
@@ -297,20 +304,25 @@ class SingBoxCore(
         }
 
         private fun flushQuietly() {
-            // Keep the writer lock through disk I/O. clear() uses the same lock, so a
-            // batch already taken from memory cannot be written back after Clear logs.
-            synchronized(lock) {
+            val batch = synchronized(lock) {
                 if (pending.isEmpty()) return
                 val dir = directory ?: return
                 val text = pending.toString()
                 pending.setLength(0)
+                Triple(dir, text, generation)
+            }
+            synchronized(writeLock) {
+                val stillCurrent = synchronized(lock) { generation == batch.third }
+                if (!stillCurrent) return
                 try {
-                    write(dir, text)
+                    write(batch.first, batch.second)
                 } catch (t: Throwable) {
                     // Never surface I/O failures back into the native callback thread.
                     Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
                 }
-                val dropped = droppedLines.getAndSet(0L)
+                val dropped = synchronized(lock) {
+                    if (generation == batch.third) droppedLines.getAndSet(0L) else 0L
+                }
                 if (dropped > 0L) {
                     Log.w(TAG, "Dropped native log lines because the pending buffer was full: $dropped")
                 }
