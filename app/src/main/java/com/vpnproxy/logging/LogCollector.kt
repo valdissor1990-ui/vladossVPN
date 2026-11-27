@@ -173,14 +173,15 @@ class LogCollector @Inject constructor() {
 
     /** Append the coalesced buffer to disk. Failures never escape into a caller/JNI callback. */
     private fun safeFlush() {
-        val text = synchronized(pendingLock) {
-            if (pendingText.isEmpty()) return
-            val drained = pendingText.toString()
-            pendingText.setLength(0)
-            drained
-        }
         val baseContext = appContext ?: return
+        // Keep the file lock while taking the pending snapshot and writing it. clear()
+        // uses the same lock order, so a flush that started before clear cannot recreate
+        // a deleted app.log after the clear operation has completed.
         synchronized(fileLock) {
+            val text = synchronized(pendingLock) {
+                if (pendingText.isEmpty()) return
+                pendingText.toString().also { pendingText.setLength(0) }
+            }
             try {
                 val directory = File(baseContext.filesDir, "logs")
                 if (!directory.exists() && !directory.mkdirs()) return
@@ -230,9 +231,6 @@ class LogCollector @Inject constructor() {
             buffer.clear()
             publishDirty = false
         }
-        synchronized(pendingLock) {
-            pendingText.setLength(0)
-        }
         droppedEntries.set(0L)
         droppedChars.set(0L)
         _logs.value = emptyList()
@@ -240,7 +238,12 @@ class LogCollector @Inject constructor() {
         _stats.value = LogStats()
 
         val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+        // Match safeFlush() lock order: fileLock -> pendingLock. A queued batch is
+        // discarded while no writer can be between draining the queue and writing it.
         synchronized(fileLock) {
+            synchronized(pendingLock) {
+                pendingText.setLength(0)
+            }
             val undeleted = logDirectory?.listFiles()
                 ?.filter { it.isFile }
                 ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
