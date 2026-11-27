@@ -31,6 +31,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Owns the libbox 1.14.3 CommandServer in the application's main process.
@@ -86,6 +87,13 @@ class SingBoxCore(
                 LogCollectorHolder.get()?.error(TAG, "JNI failure during Libbox initialization", t)
                 throw t
             }
+        }
+    }
+
+    init {
+        // Register the process-wide native writer with the shared Clear logs action.
+        logCollector?.setNativeLogClearer {
+            NativeLogSink.clear(File(context.filesDir, "logs"))
         }
     }
 
@@ -245,6 +253,7 @@ class SingBoxCore(
 
         private val lock = Any()
         private val pending = StringBuilder()
+        private val droppedLines = AtomicLong(0L)
         @Volatile private var directory: File? = null
 
         private val writer: ScheduledExecutorService by lazy {
@@ -265,23 +274,46 @@ class SingBoxCore(
                 directory = dir
                 if (pending.length + line.length + 1 <= MAX_PENDING_CHARS) {
                     pending.append(line).append('\n')
+                } else {
+                    droppedLines.incrementAndGet()
                 }
             }
             // Touching the lazy holder starts the single flush thread on first use.
             writer
         }
 
-        private fun flushQuietly() {
-            val text = synchronized(lock) {
-                if (pending.isEmpty()) return
-                pending.toString().also { pending.setLength(0) }
+        /** Discards queued native lines and deletes both active and rotated files atomically. */
+        fun clear(dir: File) {
+            synchronized(lock) {
+                pending.setLength(0)
+                droppedLines.set(0L)
+                listOf("libbox.log", "libbox.log.1").forEach { name ->
+                    val file = File(dir, name)
+                    if (file.exists() && !file.delete()) {
+                        Log.w(TAG, "Could not delete native log file ${file.name}")
+                    }
+                }
             }
-            val dir = directory ?: return
-            try {
-                write(dir, text)
-            } catch (t: Throwable) {
-                // Never surface I/O failures back into the native callback thread.
-                Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
+        }
+
+        private fun flushQuietly() {
+            // Keep the writer lock through disk I/O. clear() uses the same lock, so a
+            // batch already taken from memory cannot be written back after Clear logs.
+            synchronized(lock) {
+                if (pending.isEmpty()) return
+                val dir = directory ?: return
+                val text = pending.toString()
+                pending.setLength(0)
+                try {
+                    write(dir, text)
+                } catch (t: Throwable) {
+                    // Never surface I/O failures back into the native callback thread.
+                    Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
+                }
+                val dropped = droppedLines.getAndSet(0L)
+                if (dropped > 0L) {
+                    Log.w(TAG, "Dropped native log lines because the pending buffer was full: $dropped")
+                }
             }
         }
 
