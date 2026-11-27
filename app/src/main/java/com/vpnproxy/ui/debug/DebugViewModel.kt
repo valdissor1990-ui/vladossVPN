@@ -132,18 +132,30 @@ class DebugViewModel @Inject constructor(
     }
 
     fun showLastLibboxLines() {
-        _libboxTail.value = runCatching {
-            val callbackLines = logCollector.getAllEntries()
-                .filter { it.tag == "LIBBOX" }
-                .takeLast(100)
-                .map { it.toFormattedString(maskSensitive = true) }
-            val file = java.io.File(context.filesDir, "logs/libbox.log")
-            val fileLines = if (file.isFile) {
-                file.readLines(Charsets.UTF_8).takeLast(100).map { SensitiveMasker.mask(it) }
-            } else emptyList()
-            (callbackLines + fileLines).distinct().takeLast(150).joinToString("\n")
-                .ifBlank { "Native libbox has not emitted callback or file log lines yet (${file.absolutePath})" }
-        }.getOrElse { "libbox log unavailable: ${it.javaClass.simpleName}: ${it.message}" }
+        viewModelScope.launch {
+            _libboxTail.value = withContext(Dispatchers.IO) {
+                runCatching {
+                    val callbackLines = logCollector.getAllEntries()
+                        .filter { it.tag == "LIBBOX" }
+                        .takeLast(100)
+                        .map { it.toFormattedString(maskSensitive = true) }
+                    val file = java.io.File(context.filesDir, "logs/libbox.log")
+                    val fileLines = if (file.isFile) {
+                        val tail = java.util.ArrayDeque<String>(100)
+                        file.bufferedReader(Charsets.UTF_8).use { reader ->
+                            while (true) {
+                                val line = reader.readLine() ?: break
+                                if (tail.size == 100) tail.removeFirst()
+                                tail.addLast(SensitiveMasker.mask(line))
+                            }
+                        }
+                        tail.toList()
+                    } else emptyList()
+                    (callbackLines + fileLines).distinct().takeLast(150).joinToString("\n")
+                        .ifBlank { "Native libbox has not emitted callback or file log lines yet (${file.absolutePath})" }
+                }.getOrElse { "libbox log unavailable: ${it.javaClass.simpleName}: ${it.message}" }
+            }
+        }
     }
 
     fun runTrafficProbeNow() {
@@ -213,8 +225,13 @@ class DebugViewModel @Inject constructor(
 
     fun checkExport() {
         viewModelScope.launch {
-            _message.value = runCatching { logExporter.checkExport() }
-                .getOrElse { "Проверка экспорта завершилась ошибкой: ${it.javaClass.simpleName}: ${it.message}" }
+            _message.value = try {
+                withContext(Dispatchers.IO) { logExporter.checkExport() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                "Проверка экспорта завершилась ошибкой: ${failure.javaClass.simpleName}: ${failure.message}"
+            }
             refreshJournalInfo()
         }
     }

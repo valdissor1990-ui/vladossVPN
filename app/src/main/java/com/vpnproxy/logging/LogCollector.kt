@@ -31,10 +31,16 @@ import javax.inject.Singleton
 @Singleton
 class LogCollector @Inject constructor() {
     @Volatile private var appContext: Context? = null
+    @Volatile private var nativeLogClearer: (() -> Unit)? = null
 
     /** Called by Application before planting Timber trees; no-op persistence in isolated unit tests. */
     fun initialize(context: Context) {
         appContext = context.applicationContext
+    }
+
+    /** Registers the process-wide native writer so Clear logs can discard its pending batch too. */
+    fun setNativeLogClearer(clearer: () -> Unit) {
+        nativeLogClearer = clearer
     }
 
     companion object {
@@ -173,14 +179,15 @@ class LogCollector @Inject constructor() {
 
     /** Append the coalesced buffer to disk. Failures never escape into a caller/JNI callback. */
     private fun safeFlush() {
-        val text = synchronized(pendingLock) {
-            if (pendingText.isEmpty()) return
-            val drained = pendingText.toString()
-            pendingText.setLength(0)
-            drained
-        }
         val baseContext = appContext ?: return
+        // Keep the file lock while taking the pending snapshot and writing it. clear()
+        // uses the same lock order, so a flush that started before clear cannot recreate
+        // a deleted app.log after the clear operation has completed.
         synchronized(fileLock) {
+            val text = synchronized(pendingLock) {
+                if (pendingText.isEmpty()) return
+                pendingText.toString().also { pendingText.setLength(0) }
+            }
             try {
                 val directory = File(baseContext.filesDir, "logs")
                 if (!directory.exists() && !directory.mkdirs()) return
@@ -226,27 +233,33 @@ class LogCollector @Inject constructor() {
      * queued before the clear are discarded so they cannot recreate deleted files.
      */
     fun clear() {
+        // Keep the ring buffer locked until both writers have discarded their pending
+        // batches and the files are deleted. Entries added after this block are new logs.
         synchronized(bufferLock) {
             buffer.clear()
             publishDirty = false
-        }
-        synchronized(pendingLock) {
-            pendingText.setLength(0)
-        }
-        droppedEntries.set(0L)
-        droppedChars.set(0L)
-        _logs.value = emptyList()
-        _filteredLogs.value = emptyList()
-        _stats.value = LogStats()
+            droppedEntries.set(0L)
+            droppedChars.set(0L)
+            _logs.value = emptyList()
+            _filteredLogs.value = emptyList()
+            _stats.value = LogStats()
 
-        val logDirectory = appContext?.let { File(it.filesDir, "logs") }
-        synchronized(fileLock) {
-            val undeleted = logDirectory?.listFiles()
-                ?.filter { it.isFile }
-                ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
-                .orEmpty()
-            undeleted.forEach { file ->
-                Log.w(TAG, "Could not delete persisted log file ${file.name}")
+            val logDirectory = appContext?.let { File(it.filesDir, "logs") }
+            // Match safeFlush() lock order: fileLock -> pendingLock. NativeLogSink.clear()
+            // takes its own writer lock and waits for any in-flight native file write.
+            synchronized(fileLock) {
+                synchronized(pendingLock) {
+                    pendingText.setLength(0)
+                }
+                runCatching { nativeLogClearer?.invoke() }
+                    .onFailure { Log.w(TAG, "Could not clear native log queue: ${it.javaClass.simpleName}") }
+                val undeleted = logDirectory?.listFiles()
+                    ?.filter { it.isFile }
+                    ?.filterNot { file -> runCatching { file.delete() }.getOrDefault(false) }
+                    .orEmpty()
+                undeleted.forEach { file ->
+                    Log.w(TAG, "Could not delete persisted log file ${file.name}")
+                }
             }
         }
     }

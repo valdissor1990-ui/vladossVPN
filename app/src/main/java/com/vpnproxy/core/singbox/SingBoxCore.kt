@@ -31,6 +31,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Owns the libbox 1.14.3 CommandServer in the application's main process.
@@ -86,6 +87,13 @@ class SingBoxCore(
                 LogCollectorHolder.get()?.error(TAG, "JNI failure during Libbox initialization", t)
                 throw t
             }
+        }
+    }
+
+    init {
+        // Register the process-wide native writer with the shared Clear logs action.
+        logCollector?.setNativeLogClearer {
+            NativeLogSink.clear(File(context.filesDir, "logs"))
         }
     }
 
@@ -244,7 +252,10 @@ class SingBoxCore(
         private const val MAX_PENDING_CHARS = 1024 * 1024
 
         private val lock = Any()
+        private val writeLock = Any()
         private val pending = StringBuilder()
+        private val droppedLines = AtomicLong(0L)
+        private var generation = 0L
         @Volatile private var directory: File? = null
 
         private val writer: ScheduledExecutorService by lazy {
@@ -265,23 +276,56 @@ class SingBoxCore(
                 directory = dir
                 if (pending.length + line.length + 1 <= MAX_PENDING_CHARS) {
                     pending.append(line).append('\n')
+                } else {
+                    droppedLines.incrementAndGet()
                 }
             }
             // Touching the lazy holder starts the single flush thread on first use.
             writer
         }
 
-        private fun flushQuietly() {
-            val text = synchronized(lock) {
-                if (pending.isEmpty()) return
-                pending.toString().also { pending.setLength(0) }
+        /** Discards queued native lines and deletes both active and rotated files atomically. */
+        fun clear(dir: File) {
+            // Serialize deletion against disk writes without holding the callback queue lock
+            // during I/O. The generation invalidates a batch drained before this clear.
+            synchronized(writeLock) {
+                synchronized(lock) {
+                    pending.setLength(0)
+                    generation++
+                    droppedLines.set(0L)
+                }
+                listOf("libbox.log", "libbox.log.1").forEach { name ->
+                    val file = File(dir, name)
+                    if (file.exists() && !file.delete()) {
+                        Log.w(TAG, "Could not delete native log file ${file.name}")
+                    }
+                }
             }
-            val dir = directory ?: return
-            try {
-                write(dir, text)
-            } catch (t: Throwable) {
-                // Never surface I/O failures back into the native callback thread.
-                Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
+        }
+
+        private fun flushQuietly() {
+            val batch = synchronized(lock) {
+                if (pending.isEmpty()) return
+                val dir = directory ?: return
+                val text = pending.toString()
+                pending.setLength(0)
+                Triple(dir, text, generation)
+            }
+            synchronized(writeLock) {
+                val stillCurrent = synchronized(lock) { generation == batch.third }
+                if (!stillCurrent) return
+                try {
+                    write(batch.first, batch.second)
+                } catch (t: Throwable) {
+                    // Never surface I/O failures back into the native callback thread.
+                    Log.w(TAG, "Unable to persist native log: ${t.javaClass.simpleName}: ${t.message}")
+                }
+                val dropped = synchronized(lock) {
+                    if (generation == batch.third) droppedLines.getAndSet(0L) else 0L
+                }
+                if (dropped > 0L) {
+                    Log.w(TAG, "Dropped native log lines because the pending buffer was full: $dropped")
+                }
             }
         }
 
