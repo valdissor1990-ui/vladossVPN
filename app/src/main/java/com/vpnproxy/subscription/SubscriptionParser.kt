@@ -254,10 +254,13 @@ class SubscriptionParser @Inject constructor(
             "json" -> when (val element = Json.parseToJsonElement(content)) {
                 is JsonArray -> element.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
                 is JsonObject -> {
-                    val outbounds = element["outbounds"]
-                    if (outbounds is JsonArray) {
-                        outbounds.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
-                    } else countJsonCandidates(element)
+                    val outbounds = element["outbounds"] as? JsonArray
+                    val clashProxies = element["proxies"] as? JsonArray
+                    when {
+                        outbounds != null -> outbounds.filterIsInstance<JsonObject>().sumOf(::countJsonCandidates)
+                        clashProxies != null -> clashProxies.count { it is JsonObject }
+                        else -> countJsonCandidates(element)
+                    }
                 }
                 else -> 0
             }
@@ -581,6 +584,22 @@ class SubscriptionParser @Inject constructor(
         }
     }
 
+    private fun JsonObject.toPlainProxyMap(): Map<String, Any> = entries.mapNotNull { (key, value) ->
+        value.toPlainValue()?.let { key to it }
+    }.toMap()
+
+    private fun JsonElement.toPlainValue(): Any? = when (this) {
+        is JsonNull -> null
+        is JsonObject -> entries.associate { (key, value) -> key to (value.toPlainValue() ?: "") }
+        is JsonArray -> mapNotNull { it.toPlainValue() }
+        is JsonPrimitive -> when {
+            booleanOrNull != null -> booleanOrNull!!
+            isString -> content
+            longOrNull != null -> longOrNull!!
+            doubleOrNull != null -> doubleOrNull!!
+            else -> content
+        }
+    }
     private fun tryParseJson(
         json: String,
         providerTag: String,
@@ -593,20 +612,31 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
+                        val isClashProxy = item["server"] != null && item["server_port"] == null && item["protocol"] == null
                         val expected = countJsonCandidates(item)
-                        val parsed = extractAllFromJsonObject(item, providerTag)
+                        val parsed = if (isClashProxy) {
+                            runCatching { ClashProxyMapper.toParsedConfig(item.toPlainProxyMap(), providerTag) }
+                                .getOrNull()?.let { listOf(it) }.orEmpty()
+                        } else {
+                            extractAllFromJsonObject(item, providerTag)
+                        }
                         candidateCount += expected
                         configs.addAll(parsed)
                         val rejected = (expected - parsed.size).coerceAtLeast(0)
                         if (rejected > 0) {
-                            val reason = if (parsed.isEmpty()) classifyJsonRejection(item) else "invalid_or_malformed_entry"
+                            val reason = if (parsed.isEmpty()) {
+                                if (isClashProxy) ClashProxyMapper.classifyRejection(item.toPlainProxyMap())
+                                else classifyJsonRejection(item)
+                            } else "invalid_or_malformed_entry"
                             repeat(rejected) { rejectionCounts?.increment(reason) }
                         }
                     }
                 }
                 is JsonObject -> {
-                    element["outbounds"]?.jsonArray?.forEach { item ->
-                        if (item is JsonObject) {
+                    val outbounds = element["outbounds"] as? JsonArray
+                    val clashProxies = element["proxies"] as? JsonArray
+                    when {
+                        outbounds != null -> outbounds.filterIsInstance<JsonObject>().forEach { item ->
                             val expected = countJsonCandidates(item)
                             val parsed = extractAllFromJsonObject(item, providerTag)
                             candidateCount += expected
@@ -617,15 +647,23 @@ class SubscriptionParser @Inject constructor(
                                 repeat(rejected) { rejectionCounts?.increment(reason) }
                             }
                         }
-                    } ?: run {
-                        val expected = countJsonCandidates(element)
-                        val parsed = extractAllFromJsonObject(element, providerTag)
-                        candidateCount = expected
-                        configs.addAll(parsed)
-                        val rejected = (expected - parsed.size).coerceAtLeast(0)
-                        if (rejected > 0) {
-                            val reason = if (parsed.isEmpty()) classifyJsonRejection(element) else "invalid_or_malformed_entry"
-                            repeat(rejected) { rejectionCounts?.increment(reason) }
+                        clashProxies != null -> clashProxies.filterIsInstance<JsonObject>().forEach { proxy ->
+                            candidateCount++
+                            val proxyMap = proxy.toPlainProxyMap()
+                            val parsed = runCatching { ClashProxyMapper.toParsedConfig(proxyMap, providerTag) }.getOrNull()
+                            if (parsed != null) configs += parsed
+                            else rejectionCounts?.increment(ClashProxyMapper.classifyRejection(proxyMap))
+                        }
+                        else -> {
+                            val expected = countJsonCandidates(element)
+                            val parsed = extractAllFromJsonObject(element, providerTag)
+                            candidateCount = expected
+                            configs.addAll(parsed)
+                            val rejected = (expected - parsed.size).coerceAtLeast(0)
+                            if (rejected > 0) {
+                                val reason = if (parsed.isEmpty()) classifyJsonRejection(element) else "invalid_or_malformed_entry"
+                                repeat(rejected) { rejectionCounts?.increment(reason) }
+                            }
                         }
                     }
                 }
@@ -635,9 +673,10 @@ class SubscriptionParser @Inject constructor(
                 is JsonArray -> element.filterIsInstance<JsonObject>().groupingBy {
                     it["type"]?.jsonPrimitive?.contentOrNull ?: it["protocol"]?.jsonPrimitive?.contentOrNull ?: "missing_type"
                 }.eachCount()
-                is JsonObject -> element["outbounds"]?.jsonArray?.filterIsInstance<JsonObject>()?.groupingBy {
-                    it["type"]?.jsonPrimitive?.contentOrNull ?: it["protocol"]?.jsonPrimitive?.contentOrNull ?: "missing_type"
-                }?.eachCount() ?: mapOf("single_object" to candidateCount)
+                is JsonObject -> (element["outbounds"] as? JsonArray ?: element["proxies"] as? JsonArray)
+                    ?.filterIsInstance<JsonObject>()?.groupingBy {
+                        it["type"]?.jsonPrimitive?.contentOrNull ?: it["protocol"]?.jsonPrimitive?.contentOrNull ?: "missing_type"
+                    }?.eachCount() ?: mapOf("single_object" to candidateCount)
                 else -> emptyMap()
             }
             logCollector.info(TAG, "JSON subscription parse summary: candidates=$candidateCount parsed=${configs.size} skipped=${candidateCount - configs.size} schemaKinds=$schemaKinds supportedSchema=sing-box_outbound_or_legacy_xray")
