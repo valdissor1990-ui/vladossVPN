@@ -40,7 +40,7 @@ abstract class DoctorActionsModule {
         ): RemedyExecutor = RemedyExecutor(
             actions = actions,
             isRestartAllowed = {
-                connectionCoordinator.state.value !is ConnectionState.Connecting &&
+                connectionCoordinator.state.value != ConnectionState.Connecting &&
                     connectionCoordinator.state.value !is ConnectionState.Verifying &&
                     !VpnProxyService.isCoreTransitioning.value
             },
