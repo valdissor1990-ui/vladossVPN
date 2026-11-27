@@ -463,11 +463,11 @@ class ConnectionCoordinator @Inject constructor(
             }
             is ConnectionEvent.ShowError -> {
                 val next = ConnectionState.Error(event.message, event.retryable)
-                // A preflight retry can fail while the coordinator still holds the previous
-                // Error. Replacing it keeps the message current; an identical error is left
-                // alone so it cannot re-trigger the autopilot for the same failure.
-                if (current == next) {
-                    logD("ShowError ignored — same error is already shown: ${next.message}")
+                // The retryability bit is policy metadata, not part of the user-visible error
+                // identity. A duplicate message must not emit a second Error transition (and
+                // schedule another autopilot step) merely because that bit differs.
+                if (current is ConnectionState.Error && current.message == event.message) {
+                    logD("ShowError ignored — same error message is already shown: ${next.message}")
                     return
                 }
                 retryCount = 0

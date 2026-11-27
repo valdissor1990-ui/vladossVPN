@@ -95,10 +95,11 @@ class ConnectionCoordinatorTest {
             } == true
         }
 
-        // An identical error must not produce a new state object: re-emitting it would let
-        // the autopilot react to the same failure twice.
+        // The same visible error must not produce a new state object even when the
+        // retryability metadata differs: it is still the same failure, not a new attempt.
         val before = coordinator.state.value
         coordinator.send(ConnectionEvent.ShowError("second failure", retryable = false))
+        coordinator.send(ConnectionEvent.ShowError("second failure", retryable = true))
         Thread.sleep(150)
         assertSame(before, coordinator.state.value)
     }
