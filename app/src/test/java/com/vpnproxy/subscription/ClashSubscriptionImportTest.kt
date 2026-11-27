@@ -152,5 +152,13 @@ class ClashSubscriptionImportTest {
         assertEquals(1, outcome.report.rejectedCount)
         assertEquals(1, outcome.report.rejectionReasons["unsupported_protocol"])
         assertEquals(setOf("json-vless", "json-vmess"), outcome.configs.map { it.name }.toSet())
+
+        val arrayOutcome = parser.parseWithReport("""
+            [{"name":"array-vless","type":"vless","server":"array.example.com","port":443,
+              "uuid":"33333333-3333-4333-8333-333333333333","network":"tcp","tls":true}]
+        """.trimIndent(), providerTag = "json-clash-array")
+        assertEquals(1, arrayOutcome.report.candidateCount)
+        assertEquals(1, arrayOutcome.report.acceptedCount)
+        assertEquals("array-vless", arrayOutcome.configs.single().name)
     }
 }
