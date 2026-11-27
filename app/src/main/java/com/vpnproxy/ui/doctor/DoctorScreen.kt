@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.core.doctor.DiagnosticResult
 import com.vpnproxy.core.doctor.DiagnosticStatus
 import com.vpnproxy.core.doctor.DoctorReport
+import com.vpnproxy.core.doctor.Remedy
 import com.vpnproxy.core.doctor.RemedySafety
 import com.vpnproxy.core.doctor.label
 import com.vpnproxy.ui.theme.HappInk
@@ -60,11 +63,40 @@ import com.vpnproxy.ui.theme.HappMuted
 @Composable
 fun DoctorScreen(
     onBack: () -> Unit,
+    onNavigate: (Remedy) -> Unit = {},
     viewModel: DoctorViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var consent by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(state.delegated) {
+        val remedy = state.delegated ?: return@LaunchedEffect
+        viewModel.consumeDelegated()
+        when (remedy) {
+            Remedy.Recheck -> viewModel.run(consent)
+            else -> onNavigate(remedy)
+        }
+    }
+
+    if (state.pendingConfirm != null) {
+        val remedy = state.pendingConfirm!!
+        AlertDialog(
+            onDismissRequest = { viewModel.onRemedyDismissed() },
+            title = { Text("Подтвердите действие") },
+            text = { Text("Выполнить действие «${remedy.title}»? Оно может изменить активное подключение.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.onRemedyConfirmed() }) {
+                    Text("Выполнить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.onRemedyDismissed() }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -149,8 +181,32 @@ fun DoctorScreen(
             Spacer(Modifier.height(16.dp))
 
             state.results.forEach { result ->
-                DoctorResultCard(result)
+                DoctorResultCard(
+                    result = result,
+                    actionsEnabled = !state.remedyBusy,
+                    onRemedyClick = viewModel::onRemedyPressed
+                )
                 Spacer(Modifier.height(8.dp))
+            }
+
+            state.remedyMessage?.let { message ->
+                Spacer(Modifier.height(8.dp))
+                NoticeCard(message)
+            }
+            if (state.remedyBusy) {
+                Spacer(Modifier.height(8.dp))
+                Text("Выполняю действие…", color = HappMuted, fontSize = 12.sp)
+            }
+            if (state.performed != null) {
+                TextButton(
+                    onClick = {
+                        viewModel.clearRemedyMessage()
+                        viewModel.run(consent)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Проверить результат")
+                }
             }
 
             state.report?.let { report ->
@@ -196,7 +252,11 @@ private fun ConsentRow(
 }
 
 @Composable
-private fun DoctorResultCard(result: DiagnosticResult) {
+private fun DoctorResultCard(
+    result: DiagnosticResult,
+    actionsEnabled: Boolean,
+    onRemedyClick: (Remedy) -> Unit
+) {
     val color = statusColor(result.status)
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -239,11 +299,21 @@ private fun DoctorResultCard(result: DiagnosticResult) {
                     } else {
                         ""
                     }
-                    Text(
-                        "Действие: ${remedy.title}$suffix",
-                        color = HappInk,
-                        fontSize = 12.sp
-                    )
+                    if (remedy == Remedy.ReimportProfile) {
+                        Text(
+                            "Повторный импорт профиля пока не поддерживается",
+                            color = HappMuted,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        TextButton(
+                            onClick = { onRemedyClick(remedy) },
+                            enabled = actionsEnabled,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Действие: ${remedy.title}$suffix")
+                        }
+                    }
                 }
             }
             Text("${result.durationMs} мс", color = HappMuted, fontSize = 11.sp)
