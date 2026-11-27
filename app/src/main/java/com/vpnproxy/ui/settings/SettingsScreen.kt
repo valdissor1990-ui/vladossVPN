@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vpnproxy.BuildConfig
+import com.vpnproxy.core.feature.FeatureFlags
 import com.vpnproxy.core.singbox.RoutingPreset
 import com.vpnproxy.ui.update.UpdateDialog
 import com.vpnproxy.ui.update.UpdateViewModel
@@ -28,6 +29,7 @@ import com.vpnproxy.ui.update.UpdateViewModel
 fun SettingsScreen(
     onBack: () -> Unit,
     onNavigateToDurability: () -> Unit = {},
+    onNavigateToPrivacyReport: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel()
 ) {
@@ -141,6 +143,26 @@ fun SettingsScreen(
                         else viewModel.setDeviceMetadataConsent(false)
                     }
                 )
+            }
+
+            if (FeatureFlags.PRIVACY_REPORT_ENABLED) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onNavigateToPrivacyReport)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Отчёт конфиденциальности", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Какие данные хранятся и куда уходят запросы",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                    TextButton(onClick = onNavigateToPrivacyReport) { Text("Открыть") }
+                }
             }
 
             Text("СЕТЬ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp))

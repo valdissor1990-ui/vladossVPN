@@ -30,6 +30,7 @@ import com.vpnproxy.ui.durability.DurabilityScreen
 import com.vpnproxy.ui.doctor.DoctorScreen
 import com.vpnproxy.ui.home.HomeScreen
 import com.vpnproxy.ui.home.HomeViewModel
+import com.vpnproxy.ui.privacy.PrivacyReportScreen
 import com.vpnproxy.ui.servers.ServersListScreen
 import com.vpnproxy.ui.services.ServicesScreen
 import com.vpnproxy.ui.settings.SettingsScreen
@@ -199,7 +200,12 @@ private fun VPNProxyNavHost(
         composable(Route.Settings.path) {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToDurability = { navController.navigate(Route.Durability.path) }
+                onNavigateToDurability = { navController.navigate(Route.Durability.path) },
+                onNavigateToPrivacyReport = {
+                    if (FeatureFlags.PRIVACY_REPORT_ENABLED) {
+                        navController.navigate(Route.PrivacyReport.path)
+                    }
+                }
             )
         }
 
@@ -209,6 +215,12 @@ private fun VPNProxyNavHost(
 
         composable(Route.Debug.path) {
             DebugScreen(onBack = { navController.popBackStack() })
+        }
+
+        if (FeatureFlags.PRIVACY_REPORT_ENABLED) {
+            composable(Route.PrivacyReport.path) {
+                PrivacyReportScreen(onBack = { navController.popBackStack() })
+            }
         }
 
         if (FeatureFlags.SERVICE_CHECK_ENABLED) {
@@ -231,6 +243,7 @@ sealed class Route(val path: String) {
     data object Servers : Route("servers")
     data object Settings : Route("settings")
     data object Debug : Route("debug")
+    data object PrivacyReport : Route("privacy-report")
     data object Services : Route("services")
     data object Doctor : Route("doctor")
     data object Durability : Route("durability")
