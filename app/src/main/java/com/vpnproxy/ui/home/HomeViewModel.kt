@@ -34,6 +34,7 @@ import com.vpnproxy.util.DebugFlags
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -68,7 +69,9 @@ class HomeViewModel @Inject constructor(
     companion object {
         private const val TAG = "HomeVM"
         private const val CONNECTING_UI_WATCHDOG_MS = 90_000L
-        private const val SERVER_SELECTION_TIMEOUT_MS = 80_000L
+        private const val SERVER_SELECTION_TIMEOUT_MS = 55_000L
+        private const val SUBSCRIPTION_REFRESH_TIMEOUT_MS = 15_000L
+        private const val CORE_STOP_TIMEOUT_MS = 15_000L
         // Stop the preflight scan after this many measured profiles. Checking every profile
         // in a 20+ list on a lossy mobile network exceeded the timeout and returned nothing.
         private const val PREFLIGHT_TARGET_SERVERS = 5
@@ -148,7 +151,9 @@ class HomeViewModel @Inject constructor(
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     /** Read and cancelled by the coordinator actor; visibility must cross threads. */
-    @Volatile private var selectionJob: Job? = null
+    private val selectionJobLock = Any()
+    private var selectionGeneration = 0L
+    private var selectionJob: Job? = null
     private var manualReconnectJob: Job? = null
     @Volatile private var lastConnectClickMs: Long = 0L
     private var vpnPermissionRequester: (() -> Unit)? = null
@@ -354,11 +359,14 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun cancelSelectionJob(reason: String) {
-        if (selectionJob?.isActive == true) {
-            logCollector.info(TAG, tmsg("Cancel selectionJob: $reason"))
-            selectionJob?.cancel()
+        val job = synchronized(selectionJobLock) {
+            selectionGeneration++
+            selectionJob.also { selectionJob = null }
         }
-        selectionJob = null
+        if (job?.isActive == true) {
+            logCollector.info(TAG, tmsg("Cancel selectionJob: $reason"))
+            job.cancel()
+        }
         _uiState.value = _uiState.value.copy(isBusy = false)
     }
 
@@ -786,8 +794,8 @@ class HomeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(connectionState = ConnectionUiState.CONNECTING, isBusy = true)
         // Keep a startup scan alive. scanForConnection waits for its mutex and reuses
         // results only when the exact profiles and current network bucket still match.
-        selectionJob?.cancel()
-        selectionJob = viewModelScope.launch(Dispatchers.IO) {
+        val selectionToken = synchronized(selectionJobLock) { selectionGeneration }
+        val nextSelectionJob = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
                 val selectionStartedAt = android.os.SystemClock.elapsedRealtime()
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -797,17 +805,24 @@ class HomeViewModel @Inject constructor(
                 var refreshedSubscription = false
                 if (hasNetwork) {
                     configs = try {
-                        subscriptionRepository.refreshAll()
-                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also { refreshed ->
-                            // Refresh subscription data first; fresh profile reachability probing
-                            // is mandatory below before the VPN service is started.
-                            refreshedSubscription = true
+                        val refreshResult = withTimeoutOrNull(SUBSCRIPTION_REFRESH_TIMEOUT_MS) {
+                            subscriptionRepository.refreshAll()
+                        }
+                        if (refreshResult == null) {
+                            logCollector.warn(TAG, tmsg("Subscription refresh timed out; continuing with the last cached profiles"))
+                            jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
+                        } else {
+                            jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getAllConfigs()).also {
+                                // Refresh subscription data first; fresh profile reachability probing
+                                // is mandatory below before the VPN service is started.
+                                refreshedSubscription = true
+                            }
                         }
                     } catch (c: CancellationException) {
                         throw c
                     } catch (e: Exception) {
-                        logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.message}"))
-                        emptyList()
+                        logCollector.warn(TAG, tmsg("Subscription refresh failed: ${e.javaClass.simpleName}"))
+                        jsonConfigRepository.allConfigsIncluding(subscriptionRepository.getCachedConfigs())
                     }
                 }
                 if (activeTraceId != traceId) return@launch
@@ -820,7 +835,7 @@ class HomeViewModel @Inject constructor(
                 // ConnectRequested intentionally does not start the VPN service. If a previous
                 // failed session is still tearing down, wait for the core and its port lease to
                 // become idle before starting temporary DeepProbe instances.
-                val coreStopped = withTimeoutOrNull(20_000L) {
+                val coreStopped = withTimeoutOrNull(CORE_STOP_TIMEOUT_MS) {
                     while (VpnProxyService.isRunning.value || VpnProxyService.isCoreTransitioning.value) {
                         delay(100L)
                     }
@@ -953,6 +968,16 @@ class HomeViewModel @Inject constructor(
                 failConnectIfCurrent(traceId, e.message ?: "Ошибка выбора сервера")
             }
         }
+        val accepted = synchronized(selectionJobLock) {
+            if (selectionGeneration != selectionToken) {
+                false
+            } else {
+                selectionJob?.cancel()
+                selectionJob = nextSelectionJob
+                true
+            }
+        }
+        if (accepted) nextSelectionJob.start() else nextSelectionJob.cancel()
     }
 
     fun onVpnPermissionDenied() {
