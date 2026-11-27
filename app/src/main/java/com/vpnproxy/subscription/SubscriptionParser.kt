@@ -616,7 +616,7 @@ class SubscriptionParser @Inject constructor(
                         val expected = countJsonCandidates(item)
                         val parsed = if (isClashProxy) {
                             runCatching { ClashProxyMapper.toParsedConfig(item.toPlainProxyMap(), providerTag) }
-                                .getOrNull()?.let(::listOf).orEmpty()
+                                .getOrNull()?.let { listOf(it) }.orEmpty()
                         } else {
                             extractAllFromJsonObject(item, providerTag)
                         }
