@@ -233,7 +233,7 @@ class DoctorViewModel @Inject constructor(
     private fun tryClaimRun(): DoctorUiState? {
         while (true) {
             val current = _state.value
-            if (current.isRunning) return null
+            if (current.isRunning || current.remedyBusy) return null
             val next = current.copy(
                 isRunning = true,
                 results = emptyList(),
