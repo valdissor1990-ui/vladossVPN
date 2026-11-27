@@ -612,7 +612,7 @@ class SubscriptionParser @Inject constructor(
             when (element) {
                 is JsonArray -> element.forEach { item ->
                     if (item is JsonObject) {
-                        val isClashProxy = item["port"] != null && item["server_port"] == null && item["protocol"] == null
+                        val isClashProxy = item["server"] != null && item["server_port"] == null && item["protocol"] == null
                         val expected = countJsonCandidates(item)
                         val parsed = if (isClashProxy) {
                             runCatching { ClashProxyMapper.toParsedConfig(item.toPlainProxyMap(), providerTag) }
