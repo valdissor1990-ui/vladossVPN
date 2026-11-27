@@ -420,7 +420,12 @@ private fun SubscriptionHeader(
         allMode -> "Все подписки"
         else -> hostOf(subscription.url).ifBlank { subscription.name }
     }
-    val updated = subscription?.lastUpdated?.takeIf { it > 0L }?.let { formatDateTime(it) } ?: "не обновлялась"
+    val lastCheckedAt = if (allMode) {
+        subscriptions.maxOfOrNull { it.lastUpdated }
+    } else {
+        subscription?.lastUpdated
+    }
+    val updated = lastCheckedAt?.takeIf { it > 0L }?.let { formatDateTime(it) } ?: "ещё не проверялась"
     Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box {
@@ -448,7 +453,7 @@ private fun SubscriptionHeader(
             }
             Column(Modifier.weight(1f).clickable { onMenuExpanded(true) }) {
                 Text(title, color = HappInk, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("$updated | Автообновление", color = HappMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Последняя проверка: $updated", color = HappMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = onTogglePin, enabled = subscription != null) {
                 Icon(
