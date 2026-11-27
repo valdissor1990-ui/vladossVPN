@@ -150,7 +150,7 @@ fun DoctorScreen(
 
             Button(
                 onClick = { viewModel.run(consent) },
-                enabled = !state.isRunning,
+                enabled = !state.isRunning && !state.remedyBusy,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (state.isRunning) {
