@@ -111,4 +111,46 @@ class ClashSubscriptionImportTest {
         assertEquals("cdn.example.com", byName.getValue("vless-ws").host)
         assertTrue(byName.getValue("vmess-grpc").mode == "grpc")
     }
+    @Test
+    fun importsJsonClashProxyArrayAndReportsRejectedEntries() {
+        val jsonClash = """
+            {
+              "proxies": [
+                {
+                  "name": "json-vless",
+                  "type": "vless",
+                  "server": "vless.example.com",
+                  "port": 443,
+                  "uuid": "11111111-1111-4111-8111-111111111111",
+                  "network": "ws",
+                  "tls": true
+                },
+                {
+                  "name": "json-vmess",
+                  "type": "vmess",
+                  "server": "vmess.example.com",
+                  "port": 8443,
+                  "uuid": "22222222-2222-4222-8222-222222222222",
+                  "cipher": "auto"
+                },
+                {
+                  "name": "unsupported",
+                  "type": "wireguard",
+                  "server": "wg.example.com",
+                  "port": 51820
+                }
+              ],
+              "proxy-groups": []
+            }
+        """.trimIndent()
+
+        val outcome = parser.parseWithReport(jsonClash, providerTag = "json-clash")
+
+        assertEquals("json", outcome.report.detectedFormat)
+        assertEquals(3, outcome.report.candidateCount)
+        assertEquals(2, outcome.report.acceptedCount)
+        assertEquals(1, outcome.report.rejectedCount)
+        assertEquals(1, outcome.report.rejectionReasons["unsupported_protocol"])
+        assertEquals(setOf("json-vless", "json-vmess"), outcome.configs.map { it.name }.toSet())
+    }
 }
