@@ -4,8 +4,8 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIBS_DIR="$PROJECT_DIR/app/libs"
-LIBBOX_VERSION="1.14.4-lx.35"
-LIBBOX_SHA256="e5cfd79364316150acd5c9ddbb5d6d8c749f1ce4a590f9a3eaa408f949b8fd7b"
+LIBBOX_VERSION="1.14.4-lx.37"
+LIBBOX_SHA256="bf4d0a8f60201315c5bd8b6835c66d895cf5a4c932d5d6853f84aa919b5aa687"
 LIBBOX_URL="https://github.com/Leadaxe/sing-box-lx/releases/download/v${LIBBOX_VERSION}/libbox-${LIBBOX_VERSION}.aar"
 LIBBOX_AAR="$LIBS_DIR/libbox.aar"
 

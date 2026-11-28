@@ -35,12 +35,12 @@ val autoVersionName = requestedVersionName ?: "$baseMajor.$baseMinor.$runNumber"
 
 android {
     namespace = "com.vpnproxy"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.vpnproxy"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = autoVersionCode
         versionName = autoVersionName
         buildConfigField("String", "GIT_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: "local"}\"")
@@ -136,11 +136,11 @@ android {
     }
     buildFeatures { compose = true; buildConfig = true }
 
-    // ★ ABI splits — уменьшает APK с 60+ MB до ~25 MB на arm64
-    // ABI-сплиты нельзя включать в том Gradle-вызове, который собирает App Bundle:
-    // AGP с R8 (shrinkResources) падает на «Multiple shrunk-resources files found»,
-    // если рядом со бандлом собираются split-APK (issuetracker.google.com/402800800).
-    // AAB и так делится по ABI на стороне Google Play, поэтому сплиты нужны только для APK.
+    // в… ABI splits вЂ” СѓРјРµРЅСЊС€Р°РµС‚ APK СЃ 60+ MB РґРѕ ~25 MB РЅР° arm64
+    // ABI-СЃРїР»РёС‚С‹ РЅРµР»СЊР·СЏ РІРєР»СЋС‡Р°С‚СЊ РІ С‚РѕРј Gradle-РІС‹Р·РѕРІРµ, РєРѕС‚РѕСЂС‹Р№ СЃРѕР±РёСЂР°РµС‚ App Bundle:
+    // AGP СЃ R8 (shrinkResources) РїР°РґР°РµС‚ РЅР° В«Multiple shrunk-resources files foundВ»,
+    // РµСЃР»Рё СЂСЏРґРѕРј СЃРѕ Р±Р°РЅРґР»РѕРј СЃРѕР±РёСЂР°СЋС‚СЃСЏ split-APK (issuetracker.google.com/402800800).
+    // AAB Рё С‚Р°Рє РґРµР»РёС‚СЃСЏ РїРѕ ABI РЅР° СЃС‚РѕСЂРѕРЅРµ Google Play, РїРѕСЌС‚РѕРјСѓ СЃРїР»РёС‚С‹ РЅСѓР¶РЅС‹ С‚РѕР»СЊРєРѕ РґР»СЏ APK.
     val buildingAppBundle = gradle.startParameter.taskNames.any {
         it.substringAfterLast(':').lowercase().startsWith("bundle")
     }
@@ -149,11 +149,11 @@ android {
             isEnable = !buildingAppBundle
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
-            isUniversalApk = true   // плюс универсальный APK для GitHub Releases
+            isUniversalApk = true   // РїР»СЋСЃ СѓРЅРёРІРµСЂСЃР°Р»СЊРЅС‹Р№ APK РґР»СЏ GitHub Releases
         }
     }
 
-    // ★ Упаковка: pickFirsts решает конфликты нативных .so
+    // в… РЈРїР°РєРѕРІРєР°: pickFirsts СЂРµС€Р°РµС‚ РєРѕРЅС„Р»РёРєС‚С‹ РЅР°С‚РёРІРЅС‹С… .so
     packaging {
         resources {
             excludes += setOf(
@@ -211,7 +211,7 @@ tasks.named("preBuild") {
 }
 
 dependencies {
-    // Full sing-box-lx 1.14.4-lx.35 AAR with XHTTP and Go bridge classes.
+    // Full sing-box-lx 1.14.4-lx.37 AAR with XHTTP and Go bridge classes.
     implementation(files("libs/libbox.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
@@ -221,7 +221,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.9.8")
-    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("com.google.dagger:hilt-android:2.58")
@@ -234,7 +234,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.5")
     implementation("androidx.datastore:datastore-preferences:1.3.0")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
-    implementation("com.squareup.okhttp3:okhttp:5.3.2")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("com.jakewharton.timber:timber:5.0.1")
@@ -243,8 +243,8 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
-    testImplementation("org.json:json:20260719")
-    implementation("androidx.core:core-ktx:1.16.0")
+    testImplementation("org.json:json:20260814")
+    implementation("androidx.core:core-ktx:1.18.0")
     // QR generation / decoding for subscription import and share. Pure Java, no Android deps,
     // so encode and decode round-trips are unit tested on the JVM.
     implementation("com.google.zxing:core:3.5.4")

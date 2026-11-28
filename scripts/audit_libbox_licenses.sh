@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORE_VERSION="1.14.4-lx.35"
+CORE_VERSION="1.14.4-lx.37"
 CRONET_GO_COMMIT="095cb9e060468c80ca31d977c020dca82d101a8f"
 CRONET_LIB_COMMIT="3aac4ed44c5cf0af74a6051a7335c49dffd91c37"
 NAIVEPROXY_COMMIT="7c64cae24cd7bae18d9c603fdddc73b623c04462"
