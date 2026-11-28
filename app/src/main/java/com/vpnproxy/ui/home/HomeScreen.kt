@@ -98,6 +98,7 @@ fun HomeScreen(
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val servers by viewModel.profileServers.collectAsStateWithLifecycle()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    val checkingConnection by viewModel.isCheckingConnection.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
@@ -204,13 +205,13 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Проверить текущее\nподключение",
+                    text = if (checkingConnection) "Проверяем\nподключение…" else "Проверить текущее\nподключение",
                     color = HappMuted,
                     fontSize = 14.sp,
                     lineHeight = 18.sp,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { viewModel.checkCurrentConnection() }
+                        .clickable(enabled = !checkingConnection) { viewModel.checkCurrentConnection() }
                         .padding(vertical = 6.dp)
                 )
                 Text(

@@ -212,7 +212,29 @@ class VpnProxyService : VpnService() {
                     is ConnectionState.Reconnecting -> {
                         cancelIdleStop()
                         promoteToForeground(getString(R.string.state_connecting))
-                        connectionCoordinator.currentSelectedServer()?.let { autoSwitcher.forceSelect(it) }
+                        val desired = connectionCoordinator.currentSelectedServer()
+                        if (desired != null && !autoSwitcher.forceSelect(desired)) {
+                            if (autoSwitcher.isSwitching()) {
+                                // A concurrent auto-switch owns the selection; the next
+                                // state callback will carry the winner. Not an error.
+                                logCollector.debug(TAG, "forceSelect deferred — auto-switch in flight")
+                            } else if (autoSwitcher.isBlacklisted(desired.config)) {
+                                // Entering Connecting/Reconnecting is a deliberate request, not
+                                // an automatic retry: honour it once by clearing the stale
+                                // blacklist entry instead of restarting the core with a profile
+                                // that forceSelect would keep rejecting (the reconnect loop).
+                                logCollector.warn(
+                                    TAG,
+                                    "Clearing blacklist for explicit reconnect: ${desired.config.name}"
+                                )
+                                autoSwitcher.clearServerBlacklist(desired.config, "explicit reconnect")
+                                autoSwitcher.forceSelect(desired)
+                            } else {
+                                // Diagnostic freeze: keep the selection untouched and restart
+                                // as before; the freeze only suppresses background switching.
+                                logCollector.debug(TAG, "forceSelect suppressed by diagnostic freeze")
+                            }
+                        }
                         restartVpnForDesiredState(state)
                     }
                     is ConnectionState.Verifying -> {
@@ -408,7 +430,17 @@ class VpnProxyService : VpnService() {
                     // Re-apply the coordinator's latest selection immediately before each
                     // stop/start cycle so an older state callback cannot launch a stale profile.
                     connectionCoordinator.currentSelectedServer()?.let { desired ->
-                        autoSwitcher.forceSelect(desired)
+                        val accepted = autoSwitcher.forceSelect(desired)
+                        if (!accepted && autoSwitcher.isBlacklisted(desired.config)) {
+                            // Automatic restart with a profile the switcher has already marked
+                            // dead would fail again and re-enter Connecting — the reconnect
+                            // loop. Let the coordinator's failover pick the next endpoint.
+                            logCollector.warn(
+                                TAG,
+                                "restartVpn aborted: selected server is blacklisted: ${desired.config.name}"
+                            )
+                            return@launch
+                        }
                         logCollector.info(TAG, "restartVpn synchronized desired server=${desired.config.name} generation=$generation")
                     }
                     logCollector.info(TAG, "restartVpn worker begin generation=$generation inFlight=true")
@@ -420,7 +452,7 @@ class VpnProxyService : VpnService() {
                                 stopVpnInternal("soft restart generation=$generation for $state", softRestart = true)
                             },
                             startSession = { startVpnSession() },
-                            restartDelayMs = 3_000L
+                            restartDelayMs = 1_000L
                         )
                     } finally {
                         setPlannedRestart(false)

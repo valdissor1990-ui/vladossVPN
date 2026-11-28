@@ -40,7 +40,7 @@ class LogCollector @Inject constructor() {
     companion object {
         private const val TAG = "LogCollector"
         private const val MAX_ENTRIES = 10_000
-        private const val MAX_FILE_BYTES = 16L * 1024L * 1024L
+        private const val MAX_FILE_BYTES = 4L * 1024L * 1024L
         private const val PUBLISH_INTERVAL_MS = 250L
         private const val FLUSH_INTERVAL_MS = 750L
         /** Bound buffered-but-unwritten text during a log flood; excess lines are dropped. */

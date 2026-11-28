@@ -61,6 +61,9 @@ class DebugViewModel @Inject constructor(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    private val _lastExportUri = MutableStateFlow<android.net.Uri?>(null)
+    val lastExportUri: StateFlow<android.net.Uri?> = _lastExportUri.asStateFlow()
+
     private val _lastCrash = MutableStateFlow<String?>(null)
     val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
 
@@ -226,12 +229,29 @@ class DebugViewModel @Inject constructor(
     fun export() {
         viewModelScope.launch {
             val uri = logExporter.exportToDownloads()
+            _lastExportUri.value = uri
             _message.value = if (uri != null) {
-                "Журнал сохранён в Downloads/"
+                "Журнал сохранён в Downloads/${uri.lastPathSegment ?: "vpnproxy_debug.log.txt"}"
             } else {
                 "Не удалось сохранить журнал"
             }
             refreshJournalInfo()
+        }
+    }
+
+    fun shareLastExport() {
+        val uri = _lastExportUri.value ?: run {
+            _message.value = "Сначала сохраните журнал"
+            return
+        }
+        runCatching {
+            val chooser = android.content.Intent.createChooser(
+                logExporter.buildShareIntent(uri),
+                "Поделиться журналом"
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        }.onFailure {
+            _message.value = "Не удалось поделиться: ${it.javaClass.simpleName}"
         }
     }
 

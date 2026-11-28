@@ -38,6 +38,7 @@ fun DebugScreen(
     val durabilityOptions by viewModel.durabilityOptions.collectAsStateWithLifecycle()
     val libboxTail by viewModel.libboxTail.collectAsStateWithLifecycle()
     val probeResult by viewModel.probeResult.collectAsStateWithLifecycle()
+    val lastExportUri by viewModel.lastExportUri.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val journalInfo by viewModel.journalInfo.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
@@ -65,6 +66,11 @@ fun DebugScreen(
                     }
                 },
                 actions = {
+                    if (lastExportUri != null) {
+                        IconButton(onClick = { viewModel.shareLastExport() }) {
+                            Icon(Icons.Default.Share, "Поделиться журналом")
+                        }
+                    }
                     IconButton(onClick = { viewModel.copyAll() }) {
                         Icon(Icons.Default.ContentCopy, "Копировать всё")
                     }
