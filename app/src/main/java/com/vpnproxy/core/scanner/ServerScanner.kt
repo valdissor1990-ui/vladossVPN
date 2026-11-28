@@ -3,6 +3,7 @@ package com.vpnproxy.core.scanner
 import android.content.Context
 import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionState
+import com.vpnproxy.core.ping.TcpConnectOutcome
 import com.vpnproxy.service.VpnProxyService
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.smartconnect.DeepProbeEngine
@@ -158,7 +159,13 @@ class ServerScanner @Inject constructor(
                 }
                 val responsive = results.count { it.successRate > 0.5f }
                 val ruResponsive = results.count { it.successRate > 0.5f && isRussianServer(it.config) }
-                logCollector.info(TAG, "Profile scan complete: ${unique.size} profiles retained; VPN-profile probe succeeded for $responsive, RU=$ruResponsive (input=${configs.size})")
+                val refusedFast = results.count { it.tcpOutcome == TcpConnectOutcome.REFUSED }
+                val timedOut = results.count { it.tcpOutcome == TcpConnectOutcome.TIMEOUT }
+                logCollector.info(
+                    TAG,
+                    "Profile scan complete: ${unique.size} profiles retained; VPN-profile probe succeeded for $responsive, RU=$ruResponsive; " +
+                        "direct TCP refused=$refusedFast timeout=$timedOut on ${scannedNetworkSnapshot?.bucket ?: "unknown"} (input=${configs.size})"
+                )
                 results
             } finally {
                 activeScanJob = null
@@ -442,7 +449,9 @@ class ServerScanner @Inject constructor(
                     speedMbps = 0f,
                     successRate = scanCache().getFloat("server_${key}_success", 0f),
                     score = 0f,
-                    tcpHintMs = scanCache().getLong("server_${key}_tcp", -1L).takeIf { it > 0L }
+                    tcpHintMs = scanCache().getLong("server_${key}_tcp", -1L).takeIf { it > 0L },
+                    tcpOutcome = scanCache().getString("server_${key}_tcp_outcome", null)
+                        ?.let { name -> runCatching { TcpConnectOutcome.valueOf(name) }.getOrNull() }
                 )
             }
         }
@@ -473,6 +482,7 @@ class ServerScanner @Inject constructor(
                 .putFloat("server_${key}_success", server.successRate)
                 .putFloat("server_${key}_score", server.score)
                 .putLong("server_${key}_tcp", server.tcpHintMs ?: -1L)
+                .putString("server_${key}_tcp_outcome", server.tcpOutcome?.name)
         }
         editor.putLong("saved_at", System.currentTimeMillis()).apply()
     }
@@ -486,7 +496,8 @@ class ServerScanner @Inject constructor(
             successRate = if (ping.success) 1f else 0f,
             score = if (ping.success) (1.0 / (1.0 + latency / 1000.0)).toFloat() else 0f,
             evidence = ping.evidence,
-            tcpHintMs = ping.tcpHintMs
+            tcpHintMs = ping.tcpHintMs,
+            tcpOutcome = ping.tcpOutcome
         )
     }
 

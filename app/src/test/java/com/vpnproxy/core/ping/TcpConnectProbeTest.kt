@@ -91,4 +91,61 @@ class TcpConnectProbeTest {
         // The interrupted flag is restored for the caller; clear it so the test thread stays usable.
         Thread.interrupted()
     }
+
+    @Test
+    fun probeClassifiesFastRefusalAsBlockedPort() {
+        val result = TcpConnectProbe.probe(
+            host = "blocked.example.org",
+            port = 443,
+            attempts = 2,
+            connector = { _, _, _ -> throw java.net.ConnectException("Connection refused") }
+        )
+
+        assertEquals(TcpConnectOutcome.REFUSED, result.outcome)
+        assertNull("a refusal has no handshake latency", result.latencyMs)
+    }
+
+    @Test
+    fun probeClassifiesSilentEndpointAsTimeout() {
+        val result = TcpConnectProbe.probe(
+            host = "silent.example.org",
+            port = 443,
+            attempts = 2,
+            connector = { _, _, _ -> throw java.net.SocketTimeoutException("timeout") }
+        )
+
+        assertEquals(TcpConnectOutcome.TIMEOUT, result.outcome)
+    }
+
+    @Test
+    fun probeClassifiesUnroutableHost() {
+        val result = TcpConnectProbe.probe(
+            host = "no-route.example.org",
+            port = 443,
+            attempts = 1,
+            connector = { _, _, _ -> throw java.net.ConnectException("Network is unreachable") }
+        )
+
+        assertEquals(TcpConnectOutcome.UNREACHABLE, result.outcome)
+    }
+
+    @Test
+    fun probeReportsSuccessWithTheFastestSample() {
+        val samples = ArrayDeque(listOf(90L, 42L))
+        val result = TcpConnectProbe.probe(
+            host = "proxy.example.org",
+            port = 443,
+            attempts = 2,
+            connector = { _, _, _ -> samples.removeFirst() }
+        )
+
+        assertEquals(TcpConnectOutcome.CONNECTED, result.outcome)
+        assertEquals(42L, result.latencyMs)
+    }
+
+    @Test
+    fun probeRejectsInvalidEndpoint() {
+        val result = TcpConnectProbe.probe(host = "", port = 443)
+        assertEquals(TcpConnectOutcome.ERROR, result.outcome)
+    }
 }

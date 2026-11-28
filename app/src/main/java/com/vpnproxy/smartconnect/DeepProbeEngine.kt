@@ -1,6 +1,7 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
+import com.vpnproxy.core.ping.TcpConnectOutcome
 import com.vpnproxy.core.ping.TcpConnectProbe
 import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.core.singbox.CorePortLease
@@ -186,7 +187,12 @@ class DeepProbeEngine @Inject constructor(
          * Direct TCP handshake time to the endpoint, measured only when the proxied probe failed.
          * Used as a sorting/labelling hint; never treated as a working proxy.
          */
-        val tcpHintMs: Long? = null
+        val tcpHintMs: Long? = null,
+        /**
+         * Why the direct handshake failed: a fast reset usually means the carrier or a firewall
+         * drops this endpoint, a timeout means the host is silent. Null when not probed.
+         */
+        val tcpOutcome: TcpConnectOutcome? = null
     )
 
     /**
@@ -275,17 +281,21 @@ class DeepProbeEngine @Inject constructor(
                                     // A failed proxied probe still gets a TCP hint, so the list can
                                     // distinguish "endpoint answers but the proxy path is broken"
                                     // from "endpoint is unreachable".
-                                    val withHint = if (result.success) result else result.copy(
-                                        tcpHintMs = runInterruptible(Dispatchers.IO) {
-                                            TcpConnectProbe.measure(
+                                    val withHint = if (result.success) result else {
+                                        val hint = runInterruptible(Dispatchers.IO) {
+                                            TcpConnectProbe.probe(
                                                 configs[index].address,
                                                 configs[index].port
                                             )
                                         }
-                                    )
+                                        result.copy(
+                                            tcpHintMs = hint.latencyMs,
+                                            tcpOutcome = hint.outcome
+                                        )
+                                    }
                                     logCollector.info(
                                         TAG,
-                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${withHint.success} successfulSamples=${withHint.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${withHint.latencyMs} tcpHintMs=${withHint.tcpHintMs ?: "none"}"
+                                        "Profile probe result: generation=$probeGeneration profile=${configs[index].name} protocol=${configs[index].transport} security=${configs[index].security} success=${withHint.success} successfulSamples=${withHint.successfulSamples}/$PROFILE_PING_ATTEMPTS medianRttMs=${withHint.latencyMs} tcpHintMs=${withHint.tcpHintMs ?: "none"} tcpOutcome=${withHint.tcpOutcome ?: "none"}"
                                     )
                                     withHint
                                 }

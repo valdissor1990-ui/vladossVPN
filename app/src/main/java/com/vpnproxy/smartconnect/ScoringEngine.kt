@@ -1,6 +1,7 @@
 package com.vpnproxy.smartconnect
 
 import android.content.Context
+import com.vpnproxy.core.ping.TcpConnectOutcome
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.vpnproxy.smartconnect.HealthChecker.LatencyResult
 import com.vpnproxy.smartconnect.HealthChecker.SpeedResult
@@ -26,7 +27,9 @@ class ScoringEngine @Inject constructor(
         val score: Float,
         val evidence: ProbeMeasurementEvidence? = null,
         /** Direct TCP handshake hint for a profile whose proxied probe failed. */
-        val tcpHintMs: Long? = null
+        val tcpHintMs: Long? = null,
+        /** Why the direct handshake failed (fast reset vs timeout); null when not probed. */
+        val tcpOutcome: TcpConnectOutcome? = null
     ) : Comparable<ScoredServer> {
         override fun compareTo(other: ScoredServer): Int = other.score.compareTo(this.score)
     }

@@ -63,6 +63,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vpnproxy.core.ping.LatencyBreakdown
+import com.vpnproxy.core.ping.TcpConnectOutcome
 import com.vpnproxy.core.ping.LatencyCalculator
 import com.vpnproxy.core.ping.PingRegion
 import com.vpnproxy.core.ping.PingService
@@ -91,7 +92,8 @@ class ServersListViewModel @Inject constructor(
     private val repository: SubscriptionRepository,
     private val serverScanner: ServerScanner,
     private val pingService: PingService,
-    private val deepProbeEngine: DeepProbeEngine
+    private val deepProbeEngine: DeepProbeEngine,
+    private val autoSwitcher: com.vpnproxy.smartconnect.AutoSwitcher
 ) : ViewModel() {
 
     val isScanningServers: StateFlow<Boolean> = serverScanner.isScanning
@@ -103,6 +105,14 @@ class ServersListViewModel @Inject constructor(
 
     private val _servers = MutableStateFlow<List<ScoredServer>>(emptyList())
     val servers: StateFlow<List<ScoredServer>> = _servers.asStateFlow()
+
+    /** Human-readable physical network the scan results belong to. */
+    fun currentNetworkLabel(): String = when (autoSwitcher.currentNetworkBucket()) {
+        "wifi" -> "Wi-Fi"
+        "cellular" -> "Мобильная сеть"
+        "other" -> "Проводная сеть"
+        else -> "сеть не определена"
+    }
 
     private val _breakdown = MutableStateFlow<LatencyBreakdown?>(null)
     val breakdown: StateFlow<LatencyBreakdown?> = _breakdown.asStateFlow()
@@ -295,10 +305,19 @@ fun ServerListContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "Пинг проверяется через VPN-профиль. Без ответа — н/д.",
+                    "Пинг проверяется через VPN-профиль. «Отказ» — порт закрыт или заблокирован, «таймаут» — сервер не отвечает.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (!scanningServers && servers.isNotEmpty()) {
+                    val reachable = servers.count { it.latencyMs != Long.MAX_VALUE }
+                    val networkLabel = remember(servers) { viewModel.currentNetworkLabel() }
+                    Text(
+                        "Сеть: $networkLabel · доступно через VPN: $reachable из ${servers.size}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             if (scanningServers || deepProbeRunning) {
                 CircularProgressIndicator(
@@ -407,10 +426,11 @@ fun ServerListContent(
                     key = { viewModel.configKey(it.config) }
                 ) { scoredServer ->
                     // Real proxied latency wins. When only the direct TCP handshake answered,
-                    // label it as a hint instead of pretending the profile works.
+                    // label it as a hint instead of pretending the profile works. A failed
+                    // handshake says *why* it failed: fast reset vs silent timeout.
                     val scoreLabel = scoredServer.latencyMs.takeIf { it != Long.MAX_VALUE }?.toString()
                         ?: scoredServer.tcpHintMs?.let { "TCP ~$it" }
-                        ?: "н/д"
+                        ?: failureLabel(scoredServer.tcpOutcome)
                     val scoreValue = scoreLabel.toDoubleOrNull()
                     val scoreColor = scoreValue?.let { compositeScoreColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant
                     GlassServerCard(
@@ -455,6 +475,35 @@ fun ServerListContent(
                             ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         fontFamily = FontFamily.Monospace
                     )
+                }
+                if (server.latencyMs == Long.MAX_VALUE) {
+                    val (directLabel, directColor) = when (server.tcpOutcome) {
+                        TcpConnectOutcome.REFUSED ->
+                            "Отказ TCP: порт закрыт или заблокирован" to Color(0xFFE53935)
+                        TcpConnectOutcome.TIMEOUT ->
+                            "Таймаут TCP: сервер не отвечает" to Color(0xFFF9A825)
+                        TcpConnectOutcome.UNREACHABLE ->
+                            "Хост недоступен из этой сети" to Color(0xFFE53935)
+                        TcpConnectOutcome.CONNECTED ->
+                            "TCP отвечает, но прокси-путь не работает" to Color(0xFFF9A825)
+                        TcpConnectOutcome.ERROR, null ->
+                            "Прямая TCP-проверка недоступна" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Прямая проверка", style = MaterialTheme.typography.bodyMedium)
+                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                        Text(
+                            text = directLabel,
+                            color = directColor,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
@@ -571,12 +620,28 @@ private fun GlassServerCard(
         }
         Spacer(Modifier.width(6.dp))
         Text(
-            text = if (scoreLabel == "н/д" || scoreLabel == "—") "н/д" else "$scoreLabel мс",
+            text = when {
+                scoreLabel == "н/д" || scoreLabel == "—" -> "н/д"
+                scoreLabel.toDoubleOrNull() != null -> "$scoreLabel мс"
+                else -> scoreLabel
+            },
             color = scoreColor,
             fontSize = 11.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
         )
     }
+}
+
+/**
+ * Short, honest label for a profile that did not answer. "Отказ" is a fast reset (closed port
+ * or a carrier/firewall block), "таймаут" is silence, "нет сети" means the host cannot be routed.
+ */
+private fun failureLabel(outcome: TcpConnectOutcome?): String = when (outcome) {
+    TcpConnectOutcome.REFUSED -> "отказ"
+    TcpConnectOutcome.TIMEOUT -> "таймаут"
+    TcpConnectOutcome.UNREACHABLE -> "нет сети"
+    TcpConnectOutcome.CONNECTED -> "н/д"
+    TcpConnectOutcome.ERROR, null -> "н/д"
 }
 private fun compositeScoreColor(score: Double): Color = when {
     score < 100.0 -> Color(0xFF43A047)
