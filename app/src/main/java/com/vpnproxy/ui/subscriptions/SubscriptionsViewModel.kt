@@ -110,11 +110,20 @@ class SubscriptionsViewModel @Inject constructor(
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
+                if (repository.subscriptions.value.isEmpty()) {
+                    _message.value = "Подписки не добавлены. Нажмите «Добавить», чтобы ввести URL."
+                    return@launch
+                }
                 repository.refreshAll()
                 val merged = jsonConfigRepository.allConfigsIncluding(repository.getAllConfigs())
                 val scanResults = serverScanner.scanAfterSubscriptionUpdate(merged)
                 val tcpResponsiveCount = scanResults.count { it.successRate > 0.5f }
-                _message.value = "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
+                _message.value = when {
+                    scanResults.isEmpty() ->
+                        "Не удалось получить серверы. Проверьте сеть или повторите позже — подписка сохранена."
+                    else ->
+                        "Профилей: ${scanResults.size}; TCP-порт ответил у $tcpResponsiveCount. Это не подтверждает работу VPN."
+                }
                 logCollector.info(
                     "SubscriptionsVM",
                     "Refreshed and scanned: tcpResponsive=$tcpResponsiveCount; scannedUnique=${scanResults.size}"

@@ -144,6 +144,8 @@ class HomeViewModel @Inject constructor(
     val googleRtt: StateFlow<Long?> = _googleRtt.asStateFlow()
     private val _latencyBreakdown = MutableStateFlow<LatencyBreakdown?>(null)
     val latencyBreakdown: StateFlow<LatencyBreakdown?> = _latencyBreakdown.asStateFlow()
+    private val _isCheckingConnection = MutableStateFlow(false)
+    val isCheckingConnection: StateFlow<Boolean> = _isCheckingConnection.asStateFlow()
 
     private var pingJob: Job? = null
     private var connectingWatchdogJob: Job? = null
@@ -1151,12 +1153,14 @@ class HomeViewModel @Inject constructor(
     }
 
     fun checkCurrentConnection() {
+        if (_isCheckingConnection.value) return
         viewModelScope.launch {
             val state = _uiState.value.connectionState
             if (!state.hasTunnel()) {
                 _uiState.value = _uiState.value.copy(notice = "Нет активного подключения")
                 return@launch
             }
+            _isCheckingConnection.value = true
             _uiState.value = _uiState.value.copy(notice = "Проверяем текущее подключение…")
             try {
                 val breakdown = withContext(Dispatchers.IO) {
@@ -1175,6 +1179,8 @@ class HomeViewModel @Inject constructor(
                 throw c
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(notice = e.message ?: "Не удалось проверить подключение")
+            } finally {
+                _isCheckingConnection.value = false
             }
         }
     }

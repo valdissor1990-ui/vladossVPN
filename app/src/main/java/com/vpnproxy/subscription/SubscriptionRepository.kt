@@ -10,6 +10,7 @@ import com.vpnproxy.core.connection.ConnectionCoordinator
 import com.vpnproxy.core.connection.ConnectionEvent
 import com.vpnproxy.core.connection.ConnectionState
 import com.vpnproxy.core.connection.VpnFailureReason
+import com.vpnproxy.core.singbox.SingboxConfigBuilder
 import com.vpnproxy.logging.LogCollector
 import com.vpnproxy.subscription.SubscriptionParser.ParsedConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,6 +33,8 @@ import java.io.File
 import java.security.MessageDigest
 import java.io.IOException
 import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URI
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeoutException
@@ -54,6 +57,11 @@ class SubscriptionRepository @Inject constructor(
         private const val PROVIDER_SHRINK_GUARD_MIN_PROFILES = 5
         private const val PREFS_NAME = "vpnproxy_subscriptions"
         private const val KEY_SUBS = "subscriptions_json"
+        // Plain (non-encrypted) last-known-good copy of the subscription list. It exists
+        // solely to survive an EncryptedSharedPreferences/Keystore failure or a lost
+        // asynchronous write; it never stores subscription bodies or credentials.
+        private const val PREFS_BACKUP_NAME = "vpnproxy_subscriptions_backup"
+        private const val KEY_SUBS_BACKUP = "subscriptions_json_backup"
         private const val KEY_DEVICE_METADATA_CONSENT = "device_metadata_consent_v1"
         private const val CACHE_FILE = "cached_configs.json"
         private const val KEY_CONFIG_CACHE = "cached_configs_json"
@@ -114,6 +122,19 @@ class SubscriptionRepository @Inject constructor(
             )
         }.onFailure {
             logCollector.error(TAG, "Encrypted preferences unavailable; persistence disabled", it)
+        }.getOrNull()
+    }
+
+    /**
+     * Last-known-good subscription list kept in plain SharedPreferences. Subscription URLs
+     * are not secrets we must protect at rest (the user typed them, and they already live in
+     * the encrypted store); losing the whole source list is the far worse failure mode.
+     */
+    private val backupPrefs: SharedPreferences? by lazy {
+        runCatching {
+            context.getSharedPreferences(PREFS_BACKUP_NAME, Context.MODE_PRIVATE)
+        }.onFailure {
+            logCollector.warn(TAG, "Subscription backup preferences unavailable: ${it.javaClass.simpleName}")
         }.getOrNull()
     }
 
@@ -207,20 +228,49 @@ private val _deviceMetadataConsent = MutableStateFlow(
     }
 
     private fun loadFromPrefs() {
-        try {
-            val stored = encryptedPrefs?.getString(KEY_SUBS, null) ?: return
-            val list = json.decodeFromString(listSerializer, stored)
-            _subscriptions.value = list
-            logCollector.info(TAG, "Loaded ${list.size} subscriptions from prefs")
-        } catch (e: Exception) {
-            logCollector.error(TAG, "Failed to load subscriptions", e)
+        val decoded = runCatching {
+            encryptedPrefs?.getString(KEY_SUBS, null)
+                ?.let { json.decodeFromString(listSerializer, it) }
+        }.onFailure {
+            logCollector.error(TAG, "Failed to load subscriptions", it)
+        }.getOrNull()
+
+        if (!decoded.isNullOrEmpty()) {
+            _subscriptions.value = decoded
+            logCollector.info(TAG, "Loaded ${decoded.size} subscriptions from prefs")
+            return
+        }
+
+        // Primary store is empty or unreadable. A previous write may have been lost
+        // (process kill before apply(), Keystore reset) — recover the last known-good list
+        // instead of silently presenting an empty subscription screen.
+        val restored = runCatching {
+            backupPrefs?.getString(KEY_SUBS_BACKUP, null)
+                ?.let { json.decodeFromString(listSerializer, it) }
+        }.onFailure {
+            logCollector.warn(TAG, "Failed to load subscription backup: ${it.javaClass.simpleName}")
+        }.getOrNull()
+
+        if (!restored.isNullOrEmpty()) {
+            _subscriptions.value = restored
+            logCollector.warn(TAG, "Restored ${restored.size} subscriptions from backup store")
+            saveToPrefs()
+        } else {
+            _subscriptions.value = decoded.orEmpty()
+            if (decoded != null) logCollector.info(TAG, "Loaded 0 subscriptions from prefs")
         }
     }
 
     private fun saveToPrefs() {
+        val snapshot = _subscriptions.value
         try {
-            val jsonStr = json.encodeToString(listSerializer, _subscriptions.value)
-            encryptedPrefs?.edit()?.putString(KEY_SUBS, jsonStr)?.apply()
+            val jsonStr = json.encodeToString(listSerializer, snapshot)
+            // commit() (not apply()) so a process kill right after a refresh cannot lose
+            // the list; this is a small payload and runs on the IO dispatcher.
+            encryptedPrefs?.edit()?.putString(KEY_SUBS, jsonStr)?.commit()
+            if (snapshot.isNotEmpty()) {
+                backupPrefs?.edit()?.putString(KEY_SUBS_BACKUP, jsonStr)?.commit()
+            }
         } catch (e: Exception) {
             logCollector.error(TAG, "Failed to save subscriptions", e)
         }
@@ -267,6 +317,9 @@ private val _deviceMetadataConsent = MutableStateFlow(
         retiredUrlsToPurge.forEach(::removeSubscriptionBodyCache)
         if (retained != current) {
             _subscriptions.value = retained
+            if (retained.isEmpty()) {
+                runCatching { backupPrefs?.edit()?.remove(KEY_SUBS_BACKUP)?.commit() }
+            }
             saveToPrefs()
             logCollector.info(TAG, "Removed bundled subscriptions: removed=${removed.size}; userSources=${retained.size}")
         }
@@ -311,6 +364,11 @@ private val _deviceMetadataConsent = MutableStateFlow(
     fun removeSubscription(id: String) {
         val removed = _subscriptions.value.firstOrNull { it.id == id } ?: return
         _subscriptions.value = _subscriptions.value.filter { it.id != id }
+        // An explicit removal of the last source must also clear the recovery copy,
+        // otherwise the backup would resurrect a deliberately deleted subscription.
+        if (_subscriptions.value.isEmpty()) {
+            runCatching { backupPrefs?.edit()?.remove(KEY_SUBS_BACKUP)?.commit() }
+        }
         saveToPrefs()
         // Purge the provider's cached response body/ETag so credentials do not linger
         // encrypted on disk after the user removes the source.
@@ -532,6 +590,10 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             throw IOException("HWID device limit reached; remove an old device in the subscription panel")
                         }
                         if (response.code == 304) {
+                            // Metadata (expiry/traffic) is independent of the body cache:
+                            // providers still send subscription-userinfo on a 304, and this
+                            // is the only response a freshly re-added subscription may see.
+                            response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
                             if (cachedBody.isNullOrBlank()) {
                                 throw IOException("HTTP 304 received without a cached subscription body")
                             }
@@ -554,7 +616,7 @@ private val _deviceMetadataConsent = MutableStateFlow(
                             throw IOException("HTTP ${response.code}")
                         }
                         response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
-                        val body = response.body?.string() ?: throw IOException("Empty response body")
+                        val body = response.body.string()
                         if (body.isBlank()) {
                             logCollector.warn(TAG, "Subscription fetch failed. Code: ${response.code} (empty body)")
                             throw IOException("Empty response body")
@@ -600,6 +662,36 @@ private val _deviceMetadataConsent = MutableStateFlow(
                     logCollector.warn(TAG, "Subscription source failed: ${e.javaClass.simpleName}")
                 }
             }
+            // The direct request may be blocked by the carrier while the VPN tunnel already
+            // works (or this app is excluded from its own tunnel). Retry through the local
+            // mixed inbound before giving up.
+            val tunnelState = connectionCoordinator.state.value
+            val tunnelReady = tunnelState is ConnectionState.Connected ||
+                tunnelState is ConnectionState.Verifying
+            if (tunnelReady) {
+                val tunneled = runCatching { fetchViaLocalProxy(sub) }
+                    .onFailure {
+                        logCollector.warn(TAG, "Tunnel subscription fetch failed: ${it.javaClass.simpleName}")
+                    }
+                    .getOrNull()
+                if (tunneled != null) {
+                    logCollector.info(TAG, "Subscription ${sub.name} fetched through the active tunnel")
+                    return@withContext tunneled
+                }
+            }
+            // The v2rayNG-style list may be blocked, empty, or noticeably poorer than what
+            // the same provider serves to Happ (extra reserve/bridge outbounds). Try the
+            // richer format before reporting failure; it is parsed, never cached, so it
+            // cannot poison the primary list.
+            val happFallback = runCatching { fetchViaHappJson(sub) }
+                .onFailure {
+                    logCollector.warn(TAG, "Happ JSON fallback failed: ${it.javaClass.simpleName}")
+                }
+                .getOrNull()
+            if (happFallback != null) {
+                logCollector.info(TAG, "Subscription ${sub.name} served via Happ JSON fallback")
+                return@withContext happFallback
+            }
             val vpnState = connectionCoordinator.state.value
             val vpnActive = vpnState is ConnectionState.Connecting ||
                 vpnState is ConnectionState.Verifying ||
@@ -610,6 +702,54 @@ private val _deviceMetadataConsent = MutableStateFlow(
             }
             throw IOException("All sources failed", lastFailure)
         }
+
+    /**
+     * Fetches the subscription through the running sing-box mixed inbound (127.0.0.1:10809).
+     * Used only when the tunnel is already up: the direct route is blocked but the tunnel is
+     * not. The result is parsed but not cached, so the ETag cache keeps matching the direct
+     * request path.
+     */
+    private fun fetchViaLocalProxy(sub: ProviderSubscription): SubscriptionFetchResult {
+        val proxyClient = httpClient.newBuilder()
+            .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingboxConfigBuilder.PROXY_PORT)))
+            .build()
+        val request = Request.Builder()
+            .url(sub.url)
+            .header("User-Agent", "v2rayNG/1.8.5")
+            .build()
+        proxyClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
+            val body = response.body.string()
+            if (body.isBlank()) throw IOException("Empty response body")
+            if (looksLikeDeviceLimitStub(body)) throw IOException("Tunnel returned a device-limit placeholder")
+            val parsed = parser.parse(body, providerTag = sub.name)
+            if (parsed.isEmpty()) throw IOException("Tunnel fetch returned no valid server configs")
+            return SubscriptionFetchResult(body, fromEtagCache = false)
+        }
+    }
+
+    /**
+     * Secondary fetch using the Happ client identity. Some providers gate a richer Xray JSON
+     * bundle (reserve/bridge outbounds, auto-select) behind that User-Agent while returning a
+     * shorter base64 list to v2rayNG. The result is intentionally not written to the ETag/body
+     * cache: the cache must keep matching the primary request format.
+     */
+    private fun fetchViaHappJson(sub: ProviderSubscription): SubscriptionFetchResult {
+        val request = Request.Builder()
+            .url(sub.url)
+            .header("User-Agent", "Happ/3.11.0")
+            .build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            response.header("subscription-userinfo")?.let { info -> parseUserInfo(info, sub.id) }
+            val body = response.body.string()
+            if (body.isBlank()) throw IOException("Empty response body")
+            val parsed = parser.parse(body, providerTag = sub.name)
+            if (parsed.isEmpty()) throw IOException("Happ fallback returned no valid server configs")
+            return SubscriptionFetchResult(body, fromEtagCache = false)
+        }
+    }
 
     private fun isTransportFailure(error: Throwable?): Boolean {
         var current = error
@@ -668,9 +808,14 @@ private val _deviceMetadataConsent = MutableStateFlow(
                 if (it.id == subId) it.copy(
                     trafficUsed = upload + download,
                     trafficTotal = total,
-                    expiresAt = expire * 1000
+                    // A provider that omits `expire` in one response must not wipe a known
+                    // expiry date learned from an earlier response.
+                    expiresAt = if (expire > 0L) expire * 1000 else it.expiresAt
                 ) else it
             }
+            // Persist immediately: otherwise the expiry date lives only in memory and
+            // disappears on the next process start ("Срок подписки не указан").
+            saveToPrefs()
         } catch (_: Exception) { }
     }
 
